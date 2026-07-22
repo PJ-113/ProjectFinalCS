@@ -1,0 +1,89 @@
+@startuml PM25_Forecast_UseCase
+' ============================================================================
+' Use Case Diagram — ระบบพยากรณ์ PM2.5 ล่วงหน้า 24 ชม. จ.ขอนแก่น
+' PM2.5 24-Hour Forecast & Health Advisory System (Khon Kaen)
+'
+' หมายเหตุ: diagram นี้สะท้อน "สิ่งที่ระบบทำได้จริง" ณ ปัจจุบัน (ตาม CHANGELOG ถึง entry 64)
+'          actor เป็นคนเท่านั้น (ตามที่ตกลง) — Scheduler/Air4Thai/Open-Meteo/Gemini
+'          แสดงเป็น note ประกอบ ไม่ใช่ actor
+' Render: VSCode PlantUML extension / plantuml.com / `plantuml usecase_diagram.puml`
+' ============================================================================
+
+left to right direction
+skinparam actorStyle awesome
+skinparam packageStyle rectangle
+' รองรับภาษาไทย: ตั้งฟอนต์ที่มี glyph ไทย (ปรับตามเครื่องที่ render ได้)
+skinparam defaultFontName "Tahoma"
+
+' ---------------------------------------------------------------------------
+' Actors (คนเท่านั้น)
+' ---------------------------------------------------------------------------
+actor "ผู้ใช้ทั่วไป\nGuest" as Guest
+actor "ผู้ใช้ที่ลงทะเบียน\nRegistered User" as RegUser
+
+' Registered User สืบทอดทุกความสามารถของ Guest + ส่วนที่ต้อง login
+RegUser --|> Guest
+
+rectangle "ระบบพยากรณ์ PM2.5 / PM2.5 Forecast System" {
+
+  ' ----- Use cases ที่ Guest (และ Registered) ใช้ได้ -----
+  usecase "ดูพยากรณ์ 24 ชม.\nView 24h Forecast" as UC_Forecast
+  usecase "ดูค่า PM2.5 ปัจจุบัน\nView Current PM2.5" as UC_Current
+  usecase "เปรียบเทียบค่าพยากรณ์กับค่าจริง\nCompare Forecast vs Actual" as UC_Compare
+  usecase "ดูช่วงเวลาที่อากาศดีที่สุด\nView Best Time Window" as UC_BestTime
+  usecase "ดูสรุปคุณภาพอากาศรายวัน\nView Daily Summary (NLG)" as UC_Daily
+  usecase "ดูคะแนนความเสี่ยงส่วนบุคคล\nView Personalized Risk Score" as UC_Risk
+  usecase "เลือกความหนักกิจกรรม\nSelect Activity Intensity" as UC_Activity
+  usecase "ดูการแจ้งเตือน\nView Notifications" as UC_Notif
+  usecase "ติดตั้งแอป (PWA)\nInstall App" as UC_PWA
+  usecase "เข้าสู่ระบบ\nLogin" as UC_Login
+  usecase "ลงทะเบียน\nRegister" as UC_Register
+
+  ' ----- Use cases เฉพาะ Registered User -----
+  usecase "จัดการโปรไฟล์\nManage Profile" as UC_Profile
+  usecase "ตั้งค่ากลุ่มความเสี่ยง\nSet Risk Group" as UC_RiskGroup
+  usecase "ออกจากระบบ\nLogout" as UC_Logout
+
+  ' ----- Internal / system use cases (ถูก include/extend ไม่มี actor ต่อตรง) -----
+  usecase "เลือกโมเดล (Dynamic Routing)\nSelect Model" as UC_Route
+  usecase "สลับใช้ Prophet (Circuit Breaker)\nCircuit Breaker" as UC_Breaker
+  usecase "บันทึกผลพยากรณ์\nLog Predictions" as UC_Log
+  usecase "เติมค่าจริงย้อนหลัง\nBackfill Actuals" as UC_Backfill
+  usecase "สร้างข้อความอธิบาย\nGenerate NLG" as UC_NLG
+}
+
+' ---------------------------------------------------------------------------
+' ความสัมพันธ์ระหว่าง Guest กับ use case
+' ---------------------------------------------------------------------------
+Guest --> UC_Forecast
+Guest --> UC_Current
+Guest --> UC_Compare
+Guest --> UC_BestTime
+Guest --> UC_Daily
+Guest --> UC_Risk
+Guest --> UC_Activity
+Guest --> UC_Notif
+Guest --> UC_PWA
+Guest --> UC_Login
+Guest --> UC_Register
+
+' ---------------------------------------------------------------------------
+' ความสัมพันธ์เฉพาะ Registered User
+' ---------------------------------------------------------------------------
+RegUser --> UC_Profile
+RegUser --> UC_RiskGroup
+RegUser --> UC_Logout
+
+' ---------------------------------------------------------------------------
+' <<include>> / <<extend>> ระหว่าง use cases
+' ---------------------------------------------------------------------------
+UC_Forecast ..> UC_Route    : <<include>>
+UC_Forecast ..> UC_Log      : <<include>>
+UC_Forecast ..> UC_Backfill : <<include>>
+UC_Route    ..> UC_Breaker  : <<extend>>
+UC_Daily    ..> UC_NLG      : <<include>>
+UC_Risk     ..> UC_Activity : <<include>>
+UC_Risk     ..> UC_RiskGroup: <<extend>>
+
+
+@enduml
