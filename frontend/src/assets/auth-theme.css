@@ -1,0 +1,25 @@
+/* Shared design tokens for AppHeader + auth views (Login/Register/Profile) only.
+   ForecastView/CompareView keep their own independently-scoped tokens untouched. */
+:root {
+  --auth-bg: #f8fafc;
+  --auth-card-bg: rgba(255, 255, 255, 0.7);
+  --auth-text: #0f172a;
+  --auth-muted: #64748b;
+  --auth-accent: #3b82f6;
+  --auth-accent-hover: #2563eb;
+  --auth-border: rgba(255, 255, 255, 0.5);
+  --auth-error: #ef4444;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --auth-bg: #0f172a;
+    --auth-card-bg: rgba(30, 41, 59, 0.6);
+    --auth-text: #f1f5f9;
+    --auth-muted: #94a3b8;
+    --auth-accent: #60a5fa;
+    --auth-accent-hover: #93c5fd;
+    --auth-border: rgba(255, 255, 255, 0.1);
+    --auth-error: #f87171;
+  }
+}

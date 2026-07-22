@@ -1,0 +1,128 @@
+@startuml PM25_Forecast_SystemArchitecture
+' ============================================================================
+' System Architecture (Layered) — ระบบพยากรณ์ PM2.5 ล่วงหน้า 24 ชม. จ.ขอนแก่น
+' PM2.5 24-Hour Forecast & Health Advisory System (Khon Kaen)
+'
+' หมายเหตุ: diagram สะท้อนสถาปัตยกรรมจริงที่ยืนยันจากโค้ด (app.py, frontend/src/)
+'          เส้นทึบ = การไหลข้อมูล/การเรียกตอน runtime, เส้นประ = offline/training-time
+' Render: VSCode PlantUML extension / plantuml.com / `plantuml system_architecture.puml`
+' ============================================================================
+
+skinparam defaultFontName "Tahoma"
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam rectangle {
+  BorderColor #5b6b7a
+  BackgroundColor #f7f9fb
+}
+skinparam database {
+  BorderColor #7a5b6b
+  BackgroundColor #fbf5f7
+}
+skinparam cloud {
+  BorderColor #5b7a5f
+  BackgroundColor #f5fbf6
+}
+
+' ===========================================================================
+' ชั้นที่ 1 — Client / Presentation (Vue 3 PWA)
+' ===========================================================================
+rectangle "ชั้นการแสดงผล (Client / Presentation)\nVue 3 SPA + PWA" as L1 #eef4fb {
+  component "หน้าเว็บ (Views)\nForecast / Compare / Notifications\nLogin / Register / Profile" as Views
+  component "Shared State\nauth.js / notifications.js / riskScore.js" as State
+  component "PWA\nmanifest.webmanifest + Service Worker\n(vite-plugin-pwa) — ติดตั้งได้/ออฟไลน์" as PWA
+}
+
+actor "ผู้ใช้ / User\n(Browser)" as User
+
+' ===========================================================================
+' ชั้นที่ 2 — Backend / Application (Flask app.py)
+' ===========================================================================
+rectangle "ชั้นแอปพลิเคชัน (Backend / Application)\nFlask — app.py (พอร์ต 5000)" as L2 #eefbf3 {
+  component "REST API Routes\n/api/forecast\n/api/comparison(+/overview)\n/api/notifications\n/api/auth/*" as API
+  component "เสิร์ฟ SPA (serve_spa)\ncatch-all -> frontend/dist" as SPA
+  component "Auth (Flask session)\nwerkzeug hash + signed cookie" as Auth
+  component "Pipeline หลัก (get_forecast)\ncalibrate -> build_feature_row\n-> select_model -> predict -> log" as Pipeline
+  component "APScheduler\nงานอัตโนมัติรายชั่วโมง\n(scheduled_forecast_job)" as Scheduler
+  component "NLG รายวัน (maybe_generate_daily_nlg)\n+ Safety Check (validate_health_message)" as NLG
+}
+
+' ===========================================================================
+' ชั้นที่ 3 — ML / Inference
+' ===========================================================================
+rectangle "ชั้นแบบจำลอง (ML / Inference)" as L3 #fbf9ee {
+  component "Dynamic Routing (select_model)\nCircuit Breaker (missing>0.3 -> Prophet)\n+ Rolling R²" as Routing
+  component "โมเดลพยากรณ์ (Forecast Models)\nLightGBM(24 weighted)\nXGBoost(24) / Prophet(1)" as Models
+  component "Calibration Layer\nAir4Thai -> OpenAQ (a·x+b)" as Calib
+  component "Threshold/Bias Correction\n+ risk_group / activity offset" as Bias
+  component "คำอธิบาย (SHAP explainer)\nscripts/shap_analysis.py" as SHAP
+  component "คะแนนความเสี่ยงบุคคล\ncompute_risk_score" as Risk
+}
+
+' ===========================================================================
+' ชั้นที่ 4 — Data / Persistence
+' ===========================================================================
+rectangle "ชั้นข้อมูล (Data / Persistence)" as L4 #f7eefb {
+  database "PostgreSQL — pm25_forecast\nprediction_log / daily_nlg_log\nnotification_log / users" as PG
+  component "Model Artifacts\nmodels/*.pkl (lgb/xgb/prophet/calib)\nmodels/*.csv (bias)" as Artifacts
+  component "ข้อมูลเทรน (Training data)\ndata/*.csv, air4thai_archive.csv" as TrainData
+}
+
+' ===========================================================================
+' ชั้นที่ 5 — External Services (3rd-party APIs)
+' ===========================================================================
+rectangle "บริการภายนอก (External Services)" as L5 #fbf0ee {
+  cloud "Air4Thai\ngetHistoryData.php\n(live PM2.5, สถานี 46t)" as Air4Thai
+  cloud "Open-Meteo\n(สภาพอากาศปัจจุบัน)" as OpenMeteo
+  cloud "Google Gemini API\n(สร้างข้อความ NLG)" as Gemini
+  cloud "OpenAQ\n(ข้อมูลเทรน + fit calibration)" as OpenAQ
+}
+
+' ===========================================================================
+' ชั้น Offline — Training pipeline (ไม่ใช่ runtime)
+' ===========================================================================
+rectangle "ขั้นตอนออฟไลน์ (Offline / Training pipeline)\nscripts/" as L6 #eef0f2 {
+  component "build_raw_dataset / train_* / retrain_weighted\nfit calibration / backfill / shap_analysis" as ScriptsBox
+}
+
+' ---------------------------------------------------------------------------
+' Runtime flows (เส้นทึบ)
+' ---------------------------------------------------------------------------
+User --> Views : HTTPS
+Views --> State
+State --> API : REST (fetch /api/*)
+PWA ..> Views : app shell (cache)
+
+API --> Auth
+API --> Pipeline
+API --> SPA
+Scheduler --> Pipeline : ทุกชั่วโมง / hourly
+Pipeline --> NLG
+
+Pipeline --> Routing
+Routing --> Models
+Pipeline --> Calib
+Routing --> Bias
+Pipeline --> SHAP
+API --> Risk
+NLG --> SHAP
+
+Calib --> Air4Thai : ดึงค่า PM2.5 / HTTPS
+Pipeline --> OpenMeteo : ดึงสภาพอากาศ / HTTPS
+NLG --> Gemini : HTTPS
+
+Pipeline --> PG : psycopg2
+API --> PG : psycopg2
+Auth --> PG : psycopg2
+Models ..> Artifacts : โหลดตอน startup / load .pkl
+Bias ..> Artifacts : load .csv
+
+' ---------------------------------------------------------------------------
+' Offline / training flows (เส้นประ)
+' ---------------------------------------------------------------------------
+OpenAQ ..> ScriptsBox : ข้อมูลเทรน (offline)
+Air4Thai ..> ScriptsBox : fit calibration (offline)
+TrainData ..> ScriptsBox
+ScriptsBox ..> Artifacts : ผลิต .pkl / .csv
+
+@enduml

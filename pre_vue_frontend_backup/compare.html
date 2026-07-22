@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>เปรียบเทียบพยากรณ์กับค่าจริง - PM2.5</title>
+<link rel="stylesheet" href="/static/compare.css">
+</head>
+<body>
+<div class="haze-decor"><span></span><span></span><span></span></div>
+
+<div class="wrap">
+  <div class="top-row">
+    <div>
+      <h1>เปรียบเทียบผลพยากรณ์กับค่าจริง</h1>
+      <div class="subtitle">บันทึกทุกครั้งที่เรียกพยากรณ์ แล้วเทียบกับ PM2.5 จริงเมื่อถึงเวลานั้น</div>
+    </div>
+    <a class="back-link" href="/">← กลับหน้าแรก</a>
+  </div>
+
+  <div class="card">
+    <div class="overview-title">ความคลาดเคลื่อนรวม (ทุก horizon รวมกัน)</div>
+    <div class="summary-head">
+      <span class="quality-badge hidden" id="overviewBadge">-</span>
+    </div>
+    <div class="summary-text" id="overviewText">กำลังโหลดภาพรวม...</div>
+    <div class="summary-note hidden" id="overviewNote"></div>
+    <div class="mini-bars" id="overviewBars"></div>
+    <div class="model-breakdown" id="modelBreakdown"></div>
+  </div>
+
+  <div class="card">
+    <div class="controls">
+      <label for="horizonSelect">ดูรายละเอียดเฉพาะ horizon:</label>
+      <select id="horizonSelect"></select>
+      <label for="modelSelect">โมเดล:</label>
+      <select id="modelSelect">
+        <option value="all">ทุกโมเดล</option>
+        <option value="lightgbm">LightGBM</option>
+        <option value="xgboost">XGBoost</option>
+        <option value="prophet">Prophet</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Loading skeleton -->
+  <div id="loadingState">
+    <div class="card"><div class="skeleton skeleton-line"></div></div>
+    <div class="card"><div class="skeleton skeleton-chart"></div></div>
+  </div>
+
+  <!-- Error state -->
+  <div id="errorState" class="card error-box hidden">
+    <p id="errorMessage">ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง</p>
+    <button class="retry-btn" onclick="loadComparison()">ลองอีกครั้ง</button>
+  </div>
+
+  <!-- Content -->
+  <div id="content" class="hidden">
+    <div class="card">
+      <div class="summary-head">
+        <span class="quality-badge hidden" id="qualityBadge">-</span>
+      </div>
+      <div class="summary-text" id="summaryText">-</div>
+      <div class="summary-note hidden" id="summaryNote"></div>
+
+      <div class="stats-row">
+        <div class="stat">
+          <div class="stat-value" id="statMae">-</div>
+          <div class="stat-label">MAE (µg/m³)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="statBias">-</div>
+          <div class="stat-label">Bias เฉลี่ย (+ = ทายต่ำกว่าจริง)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="statMatched">-</div>
+          <div class="stat-label">คู่ที่เทียบได้ / ทั้งหมด</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="statBackfill">-</div>
+          <div class="stat-label">เป็น backfill (ย้อนหลัง)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="legend">
+        <span><span class="dot" style="background:var(--actual)"></span>ค่าจริง</span>
+        <span><span class="dot" style="background:var(--model-lightgbm)"></span>LightGBM (พยากรณ์)</span>
+        <span><span class="dot" style="background:var(--model-xgboost)"></span>XGBoost (พยากรณ์)</span>
+        <span><span class="dot" style="background:var(--model-prophet)"></span>Prophet (พยากรณ์)</span>
+        <span>○ backfill (ย้อนหลังจาก test set) &nbsp;/&nbsp; ● live (พยากรณ์จริงตามเวลา)</span>
+      </div>
+      <div class="chart-wrap">
+        <svg id="chart"></svg>
+      </div>
+      <div id="emptyMsg" class="empty-msg hidden">
+        ยังไม่มีข้อมูลค่าจริงให้เปรียบเทียบสำหรับ horizon นี้ — ต้องรอจนถึงเวลาที่พยากรณ์ไว้ก่อน แล้วเปิดหน้านี้ใหม่อีกครั้ง
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/compare.js"></script>
+</body>
+</html>

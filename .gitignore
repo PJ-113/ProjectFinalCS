@@ -1,0 +1,32 @@
+# ===== ความลับ — ห้าม commit เด็ดขาด =====
+.env
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# ===== Node / frontend build output (regenerate ด้วย npm run build) =====
+frontend/node_modules/
+frontend/dist/
+
+# ===== Database backups / dumps (มีข้อมูลผู้ใช้/ค่าพยากรณ์ ไม่ควรขึ้น repo) =====
+backups/
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+
+# ===== Cache / temp ที่ regenerate ได้ =====
+scripts/_openaq_raw_5y_cache.csv
+scripts/_test_routing_temp.db
+
+# ===== Editor / OS / tooling =====
+.claude/
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
