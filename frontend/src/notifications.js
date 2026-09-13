@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { provinceState } from './provinces'
 
 // สถานะแจ้งเตือนที่ใช้ร่วมกันระหว่าง AppHeader (กระดิ่ง) และ ForecastView (การ์ด/แบนเนอร์เตือน)
 // pattern เดียวกับ auth.js (reactive singleton + dedup ผ่าน promise cache) — โปรเจกต์นี้ไม่ใช้ Pinia
@@ -7,7 +8,7 @@ export const notificationState = reactive({
   highPollutionRisk: false,
   riskGroup: 'ทั่วไป',
   riskHorizons: [],
-  prophetHorizons: [],
+  fallbackHorizons: [],
   currentPm25: null,
   currentStatus: '',
 })
@@ -34,7 +35,7 @@ export async function fetchForecast() {
   if (_fetchPromise) return _fetchPromise
   notificationState.status = 'loading'
   _fetchPromise = (async () => {
-    const res = await fetch('/api/forecast')
+    const res = await fetch(`/api/forecast?province=${provinceState.selected}`)
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.error || `Server error (${res.status})`)
@@ -43,7 +44,7 @@ export async function fetchForecast() {
     notificationState.highPollutionRisk = data.high_pollution_risk
     notificationState.riskGroup = data.risk_group || 'ทั่วไป'
     notificationState.riskHorizons = data.risk_horizons || []
-    notificationState.prophetHorizons = data.prophet_triggered_horizons || []
+    notificationState.fallbackHorizons = data.fallback_triggered_horizons || []
     notificationState.currentPm25 = data.current?.pm25 ?? null
     notificationState.currentStatus = data.current?.status ?? ''
     notificationState.status = 'ready'
@@ -74,8 +75,8 @@ export function summarizeHistoryItem(item) {
   if (item.risk_horizons.length > 0) {
     parts.push(`มี ${item.risk_horizons.length} ช่วงเวลาที่พยากรณ์ PM2.5 สูง (t+${item.risk_horizons.join(', t+')})`)
   }
-  if (item.prophet_horizons.length > 0) {
-    parts.push(`สลับไปใช้ Prophet ชั่วคราวที่ t+${item.prophet_horizons.join(', t+')}`)
+  if (item.fallback_horizons.length > 0) {
+    parts.push(`ข้อมูลไม่สมบูรณ์ ใช้ค่าพยากรณ์แบบคงที่ชั่วคราวที่ t+${item.fallback_horizons.join(', t+')}`)
   }
   if (parts.length === 0) {
     parts.push(`PM2.5 ปัจจุบันสูง (${item.latest_pm25} µg/m³)`)
@@ -86,7 +87,7 @@ export function summarizeHistoryItem(item) {
 export async function fetchNotificationHistory(limit = 5) {
   notificationHistory.status = 'loading'
   try {
-    const res = await fetch(`/api/notifications?limit=${limit}`)
+    const res = await fetch(`/api/notifications?limit=${limit}&province=${provinceState.selected}`)
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.error || `Server error (${res.status})`)

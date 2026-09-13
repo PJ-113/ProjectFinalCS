@@ -1,8 +1,13 @@
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { Laugh, Smile, Meh, Frown, Angry, Thermometer, Droplet, Wind } from "@lucide/vue";
 import { fetchForecast, buildWarningMessage } from "../notifications";
 import { riskScoreState, setActivity, ACTIVITY_LEVELS, computeRiskScore, riskScoreAdvice } from "../riskScore";
+import { provinceState } from "../provinces";
+
+// ชั่วคราว: ปิดการ์ดสรุปวันนี้ (NLG)/ช่วงเวลาดีที่สุด/คะแนนความเสี่ยงส่วนบุคคลไว้ก่อน ตอนตั้งค่า
+// รันบนเครื่องใหม่ เหลือแค่ "การพยากรณ์ + ค่าฝุ่นปัจจุบัน" ตามที่ขอ — เปลี่ยนกลับเป็น true ทีหลังได้
+const SHOW_EXTRA_CARDS = false;
 
 const state = ref("loading"); // "loading" | "error" | "content"
 const errorMessage = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
@@ -14,7 +19,8 @@ const dailySummary = ref({ daily_avg_pm25: null, explanation: "" });
 const forecast = ref([]);
 const highPollutionRisk = ref(false);
 const riskGroup = ref("ทั่วไป");
-const prophetHorizons = ref([]);
+const fallbackHorizons = ref([]);
+const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
 const riskScoreConfig = ref(null);
 
 // ระดับตรงกับ PM25_LEVELS ใน app.py (มาตรฐาน คพ. 2566): ดีมาก/ดี/ปานกลาง/
@@ -48,30 +54,51 @@ function moodIconFor(status) {
 
 // threshold เดียวกับ PM25_LEVELS ใน app.py (15/25/37.5/75) — ไล่สี (เข้ม->อ่อน) ของสีระดับเดียวกัน
 // เอง ต่อแท่ง ไม่ใช่ไล่สีฟ้าเดียวทุกแท่งแบบ mockup เพราะสีระดับ PM2.5 เป็นข้อมูลจริงที่ต้องคงไว้
-function barColor(pm25) {
-  const v = pm25 <= 15 ? "--excellent"
+function severityVar(pm25) {
+  return pm25 <= 15 ? "--excellent"
     : pm25 <= 25 ? "--good"
     : pm25 <= 37.5 ? "--moderate"
     : pm25 <= 75 ? "--unhealthy"
     : "--bad";
+}
+function barColor(pm25) {
+  const v = severityVar(pm25);
   return `linear-gradient(180deg, var(${v}) 0%, color-mix(in srgb, var(${v}) 55%, white) 100%)`;
+}
+// ช่วงความเชื่อมั่น (ขอบบน P95 conformal) วาดเป็นส่วนต่อขยายโปร่งแสงของแท่งเดียวกัน (สีเดียวกับ
+// .bar เอง ที่ ~28% opacity) แทน tick-cap/dot-line เดิมที่ลอยแยกจากแท่งเหมือนหนวดแมลง — ส่วนขยายนี้
+// อยู่ชั้นล่าง (z-index ต่ำกว่า .bar) ครอบคลุม 0→pm25_hi เต็ม แต่ถูกแท่งทึบด้านบนบังส่วนล่างไว้หมด
+// เหลือให้เห็นแค่ส่วนที่ "เกิน" จุดพยากรณ์ขึ้นไปถึงขอบบนจริงๆ — ไม่ต้องคำนวณตำแหน่งซ้อนเอง
+function barRangeColor(pm25) {
+  const v = severityVar(pm25);
+  return `color-mix(in srgb, var(${v}) 28%, transparent)`;
+}
+
+// ตำแหน่ง % จากขอบล่างของ bar-track สำหรับช่วงความเชื่อมั่น (P05-P95 หลัง conformal) — ใช้ maxPm
+// เดียวกับที่คำนวณความสูงแท่งหลัก ให้อยู่สเกลเดียวกันเป๊ะ
+function pctOf(value) {
+  return (value / maxPm.value) * 100;
 }
 
 function modelColor(modelUsed) {
-  if (modelUsed === "xgboost") return "var(--model-xgboost)";
-  if (modelUsed === "prophet") return "var(--model-prophet)";
+  if (modelUsed === "xgboost_pooled") return "var(--model-xgboost)";
+  if (modelUsed === "naive_fallback") return "var(--model-fallback)";
   return "var(--model-lightgbm)";
 }
 
 const pageClass = computed(() => bodyClassFor(current.value.status));
-const maxPm = computed(() => Math.max(...forecast.value.map((f) => f.pm25), 37.5));
+// รวม pm25_hi (ขอบบนช่วงความเชื่อมั่น) เข้าไปตอนหาค่าสูงสุดด้วย ไม่งั้นเส้น error bar จะโผล่พ้น
+// กราฟไปตอนช่วงกว้าง (horizon ไกลๆ) — ไม่ใช่แค่ point.pm25 เหมือนเดิม
+const maxPm = computed(() =>
+  Math.max(...forecast.value.flatMap((f) => [f.pm25, f.pm25_hi ?? f.pm25]), 37.5)
+);
 const dailyAvgDisplay = computed(() =>
   dailySummary.value.daily_avg_pm25 !== null && dailySummary.value.daily_avg_pm25 !== undefined
     ? dailySummary.value.daily_avg_pm25
     : "-"
 );
 const dailyTextDisplay = computed(() => dailySummary.value.explanation || "กำลังเตรียมข้อมูลสำหรับวันนี้");
-const prophetHorizonsText = computed(() => prophetHorizons.value.map((h) => `t+${h}`).join(", "));
+const fallbackHorizonsText = computed(() => fallbackHorizons.value.map((h) => `t+${h}`).join(", "));
 
 // ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) ย้ายไป notifications.js แล้ว เพราะกระดิ่งแจ้งเตือน
 // ใน AppHeader.vue ต้องใช้ข้อความเดียวกันเป๊ะ ไม่ให้สองที่ไม่ตรงกัน
@@ -119,7 +146,8 @@ async function loadForecast() {
     forecast.value = data.forecast;
     highPollutionRisk.value = data.high_pollution_risk;
     riskGroup.value = data.risk_group || "ทั่วไป";
-    prophetHorizons.value = data.prophet_triggered_horizons || [];
+    fallbackHorizons.value = data.fallback_triggered_horizons || [];
+    provinceInfo.value = data.province || { th: "", en: "", is_zero_shot: false };
     riskScoreConfig.value = data.risk_score_config || null;
     state.value = "content";
   } catch (err) {
@@ -128,6 +156,9 @@ async function loadForecast() {
     console.error("โหลดข้อมูลพยากรณ์ล้มเหลว:", err);
   }
 }
+
+// สลับจังหวัดจาก dropdown ใน AppHeader.vue -> provinceState.selected เปลี่ยน -> โหลดพยากรณ์ใหม่
+watch(() => provinceState.selected, loadForecast);
 
 onMounted(loadForecast);
 defineExpose({ loadForecast });
@@ -138,11 +169,11 @@ defineExpose({ loadForecast });
     <div class="haze-decor"><span></span><span></span><span></span><span></span></div>
 
     <div class="wrap">
-      <h1><span class="title-main">พยากรณ์ PM2.5</span><span class="title-sub"> - สถานี:ส่วนอุทกวิทยา สำนักงานทรัพยากรน้ำภาคที่ 4</span></h1>
+      <h1><span class="title-main">พยากรณ์ PM2.5</span><span class="title-sub"> - จังหวัด{{ provinceInfo.th || "..." }}{{ provinceInfo.is_zero_shot ? " (zero-shot)" : "" }}</span></h1>
       <!--<div class="subtitle">
         <span class="live-dot"></span>
-        ข้อมูลจาก Air4Thai + Open-Meteo, พยากรณ์ล่วงหน้า 24 ชั่วโมงด้วยระบบ Dynamic Routing
-        (เลือกจาก LightGBM / XGBoost / Prophet อัตโนมัติตาม horizon) ·
+        ข้อมูลจาก OpenAQ + Open-Meteo, พยากรณ์ล่วงหน้า 24 ชั่วโมงด้วยระบบ Dynamic Routing
+        (เลือกจาก LightGBM / XGBoost pooled model อัตโนมัติตาม horizon) ·
         <router-link to="/compare">ดูความแม่นยำจริง →</router-link>
       </div> -->
 
@@ -175,8 +206,8 @@ defineExpose({ loadForecast });
           ⚠️ {{ warningMessage }}
         </div>
 
-        <div v-if="prophetHorizons.length > 0" class="info-box">
-          ℹ️ ข้อมูล input ไม่สมบูรณ์ในบางช่วงเวลา ระบบ Circuit Breaker จึงสลับไปใช้ <strong>Prophet</strong> ชั่วคราวสำหรับ {{ prophetHorizonsText }}
+        <div v-if="fallbackHorizons.length > 0" class="info-box">
+          ℹ️ ข้อมูล input ไม่สมบูรณ์ในบางช่วงเวลา ระบบ Circuit Breaker จึงใช้ค่าพยากรณ์แบบคงที่ (ความเชื่อมั่นต่ำ) ชั่วคราวสำหรับ {{ fallbackHorizonsText }}
         </div>
 
         <div class="dashboard-grid">
@@ -217,7 +248,7 @@ defineExpose({ loadForecast });
             </div>
           </div>
 
-          <div class="grid-col-side">
+          <div v-if="SHOW_EXTRA_CARDS" class="grid-col-side">
             <div class="card">
               <div class="label-muted">📋 สรุปวันนี้ (ค่าเฉลี่ยพยากรณ์ 24 ชม., อัปเดตตอน 06:00 น.)</div>
               <div class="daily-summary-value">
@@ -276,21 +307,31 @@ defineExpose({ loadForecast });
 
         <div class="card">
           <div class="chart-header">
-            <div class="chart-title"> พยากรณ์ PM2.5 รายชั่วโมง (24 ชม. ข้างหน้า)</div>
+            <div class="chart-title"> พยากรณ์ PM2.5 รายชั่วโมง (24 ชม. ข้างหน้า) <span class="chart-subtitle">ส่วนจางด้านบนคือขอบบนของช่วงความเชื่อมั่น ~90%</span></div>
             <div class="chart-legend">
               <span><span class="dot" style="background: var(--model-lightgbm)"></span>LightGBM</span>
               <span><span class="dot" style="background: var(--model-xgboost)"></span>XGBoost</span>
-              <span><span class="dot" style="background: var(--model-prophet)"></span>Prophet</span>
+              <span><span class="dot" style="background: var(--model-fallback)"></span>Fallback (ความเชื่อมั่นต่ำ)</span>
             </div>
           </div>
           <div class="bars">
             <div class="bar-col" v-for="point in forecast" :key="point.time">
               <div class="bar-value">{{ point.pm25 }}</div>
               <div class="bar-track">
+                <!-- ช่วงความเชื่อมั่น ~90% (P05-P95 หลัง conformal calibration) วาดเป็นส่วนขยายโปร่งแสง
+                     ของแท่งเดียวกัน สูงถึง pm25_hi เต็ม แต่แท่งทึบด้านหน้า (.bar) บังส่วนล่างไว้หมด
+                     เหลือให้เห็นแค่ส่วนเกินจากจุดพยากรณ์ขึ้นไปถึงขอบบนจริง (ไม่แสดง pm25_lo แยก
+                     เพราะอยู่ใต้แท่งทึบเสมอ ไม่มีอะไรให้เห็นเพิ่ม — ค่าเต็มยังอยู่ใน tooltip) ซ่อนไปเอง
+                     ถ้า pm25_hi ไม่มีมาใน response (backward compatible) -->
+                <div
+                  v-if="point.pm25_hi != null"
+                  class="bar-range-cap"
+                  :style="{ height: pctOf(point.pm25_hi) + '%', background: barRangeColor(point.pm25) }"
+                ></div>
                 <div
                   class="bar"
-                  :style="{ height: (point.pm25 / maxPm) * 100 + '%', background: barColor(point.pm25) }"
-                  :title="`${point.time}: ${point.pm25} µg/m³ (${point.model_used})`"
+                  :style="{ height: pctOf(point.pm25) + '%', background: barColor(point.pm25) }"
+                  :title="`${point.time}: ${point.pm25} µg/m³ (ช่วง ${point.pm25_lo}-${point.pm25_hi}) (${point.model_used})`"
                 ></div>
               </div>
               <div class="model-dot" :style="{ background: modelColor(point.model_used) }" :title="point.model_used"></div>
@@ -326,7 +367,7 @@ defineExpose({ loadForecast });
 
   --model-lightgbm: #6366f1;
   --model-xgboost: #10b981;
-  --model-prophet: #ec4899;
+  --model-fallback: #ec4899;
 
   min-height: 100vh;
   background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-bottom) 100%);
@@ -346,7 +387,7 @@ defineExpose({ loadForecast });
 
     --model-lightgbm: #818cf8;
     --model-xgboost: #34d399;
-    --model-prophet: #f472b6;
+    --model-fallback: #f472b6;
   }
 }
 
@@ -761,6 +802,12 @@ h1 {
   font-weight: 600;
   margin-bottom: 0;
 }
+.chart-subtitle {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+  margin-left: 4px;
+}
 
 .bars {
   display: flex;
@@ -791,8 +838,21 @@ h1 {
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  position: relative;
+}
+.bar-range-cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 8px 8px 0 0;
+  pointer-events: none;
+  z-index: 1;
+  transition: height 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .bar {
+  position: relative;
+  z-index: 2;
   width: 100%;
   border-radius: 8px 8px 0 0;
   min-height: 2px;

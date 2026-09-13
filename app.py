@@ -1,8 +1,8 @@
+import json
 import os
 import pickle
 import random
 import re
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -23,29 +23,29 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from sklearn.metrics import r2_score
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
-from shap_analysis import get_shap_explanation  # noqa: E402 (ต้องเข้า sys.path ก่อน import ได้)
-
-# Air4Thai ใช้ certificate ที่ verify ไม่ผ่านผ่าน requests (ทดสอบแล้วใน Testforcest.ipynb)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# SHAP explanation (get_shap_explanation จาก scripts/shap_analysis.py) ปิดไว้ชั่วคราวตั้งแต่
+# เปลี่ยนมาใช้ pooled model — scripts/shap_analysis.py ยังผูกกับโครงสร้างโมเดลเก่า
+# ({horizon: model} ไม่ใช่ {horizon: {quantile: model}} ของโมเดล pooled) เรียกแล้วจะ error
+# ยังไม่ซ่อมให้เข้ากับโมเดลใหม่ในรอบนี้ (ขอบเขตแยกต่างหาก) — ดู generate_daily_nlg_explanation()
 
 # ===== Config =====
 
-MODEL_PATH = "models/lgb_pm25_multistep_weighted_20260712_191056.pkl"
-XGB_MODEL_PATH = "models/xgb_pm25_multistep_20260712_191350.pkl"
-PROPHET_MODEL_PATH = "models/prophet_pm25_20260712_191350.pkl"
-BIAS_CSV_PATH = "models/eval_weighted_vs_baseline_20260712_191056.csv"
-XGB_BIAS_CSV_PATH = "models/xgb_bias_high_by_horizon_20260712_191350.csv"
-CALIBRATION_PATH = "models/air4thai_openaq_calibration.pkl"
-HIGH_POLLUTION_THRESHOLD = 37.5  # ใช้ตรงๆ กับค่าจริง (latest_pm25) เพราะไม่มี bias จากโมเดล
-STATION_ID_AIR4THAI = "46t"
-STATION_LAT = 16.44538333
-STATION_LON = 102.83525
+# pooled model (เทรน 17 จังหวัด + lat/lon feature ให้ generalize ข้ามสถานีได้ รวม zero-shot —
+# ดู CHANGELOG 75) แทนที่โมเดลขอนแก่นจังหวัดเดียวเดิมทั้งหมด (LightGBM/XGBoost เท่านั้น ตัด Prophet
+# ออก, ไม่มี Air4Thai/calibration อีกต่อไปเพราะ live inference ดึงจาก OpenAQ สเกลเดียวกับตอนเทรนเป๊ะ)
+LGB_MODEL_PATH = "models/lgb_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl"
+XGB_MODEL_PATH = "models/xgb_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl"
+CONFORMAL_LGB_PATH = "models/conformal_calibration_lgb_20260913_014901.csv"
+CONFORMAL_XGB_PATH = "models/conformal_calibration_xgb_20260913_014901.csv"
+PROVINCE_REGISTRY_PATH = "data/province_station_registry.json"
+DEFAULT_PROVINCE = "khonkaen"
+HIGH_POLLUTION_THRESHOLD = 37.5  # ค่าเดียวกันทุกจังหวัด (มาตรฐาน คพ. ไม่ใช่ค่าที่ผูกกับโมเดล)
 # ต้องรัน `npm run build` ใน frontend/ ก่อน ถึงจะมีโฟลเดอร์นี้ (ดู CHANGELOG)
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 DEBUG = True  # ต้องอ่านจากตรงนี้ ไม่ใช่ app.debug เพราะ Flask ยังไม่ set app.debug จนกว่าจะเรียก app.run()
-SIGMA_CRITICAL = 0.3  # Dynamic Routing (proposal 4.1.6): missing_ratio เกินนี้ถือว่า input เสียหายหนัก ให้ fallback ไป Prophet
+SIGMA_CRITICAL = 0.3  # Dynamic Routing (proposal 4.1.6): missing_ratio เกินนี้ถือว่า input เสียหายหนัก ให้ fallback ไปพยากรณ์แบบ naive persistence (ดู select_model)
 EXPLORATION_RATE = 0.2  # โอกาสที่จะ "ลอง" โมเดลที่ยังไม่มีข้อมูลพอประเมิน R² แก้ปัญหา cold-start deadlock (ดู select_model)
+CONFORMAL_ALPHA = 0.10  # เป้าหมาย coverage 90% (ดู train_multiprovince_models.py) ใช้แค่ใน docstring/comment ไม่ได้ใช้คำนวณตรงนี้
 
 
 # ===== .env / Database config =====
@@ -66,6 +66,8 @@ def _load_env():
 _ENV = _load_env()
 GEMINI_KEY = _ENV["GEMINI_KEY"]
 SECRET_KEY = _ENV["SECRET_KEY"]  # เซ็น Flask session cookie (login/register) — ห้าม print/log
+OPENAQ_KEY = _ENV["OPENAQ_KEY"]  # ส่งเป็น header X-API-Key (fetch_recent_pm25_openaq) — ห้าม print/log
+OPENAQ_HEADERS = {"X-API-Key": OPENAQ_KEY}
 
 # PostgreSQL (ย้ายจาก sqlite แล้ว ดู CHANGELOG) — get_db_connection() เปิด connection ใหม่ทุกครั้ง
 # ที่เรียก ตาม pattern เดิมของ sqlite3.connect() ต่อ call
@@ -96,44 +98,33 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = False  # demo รันบน HTTP local — เปลี่ยนเป็น True ถ้า deploy บน HTTPS
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
 
-with open(MODEL_PATH, "rb") as f:
-    model_package = pickle.load(f)
+# province registry (20 จังหวัด: 17 เทรน + 3 zero-shot — ดู scripts/province_registry.py)
+with open(PROVINCE_REGISTRY_PATH, encoding="utf-8") as f:
+    _registry = json.load(f)
+PROVINCE_REGISTRY = _registry["provinces"]
+PROVINCES_BY_SLUG = {p["province_en"]: p for p in PROVINCE_REGISTRY}
+assert DEFAULT_PROVINCE in PROVINCES_BY_SLUG, f"{DEFAULT_PROVINCE} ต้องอยู่ใน province registry"
 
-MODELS = model_package["models"]
-FEATURE_COLS = model_package["feature_cols"]
-
-# XGBoost/Prophet โหลดครั้งเดียวตอน startup เหมือน LightGBM (Dynamic Routing)
+# pooled model: {horizon(1..24): {quantile(0.05|0.5|0.95): fitted_model}} เดียวกันทุกจังหวัด
+# (lat/lon เป็น feature ทำให้โมเดลเดียว generalize ข้ามสถานีได้ รวม zero-shot — ดู CHANGELOG 75)
+with open(LGB_MODEL_PATH, "rb") as f:
+    lgb_package = pickle.load(f)
 with open(XGB_MODEL_PATH, "rb") as f:
     xgb_package = pickle.load(f)
+
+MODELS = lgb_package["models"]
 XGB_MODELS = xgb_package["models"]
+FEATURE_COLS = lgb_package["feature_cols"]
+assert FEATURE_COLS == xgb_package["feature_cols"], "feature_cols ของ LightGBM กับ XGBoost ต้องตรงกันเป๊ะ"
+QUANTILES = lgb_package["quantiles"]  # [0.05, 0.5, 0.95]
 
-with open(PROPHET_MODEL_PATH, "rb") as f:
-    prophet_package = pickle.load(f)
-PROPHET_MODEL = prophet_package["model"]
-
-# โมเดลเทรนด้วย OpenAQ แต่ live inference ดึงจาก Air4Thai (fetch_recent_pm25) — ค่าจาก 2 แหล่ง
-# ต่างสเกลกันมาก (fit ด้วย scripts/fit_air4thai_openaq_calibration.py: R²=0.397, n=1395 ชม.)
-# จึงต้องแปลงค่าดิบ Air4Thai ให้อยู่สเกล OpenAQ ก่อนสร้าง feature ทุกครั้ง
-with open(CALIBRATION_PATH, "rb") as f:
-    _calibration = pickle.load(f)
-CALIBRATION_A = _calibration["a"]
-CALIBRATION_B = _calibration["b"]
-
-# bias_high ต่อ horizon ต่อโมเดล โหลดจาก CSV (ไม่ hardcode) เพื่อให้แก้ไฟล์ CSV พอเวลาเทรนใหม่
-_lgb_bias_df = pd.read_csv(BIAS_CSV_PATH)
-_xgb_bias_df = pd.read_csv(XGB_BIAS_CSV_PATH)
-BIAS_HIGH_BY_MODEL = {
-    "lightgbm": {int(r.horizon): float(r.bias_high_weighted) for r in _lgb_bias_df.itertuples()},
-    # XGBoost ยังไม่ผ่าน sample-weight retrain เหมือน LightGBM — นี่คือ bias ตามธรรมชาติของโมเดล unweighted
-    "xgboost": {int(r.horizon): float(r.bias_high) for r in _xgb_bias_df.itertuples()},
-    # Prophet evaluate แบบ 1-step ไม่ใช่ multi-horizon เหมือนอีก 2 โมเดล เลยไม่มี bias ต่อ horizon ที่เทียบตรงๆ ได้ — ใช้ 37.5 ตรงๆ
-    "prophet": {h: 0.0 for h in range(1, 25)},
-}
-
-# threshold ลดตาม bias ของแต่ละโมเดล**แยกต่อโมเดล** เพราะ Dynamic Routing เลือกโมเดลต่างกันได้ในแต่ละ horizon
-EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL = {
-    model_name: {h: HIGH_POLLUTION_THRESHOLD - bias for h, bias in bias_by_horizon.items()}
-    for model_name, bias_by_horizon in BIAS_HIGH_BY_MODEL.items()
+# conformal calibration q_hat ต่อ horizon ต่อโมเดล (train_multiprovince_models.py) — ใช้ปรับขอบ
+# P05/P95 ให้ coverage เข้าใกล้เป้าหมาย 90% จริง ไม่ใช่แค่ P05/P95 ดิบจาก quantile regression
+_conformal_lgb_df = pd.read_csv(CONFORMAL_LGB_PATH)
+_conformal_xgb_df = pd.read_csv(CONFORMAL_XGB_PATH)
+CONFORMAL_QHAT = {
+    "lightgbm_pooled": {int(r.horizon): float(r.q_hat) for r in _conformal_lgb_df.itertuples()},
+    "xgboost_pooled": {int(r.horizon): float(r.q_hat) for r in _conformal_xgb_df.itertuples()},
 }
 
 # กลุ่มเปราะบาง (เด็ก/ผู้สูงอายุ, มีโรคประจำตัว) ควรเริ่มระมัดระวังเร็วกว่าคนทั่วไป — ตาม
@@ -159,14 +150,23 @@ ACTIVITY_INTENSITY_OFFSET = {"เบา": 0.0, "ปานกลาง": -5.0, "�
 RISK_SCORE_BREAKPOINTS = [(0, 0), (15, 20), (25, 40), (37.5, 60), (75, 80), (150, 100)]
 
 
-def effective_threshold_for(model_name, horizon, risk_group):
-    return EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL[model_name][horizon] + RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0)
+def effective_threshold_for(risk_group):
+    """เดิมหักด้วย bias-by-horizon-by-model ของแต่ละโมเดล (โมเดล pooled ใหม่ไม่มี CSV แบบนั้น) —
+    ตอนนี้ threshold เป็นค่าเดียว (37.5 + offset ตาม risk_group) เพราะการชดเชย "โมเดลทายพลาดสูงแค่ไหน
+    ในช่วงมลพิษสูง" ย้ายไปอยู่ที่ P95 conformal interval แทนแล้ว (ดู is_horizon_at_risk)"""
+    return HIGH_POLLUTION_THRESHOLD + RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0)
 
 
 # แยกเป็นฟังก์ชันเล็กๆ ให้ get_forecast() (คำนวณสด) และ /api/notifications (คำนวณย้อนหลังจาก
 # prediction_log) ใช้ตรรกะ "อะไรถือว่าเสี่ยง" อันเดียวกันเป๊ะ กันสองที่ตัดสินไม่ตรงกัน
-def is_horizon_at_risk(pred, model_name, horizon, risk_group):
-    return pred > effective_threshold_for(model_name, horizon, risk_group)
+#
+# แทนที่กลไกเดิม (เทียบ point prediction กับ threshold ที่หักด้วย bias_high ต่อโมเดลต่อ horizon
+# จาก CSV แยกต่างหาก) ด้วยขอบบน P95 ที่ปรับด้วย conformal calibration แล้ว (p95_pred + q_hat จาก
+# CONFORMAL_QHAT) — แนวคิดเดียวกัน (กันการทายพลาดต่ำกว่าจริงในช่วงมลพิษสูง) แต่ได้มาจาก quantile
+# regression + conformal ตรงๆ ไม่ต้องมี bias-evaluation CSV แยกต่างหากเหมือนเดิม แถว naive_fallback
+# ที่ไม่มีขอบเขต quantile ให้ใช้ point prediction เป็น p95_upper_adj ตรงๆ (ไม่มี margin เพิ่ม)
+def is_horizon_at_risk(p95_upper_adj, risk_group):
+    return p95_upper_adj > effective_threshold_for(risk_group)
 
 
 def is_current_at_risk(latest_pm25, risk_group):
@@ -175,7 +175,7 @@ def is_current_at_risk(latest_pm25, risk_group):
     # or len(risk_horizons) > 0" แล้วฝั่งซ้าย True (numpy.bool_) จะถูกคืนตรงๆ โดย or ไม่แปลงชนิดให้
     # ทำให้ jsonify() พังตอน current PM2.5 สูงกว่า effective threshold จริง (เจอบั๊กนี้ตอนรัน
     # test_risk_group_e2e.py กับข้อมูลสดที่ PM2.5 ขึ้นมาแตะ threshold ของกลุ่มเปราะบางพอดี)
-    return bool(latest_pm25 > HIGH_POLLUTION_THRESHOLD + RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0))
+    return bool(latest_pm25 > effective_threshold_for(risk_group))
 
 
 ACTIVE_HOURS_START_TH = 6
@@ -222,21 +222,22 @@ def compute_missing_ratio(feature_row):
     return n_missing / len(FEATURE_COLS)
 
 
-def compute_rolling_r2(model_name, horizon, N=24):
-    """R² แบบ rolling จาก N แถวล่าสุดของ model_name/horizon ที่มี actual_pm25_calibrated แล้ว —
-    ใช้ actual_pm25_calibrated ไม่ใช่ actual_pm25 ดิบ เพราะ predicted_pm25 มาจาก input ที่ calibrate
-    แล้ว ต้องเทียบสเกลเดียวกัน (ดู build_feature_row()) เป็นตัวชี้วัด performance ล่าสุดสำหรับ
-    Dynamic Routing คืนค่า None ถ้าข้อมูลไม่พอ (< 5 คู่ — น้อยไปจนไม่น่าเชื่อถือ)
+def compute_rolling_r2(model_name, horizon, province, N=24):
+    """R² แบบ rolling จาก N แถวล่าสุดของ (model_name, horizon, province) ที่มี actual_pm25 แล้ว —
+    เพิ่ม filter province เข้ามา (เดิมไม่มี เพราะเสิร์ฟจังหวัดเดียว) ไม่งั้นผลงานของแต่ละจังหวัดจะ
+    ปนกันในการตัดสินใจของ Dynamic Routing โมเดล pooled ใหม่ไม่มี calibration layer แล้ว
+    (live inference ดึงจาก OpenAQ สเกลเดียวกับตอนเทรนเลย) จึงใช้ actual_pm25 ตรงๆ ไม่ต้องผ่าน
+    actual_pm25_calibrated เหมือนเดิม คืนค่า None ถ้าข้อมูลไม่พอ (< 5 คู่ — น้อยไปจนไม่น่าเชื่อถือ)
     """
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        """SELECT predicted_pm25, actual_pm25_calibrated
+        """SELECT predicted_pm25, actual_pm25
            FROM prediction_log
-           WHERE model_used = %s AND horizon = %s AND actual_pm25_calibrated IS NOT NULL
+           WHERE model_used = %s AND horizon = %s AND province = %s AND actual_pm25 IS NOT NULL
            ORDER BY target_time_utc DESC
            LIMIT %s""",
-        (model_name, horizon, N),
+        (model_name, horizon, province, N),
     )
     rows = cur.fetchall()
     cur.close()
@@ -250,32 +251,35 @@ def compute_rolling_r2(model_name, horizon, N=24):
     return r2_score(y_true, y_pred)
 
 
-def select_model(feature_row, horizon):
-    """เลือกโมเดลพยากรณ์สำหรับ horizon ที่ระบุ (Dynamic Routing, proposal 4.1.6):
+def select_model(feature_row, horizon, province):
+    """เลือกโมเดลพยากรณ์สำหรับ horizon/province ที่ระบุ (Dynamic Routing, proposal 4.1.6 — ปรับ
+    ให้เหลือ 2 ทางหลังตัด Prophet ออก):
 
-    1. feature_row เสียหายหนัก (missing_ratio > SIGMA_CRITICAL) → Prophet (ไม่พึ่ง lag/rolling)
-    2. ไม่งั้นเทียบ rolling R² ล่าสุดของ XGBoost/LightGBM ที่ horizon นั้น — ต้องเช็ค None ทั้ง 2
-       ทิศทาง ไม่ใช่แค่ r2_xgb เพราะโมเดลไหนก็ขาดข้อมูลได้ (เช็คแค่ฝั่งเดียวเคยทำให้ exploration
-       branch ไม่ทำงานเมื่อ LightGBM เป็นฝั่งที่ขาดข้อมูล กลายเป็น fallback LightGBM 100% เสมอ
-       ผิดเจตนา ε-greedy ของ proposal — แก้ไว้แล้ว ดู CHANGELOG (20)):
+    1. feature_row เสียหายหนัก (missing_ratio > SIGMA_CRITICAL) → "naive_fallback" (โมเดล pooled
+       ไม่เคยเห็นแถวที่มี NaN ตอนเทรนเลย เพราะ dropna ทิ้งทุกแถวที่ feature ไม่ครบ ป้อน NaN เข้าไป
+       ตรงๆ คือ out-of-distribution ไม่ใช่ graceful degradation — ใช้ persistence แทน ดู get_forecast())
+    2. ไม่งั้นเทียบ rolling R² ล่าสุดของ XGBoost/LightGBM (pooled) ที่ horizon/province นั้น — ต้องเช็ค
+       None ทั้ง 2 ทิศทาง ไม่ใช่แค่ r2_xgb เพราะโมเดลไหนก็ขาดข้อมูลได้ (เช็คแค่ฝั่งเดียวเคยทำให้
+       exploration branch ไม่ทำงานเมื่อ LightGBM เป็นฝั่งที่ขาดข้อมูล กลายเป็น fallback LightGBM 100%
+       เสมอ ผิดเจตนา ε-greedy ของ proposal — แก้ไว้แล้ว ดู CHANGELOG (20)):
        - ทั้งคู่ไม่มีข้อมูล → สุ่ม 50/50
        - มีแค่ตัวเดียว → explore ตัวที่ขาดข้อมูลด้วยความน่าจะเป็น EXPLORATION_RATE ไม่งั้น fallback ไปตัวที่มีข้อมูลแล้ว
        - มี R² ครบทั้งคู่ → เลือกตัวที่ R² สูงกว่า
     """
     if compute_missing_ratio(feature_row) > SIGMA_CRITICAL:
-        return "prophet"
+        return "naive_fallback"
 
-    r2_xgb = compute_rolling_r2("xgboost", horizon)
-    r2_lgb = compute_rolling_r2("lightgbm", horizon)
+    r2_xgb = compute_rolling_r2("xgboost_pooled", horizon, province)
+    r2_lgb = compute_rolling_r2("lightgbm_pooled", horizon, province)
 
     if r2_xgb is None and r2_lgb is None:
-        return random.choice(["xgboost", "lightgbm"])
+        return random.choice(["xgboost_pooled", "lightgbm_pooled"])
     elif r2_xgb is None:
-        return "xgboost" if random.random() < EXPLORATION_RATE else "lightgbm"
+        return "xgboost_pooled" if random.random() < EXPLORATION_RATE else "lightgbm_pooled"
     elif r2_lgb is None:
-        return "lightgbm" if random.random() < EXPLORATION_RATE else "xgboost"
+        return "lightgbm_pooled" if random.random() < EXPLORATION_RATE else "xgboost_pooled"
     else:
-        return "xgboost" if r2_xgb > r2_lgb else "lightgbm"
+        return "xgboost_pooled" if r2_xgb > r2_lgb else "lightgbm_pooled"
 
 
 # ===== Database schema =====
@@ -452,94 +456,55 @@ def login_required(view_func):
     return wrapper
 
 
-# ===== Live data fetching + calibration =====
+# ===== Live data fetching (OpenAQ + Open-Meteo — ไม่มี Air4Thai/calibration อีกต่อไป) =====
 
-def fetch_recent_pm25():
-    today = pd.Timestamp.now()
-    sdate = (today - timedelta(days=3)).strftime("%Y-%m-%d")
-    edate = today.strftime("%Y-%m-%d")
+def fetch_recent_pm25_openaq(sensor_id, hours_back=72):
+    """ดึง pm25 ย้อนหลัง hours_back ชั่วโมงจาก OpenAQ v3 (/v3/sensors/{id}/measurements) — สเกล
+    เดียวกับที่โมเดล pooled เทรนด้วยเป๊ะ (ไม่ต้อง calibrate อีกต่อไป) hours_back=72 พอสำหรับ
+    lag_24/roll_24 + เผื่อช่องว่างข้อมูล retry แบบ backoff เฉพาะ 429/5xx (เจอ 500 ชั่วคราวจาก
+    OpenAQ จริงตอนเก็บข้อมูลเทรน — ดู CHANGELOG 75)"""
+    end = pd.Timestamp.now(tz="UTC")
+    start = end - pd.Timedelta(hours=hours_back)
+    params = {"datetime_from": start.isoformat(), "datetime_to": end.isoformat(), "limit": 1000}
 
-    url = "https://air4thai.com/forweb/getHistoryData.php"
-    params = {
-        "stationID": STATION_ID_AIR4THAI,
-        "param": "PM25",
-        "type": "hr",
-        "sdate": sdate,
-        "edate": edate,
-        "stime": "00",
-        "etime": "23",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
+    r = None
+    for attempt in range(5):
+        try:
+            r = requests.get(f"https://api.openaq.org/v3/sensors/{sensor_id}/measurements",
+                              headers=OPENAQ_HEADERS, params=params, timeout=15)
+        except requests.exceptions.RequestException:
+            time.sleep(2 ** attempt)
+            continue
+        if r.status_code == 429 or r.status_code >= 500:
+            time.sleep(2 ** attempt)
+            continue
+        r.raise_for_status()
+        break
+    else:
+        raise RuntimeError(f"ดึง pm25 จาก OpenAQ ไม่สำเร็จหลัง retry (sensor {sensor_id})")
 
-    r = requests.get(url, params=params, headers=headers, timeout=15, verify=False)
-    r.raise_for_status()
-    records = r.json()["stations"][0]["data"]
-
-    df = pd.DataFrame(records).rename(columns={"DATETIMEDATA": "datetime_utc", "PM25": "pm25"})
-    df["datetime_utc"] = (
-        pd.to_datetime(df["datetime_utc"])
-        .dt.tz_localize("Asia/Bangkok")
-        .dt.tz_convert("UTC")
-    )
-    df = df.dropna(subset=["pm25"]).sort_values("datetime_utc").reset_index(drop=True)
+    results = r.json().get("results", [])
+    df = pd.DataFrame([{"datetime_utc": rr["period"]["datetimeFrom"]["utc"], "pm25": rr["value"]} for rr in results])
+    if df.empty:
+        return df
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+    df = df.dropna(subset=["pm25"]).drop_duplicates(subset=["datetime_utc"]).sort_values("datetime_utc").reset_index(drop=True)
     return df
 
 
-def fetch_current_weather():
+def fetch_current_weather_openmeteo(lat, lon):
+    """เพิ่ม wind_direction_10m/surface_pressure จากเดิมที่มีแค่ 4 ตัว (temp/humidity/wind/precip)
+    ให้ครบ 23 feature ที่โมเดล pooled ต้องการ — weather ไม่ต้อง lag/rolling เหมือน pm25 (มีแค่ค่า
+    "ปัจจุบัน" เป็น feature) จึงพอแค่ current= เดียว ไม่ต้องดึงย้อนหลัง"""
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "latitude": STATION_LAT,
-        "longitude": STATION_LON,
-        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation",
+        "latitude": lat, "longitude": lon,
+        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,wind_direction_10m,surface_pressure",
         "timezone": "UTC",
     }
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     return r.json()["current"]
-
-
-def calibrate_pm25(value):
-    """แปลงค่าดิบจาก Air4Thai ให้อยู่สเกล OpenAQ ที่โมเดลเทรนด้วย (ดู CALIBRATION_A/B)"""
-    return CALIBRATION_A * value + CALIBRATION_B
-
-
-def migrate_calibrated_actuals():
-    """Backfill actual_pm25_calibrated ย้อนหลังให้แถวที่มี actual_pm25 อยู่แล้วก่อนคอลัมน์นี้จะถูก
-    เพิ่ม (idempotent, ไม่แตะ actual_pm25 เอง) สเกลต่างกันตาม source:
-    - 'live': ค่าดิบจาก Air4Thai → calibrated = a*x+b
-    - 'backfill': actual มาจาก CSV สเกล OpenAQ อยู่แล้ว → calibrated = ค่าเดิมตรงๆ ห้ามผ่าน a*x+b
-      ซ้ำ (migration รอบแรกเคยพลาดตรงนี้เป็น double-transform บั๊ก — ฟังก์ชันนี้ self-heal ให้ด้วย)
-    """
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, actual_pm25 FROM prediction_log "
-        "WHERE actual_pm25 IS NOT NULL AND actual_pm25_calibrated IS NULL AND source != 'backfill'"
-    )
-    rows = cur.fetchall()
-    if rows:
-        updates = [(calibrate_pm25(actual), row_id) for row_id, actual in rows]
-        cur.executemany("UPDATE prediction_log SET actual_pm25_calibrated = %s WHERE id = %s", updates)
-        print(f"[migration] backfilled actual_pm25_calibrated for {len(rows)} live rows (a*x+b)")
-
-    # แถว backfill: calibrated ต้องเท่ากับ actual เป๊ะ — เงื่อนไข != ครอบคลุมทั้งแถวที่ยัง NULL
-    # และแถวที่เคยถูก migration รอบแรก apply a*x+b ผิดไป (self-healing, idempotent)
-    cur.execute(
-        "UPDATE prediction_log SET actual_pm25_calibrated = actual_pm25 "
-        "WHERE source = 'backfill' AND actual_pm25 IS NOT NULL "
-        "AND (actual_pm25_calibrated IS NULL OR actual_pm25_calibrated != actual_pm25)"
-    )
-    n_fixed = cur.rowcount
-    if n_fixed:
-        print(f"[migration] set actual_pm25_calibrated = actual_pm25 for {n_fixed} backfill rows (already OpenAQ scale)")
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-migrate_calibrated_actuals()
 
 
 def migrate_daily_nlg_risk_group():
@@ -555,7 +520,12 @@ def migrate_daily_nlg_risk_group():
         WHERE conrelid = 'daily_nlg_log'::regclass AND contype = 'u'
     """)
     existing = {r[0] for r in cur.fetchall()}
-    if "daily_nlg_log_date_thai_risk_group_key" not in existing:
+    # เช็คทั้ง 2 ชื่อ: ชื่อของ migration นี้เอง และชื่อที่ migrate_province_column() (รันทีหลัง)
+    # เปลี่ยนไปแล้ว — ไม่งั้นพอ migrate_province_column() รันสำเร็จไปแล้วครั้งนึง รอบถัดไปฟังก์ชันนี้
+    # จะเห็นว่าไม่มีชื่อของตัวเอง แล้วพยายามสร้าง constraint 2 คอลัมน์ (ไม่รวม province) ซ้ำ ซึ่งจะ
+    # ชนกับข้อมูลจริงที่มีหลายจังหวัดในวันเดียวกันแล้ว (UniqueViolation) — เจอบั๊กนี้จริงตอนทดสอบ
+    if ("daily_nlg_log_date_thai_risk_group_key" not in existing
+            and "daily_nlg_log_date_thai_risk_group_province_key" not in existing):
         for name in existing:  # ลบ unique constraint เก่า (date_thai เดี่ยว) ถ้ายังอยู่ — ชื่อมาจาก
             cur.execute(f"ALTER TABLE daily_nlg_log DROP CONSTRAINT {name}")  # pg_constraint catalog เอง ไม่ใช่ input ภายนอก
         cur.execute(
@@ -570,14 +540,91 @@ def migrate_daily_nlg_risk_group():
 migrate_daily_nlg_risk_group()
 
 
+def migrate_province_column():
+    """เพิ่มคอลัมน์ province ให้ 3 ตาราง (prediction_log, daily_nlg_log, notification_log) — เดิม
+    ทุกตารางมีแค่ข้อมูลขอนแก่น (ก่อนเปลี่ยนมาใช้ pooled model หลายจังหวัด) จึง DEFAULT 'khonkaen'
+    ตรงตามความจริงของแถวเก่าทุกแถว (ไม่ใช่ placeholder) แล้วสลับ UNIQUE constraint ของแต่ละตารางให้
+    รวม province ด้วย — pattern เดียวกับ migrate_daily_nlg_risk_group() เป๊ะ (query pg_constraint
+    หาชื่อ constraint เก่า ไม่ hardcode เพราะ Postgres auto-generate ชื่อ) ต้องรันหลัง
+    migrate_daily_nlg_risk_group() เสมอ (daily_nlg_log ต้องมี risk_group ในตารางก่อน ถึงจะรวมเข้า
+    unique constraint ใหม่ตรงนี้ได้ถูกต้อง)
+    """
+    tables = {
+        "prediction_log": (["predicted_at_utc", "horizon"], "prediction_log_predicted_at_utc_horizon_province_key"),
+        "daily_nlg_log": (["date_thai", "risk_group"], "daily_nlg_log_date_thai_risk_group_province_key"),
+        "notification_log": (["recorded_at_utc"], "notification_log_recorded_at_utc_province_key"),
+    }
+    conn = get_db_connection()
+    cur = conn.cursor()
+    for table, (unique_cols, new_constraint_name) in tables.items():
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS province TEXT NOT NULL DEFAULT 'khonkaen'")
+        cur.execute(
+            "SELECT conname FROM pg_constraint WHERE conrelid = %s::regclass AND contype = 'u'",
+            (table,),
+        )
+        existing = {r[0] for r in cur.fetchall()}
+        if new_constraint_name not in existing:
+            for name in existing:  # ลบ unique constraint เก่า (ไม่รวม province) — ชื่อมาจาก
+                cur.execute(f"ALTER TABLE {table} DROP CONSTRAINT {name}")  # pg_constraint catalog เอง ไม่ใช่ input ภายนอก
+            new_cols = ", ".join(unique_cols + ["province"])
+            cur.execute(f"ALTER TABLE {table} ADD CONSTRAINT {new_constraint_name} UNIQUE ({new_cols})")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+migrate_province_column()
+
+
+def migrate_prediction_interval_columns():
+    """เพิ่ม pm25_lo/pm25_hi (ขอบล่าง-บนของช่วงความเชื่อมั่น 90% หลัง conformal calibration) ให้
+    prediction_log — get_forecast() คำนวณค่านี้อยู่แล้วทุกครั้ง (ส่งให้ frontend แสดงเป็น error bar
+    ตั้งแต่ CHANGELOG 79) แต่ไม่เคย log ลง DB เลย ทำให้ /api/comparison ไม่มีทางรู้ว่า empirical
+    coverage ตรงเป้า ~90% ที่ conformal calibration ควรให้ได้จริงไหม — เป็น metric หลักของงานวิจัยนี้
+    (ดู scripts/train_multiprovince_models.py) แถวเก่าก่อน migration นี้ไม่มีค่าย้อนหลังให้ (ต้องรู้
+    quantile prediction ณ ตอนนั้น ซึ่งไม่ได้เก็บไว้) จึงเป็น NULL ถาวร ไม่ backfill — /api/comparison*
+    ต้องกรอง NULL ออกจาก coverage calculation เอง (ดูคอมเมนต์ที่นั่น) NOT NULL ไม่ได้เพราะ
+    naive_fallback ไม่มี CONFORMAL_QHAT (rows เก่าไม่มีค่า ใหม่ก็ยังมี fallback ที่ pm25_lo=pm25_hi=pred
+    ตรงๆ อยู่แล้ว ปัญหาคือแถวเก่าที่ไม่มีคอลัมน์นี้มาก่อนเลยต่างหาก)"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS pm25_lo DOUBLE PRECISION")
+    cur.execute("ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS pm25_hi DOUBLE PRECISION")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+migrate_prediction_interval_columns()
+
+
 # ===== Feature engineering & prediction logging =====
 
-def build_feature_row(df_recent, current_weather):
+def build_feature_row(df_recent, current_weather, province_meta):
+    """สร้าง feature row 23 ตัวสำหรับ live inference ด้วยโมเดล pooled — สูตร lag/rolling เหมือน
+    ตอนเทรนเป๊ะ (scripts/build_raw_dataset_multiprovince.py) แต่ยึดตาม "เวลาจริง" ของแต่ละจุดข้อมูล
+    ไม่ใช่ตำแหน่งแถว (df_recent จาก OpenAQ อาจมีชั่วโมงขาดหายได้ ตำแหน่งแถวจึงไม่ตรงกับจำนวนชั่วโมง
+    ที่ผ่านไปเสมอ ต่างจาก fetch_recent_pm25 เดิมที่ดึงจาก Air4Thai ซึ่งมักไม่มี gap) gap <=48h
+    interpolate เหมือน training, ยาวกว่านั้นปล่อย NaN ให้ compute_missing_ratio() จับได้ถูกต้อง —
+    จุดที่ 4 ที่ต้องซิงค์กับ build_raw_dataset_multiprovince.py/backtest_recent_multiprovince.py/
+    train_multiprovince_models.py เสมอเวลาแก้สูตร feature (ดู CLAUDE.md)
+    """
     latest_time = df_recent["datetime_utc"].max()
-    pm25_series_raw = df_recent.set_index("datetime_utc")["pm25"]
-    # ค่า lag/rolling ทั้งหมดต้องผ่าน calibration ก่อน เพราะโมเดลเทรนด้วยสเกลของ OpenAQ
-    # แต่ fetch_recent_pm25() ดึงค่าดิบจาก Air4Thai ที่ต่างสเกลกัน (ดูคอมเมนต์ที่ CALIBRATION_PATH)
-    pm25_series = pm25_series_raw.apply(calibrate_pm25)
+    pm25_by_time = df_recent.set_index("datetime_utc")["pm25"]
+
+    full_grid = pd.date_range(latest_time - pd.Timedelta(hours=48), latest_time, freq="h", tz="UTC")
+    s_filled = pm25_by_time.reindex(full_grid).interpolate(method="linear", limit=48, limit_direction="both")
+
+    def lag(hours_ago):
+        return s_filled.get(latest_time - pd.Timedelta(hours=hours_ago), np.nan)
+
+    def roll_stats(n_hours):
+        window = s_filled.loc[latest_time - pd.Timedelta(hours=n_hours - 1):latest_time]
+        return window.mean(), window.std()
+
+    roll_mean_6, roll_std_6 = roll_stats(6)
+    roll_mean_24, roll_std_24 = roll_stats(24)
+    wind_dir_deg = current_weather["wind_direction_10m"]
 
     features = {
         "temp": current_weather["temperature_2m"],
@@ -589,90 +636,77 @@ def build_feature_row(df_recent, current_weather):
         "month_sin": np.sin(2 * np.pi * latest_time.month / 12),
         "month_cos": np.cos(2 * np.pi * latest_time.month / 12),
         "dayofweek": latest_time.dayofweek,
-        "pm25_lag_1": pm25_series.iloc[-2],
-        "pm25_lag_3": pm25_series.iloc[-4],
-        "pm25_lag_6": pm25_series.iloc[-7],
-        "pm25_lag_12": pm25_series.iloc[-13],
-        "pm25_lag_24": pm25_series.iloc[-25],
-        # rolling window รวมค่าปัจจุบันด้วย (ตรงกับ pipeline ตอนเทรนที่ใช้ pandas .rolling(N) มาตรฐาน
-        # ยืนยันด้วยการเทียบย้อนหลังกับ data/khonkaen_pm25_features_final.csv แล้วตรงเป๊ะ 0 mismatch)
-        "pm25_roll_mean_6": pm25_series.iloc[-6:].mean(),
-        "pm25_roll_std_6": pm25_series.iloc[-6:].std(),
-        "pm25_roll_mean_24": pm25_series.iloc[-24:].mean(),
-        "pm25_roll_std_24": pm25_series.iloc[-24:].std(),
+        "pm25_lag_1": lag(1),
+        "pm25_lag_3": lag(3),
+        "pm25_lag_6": lag(6),
+        "pm25_lag_12": lag(12),
+        "pm25_lag_24": lag(24),
+        "pm25_roll_mean_6": roll_mean_6,
+        "pm25_roll_std_6": roll_std_6,
+        "pm25_roll_mean_24": roll_mean_24,
+        "pm25_roll_std_24": roll_std_24,
+        "wind_dir_sin": np.sin(2 * np.pi * wind_dir_deg / 360),
+        "wind_dir_cos": np.cos(2 * np.pi * wind_dir_deg / 360),
+        "pressure": current_weather["surface_pressure"],
+        "lat": province_meta["lat"],
+        "lon": province_meta["lon"],
     }
 
     X_now = pd.DataFrame([features])[FEATURE_COLS]
-    # latest_pm25 (แสดงเป็น "current" ให้ผู้ใช้ + เทียบ HIGH_POLLUTION_THRESHOLD) เป็นค่าจริงดิบ
-    # จาก Air4Thai ไม่ใช่ค่าที่ calibrate แล้ว เพราะเป็นค่าอ่านจริงของสถานี ไม่ใช่ input โมเดล
-    return X_now, latest_time, pm25_series_raw.iloc[-1]
+    # latest_pm25: ค่าจริงล่าสุดจาก OpenAQ ตรงๆ (ไม่มี calibration อีกต่อไป — สเกลเดียวกับตอนเทรนอยู่
+    # แล้ว) ใช้ทั้งแสดง "current" ให้ผู้ใช้, เทียบ HIGH_POLLUTION_THRESHOLD, และบวกกลับตอน predict
+    # (residual forecasting: model ทาย pm25_t+h - pm25_now ไม่ใช่ค่าตรงๆ — ดู get_forecast())
+    return X_now, latest_time, float(pm25_by_time.loc[latest_time])
 
 
-def predict_with_prophet(prophet_model, current_weather, latest_time, horizon):
-    """พยากรณ์ PM2.5 ที่ t+horizon ด้วย Prophet
-
-    ข้อจำกัด (simplification ชั่วคราว): Prophet ต้องการ weather regressor ณ เวลาเป้าหมายในอนาคต
-    แต่ระบบมีแค่ current weather จาก Open-Meteo (ไม่มี hourly forecast) จึงใช้ current_weather
-    ซ้ำทุก horizon แทน — ยิ่ง horizon ไกล ยิ่งคลาดเคลื่อนจากสภาพอากาศจริง ควรปรับเป็นดึง
-    Open-Meteo hourly forecast จริงในอนาคต
-    """
-    target_time_utc = latest_time + pd.Timedelta(hours=horizon)
-    future = pd.DataFrame([{
-        "ds": target_time_utc.tz_localize(None),  # Prophet เทรนด้วย ds ที่เป็น naive UTC (ดู train_xgb_prophet.py)
-        "temp": current_weather["temperature_2m"],
-        "humidity": current_weather["relative_humidity_2m"],
-        "wind_speed": current_weather["wind_speed_10m"],
-        "precipitation": current_weather["precipitation"],
-    }])
-    forecast = prophet_model.predict(future)
-    return float(forecast["yhat"].iloc[0])
-
-
-def log_predictions(predicted_at, rows):
+def log_predictions(predicted_at, rows, province):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.executemany(
         """INSERT INTO prediction_log
-           (predicted_at_utc, target_time_utc, horizon, predicted_pm25, model_used, source)
-           VALUES (%s, %s, %s, %s, %s, 'live')
-           ON CONFLICT (predicted_at_utc, horizon) DO NOTHING""",
-        [(predicted_at.isoformat(), row["target_time_utc"].isoformat(), row["horizon"], row["pm25"], row["model_used"])
-         for row in rows],
+           (predicted_at_utc, target_time_utc, horizon, predicted_pm25, model_used, source, province, pm25_lo, pm25_hi)
+           VALUES (%s, %s, %s, %s, %s, 'live', %s, %s, %s)
+           ON CONFLICT (predicted_at_utc, horizon, province) DO NOTHING""",
+        [(predicted_at.isoformat(), row["target_time_utc"].isoformat(), row["horizon"], row["pm25"],
+          row["model_used"], province, row["pm25_lo"], row["pm25_hi"]) for row in rows],
     )
     conn.commit()
     cur.close()
     conn.close()
 
 
-def log_notification_snapshot(recorded_at_utc, latest_pm25):
+def log_notification_snapshot(recorded_at_utc, latest_pm25, province):
     """เก็บ latest_pm25 ของรอบนี้ไว้ใน notification_log — recorded_at_utc ต้องเป็นค่าเดียวกับ
     predicted_at_utc ที่ log_predictions() ใช้ (ทั้งคู่มาจาก latest_time เดียวกัน) เพื่อให้
-    /api/notifications join กับ prediction_log ได้ตรง ON CONFLICT DO NOTHING เหมือน log_predictions()
-    ทำให้เรียกจาก get_forecast() ได้ทุกครั้งไม่ว่าจะมาจาก scheduler หรือ user เปิดเว็บ ไม่ต้อง
-    special-case แยก เพราะ latest_time เปลี่ยนแค่ตอน Air4Thai มีข้อมูลใหม่เท่านั้น (ราวชั่วโมงละครั้ง)
+    /api/notifications join กับ prediction_log ได้ตรง (ผ่าน recorded_at_utc=predicted_at_utc
+    AND province เท่ากัน — ไม่งั้นจะ cross จังหวัดที่เผอิญ timestamp ตรงกันได้) ON CONFLICT DO
+    NOTHING เหมือน log_predictions() ทำให้เรียกจาก get_forecast() ได้ทุกครั้งไม่ว่าจะมาจาก
+    scheduler หรือ user เปิดเว็บ ไม่ต้อง special-case แยก
     """
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO notification_log (recorded_at_utc, latest_pm25)
-           VALUES (%s, %s)
-           ON CONFLICT (recorded_at_utc) DO NOTHING""",
-        (recorded_at_utc, latest_pm25),
+        """INSERT INTO notification_log (recorded_at_utc, latest_pm25, province)
+           VALUES (%s, %s, %s)
+           ON CONFLICT (recorded_at_utc, province) DO NOTHING""",
+        (recorded_at_utc, latest_pm25, province),
     )
     conn.commit()
     cur.close()
     conn.close()
 
 
-def backfill_actuals(df_recent):
-    """เติมค่าจริงให้ prediction ที่ log ไว้ก่อนหน้า จากข้อมูล PM2.5 ย้อนหลังที่เพิ่งดึงมา (ไม่ยิง API เพิ่ม)
-    เติมทั้ง actual_pm25 (ค่าดิบ) และ actual_pm25_calibrated (ผ่าน calibrate_pm25 แล้ว — ต้องใช้
-    คอลัมน์นี้เทียบ error/R² เพราะ predicted_pm25 อยู่สเกล OpenAQ ดู compute_rolling_r2)"""
+def backfill_actuals(df_recent, province):
+    """เติมค่าจริงให้ prediction ที่ log ไว้ก่อนหน้า จากข้อมูล PM2.5 ย้อนหลังที่เพิ่งดึงมา (ไม่ยิง API
+    เพิ่ม) — กรองด้วย province เสมอ (df_recent เป็นข้อมูลของจังหวัดเดียว ไม่งั้นจะพยายาม backfill
+    แถวของจังหวัดอื่นด้วย target_time_utc ที่บังเอิญตรงกัน) ไม่มี calibration อีกต่อไป
+    actual_pm25_calibrated เก็บค่าเดียวกับ actual_pm25 ตรงๆ (คงคอลัมน์ไว้ให้ query เดิมที่อ้างถึง
+    ยังใช้ได้ ไม่ต้องเปลี่ยน schema เพิ่ม)"""
     pm25_by_time = df_recent.set_index("datetime_utc")["pm25"].to_dict()
 
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, target_time_utc FROM prediction_log WHERE actual_pm25 IS NULL")
+    cur.execute("SELECT id, target_time_utc FROM prediction_log WHERE actual_pm25 IS NULL AND province = %s", (province,))
     pending = cur.fetchall()
 
     updates = []
@@ -680,7 +714,7 @@ def backfill_actuals(df_recent):
         target_time = pd.Timestamp(target_time_str)
         actual = pm25_by_time.get(target_time)
         if actual is not None:
-            updates.append((float(actual), calibrate_pm25(float(actual)), row_id))
+            updates.append((float(actual), float(actual), row_id))
 
     if updates:
         cur.executemany(
@@ -895,7 +929,11 @@ def validate_health_message(message_text, predicted_pm25, risk_group="ทั่�
 # แปลงค่าพยากรณ์ + เหตุผลจาก SHAP ให้เป็นคำอธิบายภาษาไทยสั้นๆ ผ่าน Gemini แล้วตรวจสอบด้วย
 # validate_health_message() ก่อนคืนค่าเสมอ — ยังไม่ integrate เข้า get_forecast() (ดู
 # scripts/test_nlg_generation.py สำหรับการทดสอบเรียกฟังก์ชันนี้ตรงๆ)
-_gemini_client = genai.Client(api_key=GEMINI_KEY)
+try:
+    _gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
+except Exception as e:
+    print(f"[nlg] Gemini client init failed ({e}); NLG จะ fallback ไป template เสมอจนกว่าจะตั้ง GEMINI_KEY")
+    _gemini_client = None
 # gemini-2.5-flash เลิกให้ API key ใหม่ใช้แล้ว (ยืนยันจากการเรียกจริง) เปลี่ยนมาใช้
 # gemini-3.1-flash-lite แทน — GA, มี free tier (15 RPM/1000 RPD), เร็ว/ถูกสุดในกลุ่ม flash
 GEMINI_MODEL = "gemini-3.1-flash-lite"
@@ -996,6 +1034,8 @@ def _call_gemini(prompt):
     backoff เฉพาะ 429 (quota) คืนค่า None ถ้าไม่สำเร็จไม่ว่าด้วยสาเหตุใด เพื่อให้ผู้เรียก fallback
     ไป template message ได้ทันที
     """
+    if _gemini_client is None:
+        return None
     delay = 1
     for attempt in range(GEMINI_MAX_RETRIES):
         future = _gemini_executor.submit(
@@ -1037,13 +1077,13 @@ def get_thai_now():
     return pd.Timestamp.now(tz="UTC").tz_convert("Asia/Bangkok")
 
 
-def get_daily_nlg_row(date_thai, risk_group="ทั่วไป"):
+def get_daily_nlg_row(date_thai, risk_group, province):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
         """SELECT date_thai, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc
-           FROM daily_nlg_log WHERE date_thai = %s AND risk_group = %s""",
-        (date_thai, risk_group),
+           FROM daily_nlg_log WHERE date_thai = %s AND risk_group = %s AND province = %s""",
+        (date_thai, risk_group, province),
     )
     row = cur.fetchone()
     cur.close()
@@ -1059,14 +1099,14 @@ def get_daily_nlg_row(date_thai, risk_group="ทั่วไป"):
     }
 
 
-def save_daily_nlg_row(date_thai, risk_group, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc):
+def save_daily_nlg_row(date_thai, risk_group, province, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
         """INSERT INTO daily_nlg_log
-           (date_thai, risk_group, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc)
-           VALUES (%s, %s, %s, %s, %s, %s)""",
-        (date_thai, risk_group, daily_avg_pm25, explanation_text, bool(used_fallback), generated_at_utc),
+           (date_thai, risk_group, province, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (date_thai, risk_group, province, daily_avg_pm25, explanation_text, bool(used_fallback), generated_at_utc),
     )
     conn.commit()
     cur.close()
@@ -1085,9 +1125,9 @@ def generate_daily_nlg_explanation(forecast, feature_row, risk_group="ทั่�
     daily_avg_pm25 = round(sum(f["pm25"] for f in forecast) / len(forecast), 1)
     status = pm25_status(daily_avg_pm25)
 
-    # h=12 อยู่ที่ index 11 ใน forecast[] (h วนตั้งแต่ 1 ถึง 24 -> index 0 ถึง 23)
-    model_used_h12 = forecast[11]["model_used"]
-    shap_pairs = get_shap_explanation(model_used_h12, 12, feature_row)
+    # SHAP ปิดไว้ชั่วคราว (ดูคอมเมนต์ตอนบนไฟล์ที่เคย import get_shap_explanation) — ส่ง None
+    # ไปตรงๆ, _format_shap_factor_lines() รองรับ None อยู่แล้ว (fallback เป็น "ไม่มีข้อมูลปัจจัยเพิ่มเติม")
+    shap_pairs = None
 
     prompt = _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group)
     message_text = _call_gemini(prompt)
@@ -1106,38 +1146,39 @@ def generate_daily_nlg_explanation(forecast, feature_row, risk_group="ทั่�
     return daily_avg_pm25, final_message, used_fallback
 
 
-def maybe_generate_daily_nlg(forecast, feature_row, risk_group="ทั่วไป"):
-    """เรียก generate_daily_nlg_explanation() แค่ครั้งเดียวต่อวัน**ต่อ risk_group** (เวลาไทย) ตั้งแต่
-    06:00 น. เป็นต้นไป (>= 6 ไม่ใช่ == 6 พอดี กัน process ที่ไม่ได้รันตรงช่วง 06:00-06:59 น. พลาดไปทั้งวัน
-    — จะ generate ทันทีที่เรียก get_forecast() ครั้งแรกของวันหลัง 06:00 น. แทน) ไม่ raise exception ออกไป
-    (แค่ log) กัน /api/forecast พังเพราะ NLG รายวันจุดเดียว
+def maybe_generate_daily_nlg(forecast, feature_row, risk_group, province):
+    """เรียก generate_daily_nlg_explanation() แค่ครั้งเดียวต่อวัน**ต่อ (risk_group, province)** (เวลา
+    ไทย) ตั้งแต่ 06:00 น. เป็นต้นไป (>= 6 ไม่ใช่ == 6 พอดี กัน process ที่ไม่ได้รันตรงช่วง 06:00-06:59 น.
+    พลาดไปทั้งวัน — จะ generate ทันทีที่เรียก get_forecast() ครั้งแรกของวันหลัง 06:00 น. แทน) ไม่ raise
+    exception ออกไป (แค่ log) กัน /api/forecast พังเพราะ NLG รายวันจุดเดียว
 
-    ตัวไหนถูกเรียกจริงเป็น lazy ตาม risk_group ที่มีคนขอ (สูงสุด 3 ครั้ง/วัน ไม่ใช่ generate ล่วงหน้า
-    ทั้ง 3 กลุ่ม) 'ทั่วไป' ยังถูก warm ทุกวันผ่าน scheduled_forecast_job() ที่ไม่ผูก user เหมือนเดิม
+    ตัวไหนถูกเรียกจริงเป็น lazy ตาม (risk_group, province) ที่มีคนขอ ไม่ใช่ generate ล่วงหน้าทุกจังหวัด
+    ทุกกลุ่ม 'ทั่วไป' ของแต่ละจังหวัดยังถูก warm ทุกวันผ่าน scheduled_forecast_job() ที่ loop ทุกจังหวัด
     """
     thai_now = get_thai_now()
     if thai_now.hour < 6:
         return
 
     date_thai = thai_now.strftime("%Y-%m-%d")
-    if get_daily_nlg_row(date_thai, risk_group) is not None:
+    if get_daily_nlg_row(date_thai, risk_group, province) is not None:
         return
 
     try:
         daily_avg_pm25, explanation_text, used_fallback = generate_daily_nlg_explanation(forecast, feature_row, risk_group)
         generated_at_utc = thai_now.tz_convert("UTC").isoformat()
-        save_daily_nlg_row(date_thai, risk_group, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc)
-        print(f"[nlg-daily] generated for {date_thai} ({risk_group}): avg_pm25={daily_avg_pm25}, fallback={used_fallback}")
+        save_daily_nlg_row(date_thai, risk_group, province, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc)
+        print(f"[nlg-daily] generated for {date_thai} ({risk_group}, {province}): avg_pm25={daily_avg_pm25}, fallback={used_fallback}")
     except Exception as e:
-        print(f"[nlg-daily] generation failed for {date_thai} ({risk_group}): {e}")
+        print(f"[nlg-daily] generation failed for {date_thai} ({risk_group}, {province}): {e}")
 
 
-def get_today_daily_nlg(risk_group="ทั่วไป"):
-    """ดึงข้อความ NLG รายวันของวันนี้ (เวลาไทย) ตาม risk_group — อ่านอย่างเดียว ไม่เรียก Gemini ใหม่
-    (การสร้างจริงเกิดที่ maybe_generate_daily_nlg() เท่านั้น) ถ้ายังไม่มีแถวของวันนี้เลย คืน placeholder แทน error
+def get_today_daily_nlg(risk_group, province):
+    """ดึงข้อความ NLG รายวันของวันนี้ (เวลาไทย) ตาม risk_group/province — อ่านอย่างเดียว ไม่เรียก
+    Gemini ใหม่ (การสร้างจริงเกิดที่ maybe_generate_daily_nlg() เท่านั้น) ถ้ายังไม่มีแถวของวันนี้เลย
+    คืน placeholder แทน error
     """
     date_thai = get_thai_now().strftime("%Y-%m-%d")
-    row = get_daily_nlg_row(date_thai, risk_group)
+    row = get_daily_nlg_row(date_thai, risk_group, province)
     if row is None:
         return {
             "date_thai": date_thai,
@@ -1176,26 +1217,38 @@ def summarize_errors(all_errors, live_errors):
 
 # ===== Core forecast pipeline =====
 
-def get_forecast(risk_group="ทั่วไป"):
-    df_recent = fetch_recent_pm25()
-    current_weather = fetch_current_weather()
-    X_now, latest_time, latest_pm25 = build_feature_row(df_recent, current_weather)
+def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
+    province_meta = PROVINCES_BY_SLUG[province]
+    df_recent = fetch_recent_pm25_openaq(province_meta["sensor_id_pm25"])
+    current_weather = fetch_current_weather_openmeteo(province_meta["lat"], province_meta["lon"])
+    X_now, latest_time, latest_pm25 = build_feature_row(df_recent, current_weather, province_meta)
     latest_time_th = latest_time.tz_convert("Asia/Bangkok")
 
     forecast = []
     log_rows = []
     risk_horizons = []
-    prophet_triggered_horizons = []
+    fallback_triggered_horizons = []
     for h in range(1, 25):
-        model_name = select_model(X_now, h)
+        model_name = select_model(X_now, h, province)
 
-        if model_name == "xgboost":
-            pred = round(float(XGB_MODELS[h].predict(X_now)[0]), 1)
-        elif model_name == "prophet":
-            pred = round(predict_with_prophet(PROPHET_MODEL, current_weather, latest_time, h), 1)
-            prophet_triggered_horizons.append(h)
-        else:  # lightgbm (default)
-            pred = round(float(MODELS[h].predict(X_now)[0]), 1)
+        if model_name == "naive_fallback":
+            # ข้อมูลขาดหนักเกินกว่าจะป้อนเข้าโมเดล pooled ได้ (โมเดลไม่เคยเห็นแถวที่มี NaN ตอนเทรน
+            # เลย) ใช้ persistence แทน (ทายเท่าค่าปัจจุบัน) ไม่มีขอบเขต uncertainty ให้ใช้ค่า pred
+            # ตรงๆ เป็นทั้ง P05/P95 (ไม่มี margin เพิ่ม — สื่อว่า "ความเชื่อมั่นต่ำ" ผ่าน model_used
+            # แทน ไม่ใช่ผ่านช่วงกว้าง)
+            pred = round(float(latest_pm25), 1)
+            p05_adj = pred
+            p95_upper_adj = pred
+            fallback_triggered_horizons.append(h)
+        else:
+            models_by_q = MODELS[h] if model_name == "lightgbm_pooled" else XGB_MODELS[h]
+            # residual forecasting: โมเดลทาย pm25_t+h - pm25_now ต้องบวก latest_pm25 กลับทุกจุด
+            pred = round(float(models_by_q[0.5].predict(X_now)[0]) + latest_pm25, 1)
+            p05_pred = float(models_by_q[0.05].predict(X_now)[0]) + latest_pm25
+            p95_pred = float(models_by_q[0.95].predict(X_now)[0]) + latest_pm25
+            q_hat = CONFORMAL_QHAT[model_name][h]
+            p05_adj = p05_pred - q_hat
+            p95_upper_adj = p95_pred + q_hat
 
         forecast_time_utc = latest_time + pd.Timedelta(hours=h)
         forecast_time_th = forecast_time_utc.tz_convert("Asia/Bangkok")
@@ -1203,6 +1256,10 @@ def get_forecast(risk_group="ทั่วไป"):
             "time": forecast_time_th.strftime("%H:%M"),
             "hour_thai": forecast_time_th.hour,
             "pm25": pred,
+            # ช่วงความเชื่อมั่น ~90% (P05-P95 หลัง conformal calibration) — clamp ขอบล่างไม่ให้ติดลบ
+            # (PM2.5 เป็นปริมาณจริงเชิงบวกเสมอ แต่ residual ที่บวกกลับอาจดันค่าต่ำกว่า 0 ได้ในทางคณิตศาสตร์)
+            "pm25_lo": round(max(0.0, p05_adj), 1),
+            "pm25_hi": round(max(0.0, p95_upper_adj), 1),
             "model_used": model_name,
         })
         log_rows.append({
@@ -1210,26 +1267,29 @@ def get_forecast(risk_group="ทั่วไป"):
             "target_time_utc": forecast_time_utc,
             "pm25": pred,
             "model_used": model_name,
+            "pm25_lo": round(max(0.0, p05_adj), 1),
+            "pm25_hi": round(max(0.0, p95_upper_adj), 1),
         })
 
-        # threshold แยกตามโมเดลที่ทำนายจริง (bias_high ไม่เท่ากันแต่ละโมเดล — ดู
-        # EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL) และตาม risk_group ของผู้เรียก (ดู
-        # RISK_GROUP_THRESHOLD_OFFSET) Prophet ไม่มี bias ที่เชื่อถือได้ เทียบ 37.5 (+offset) ตรงๆ
-        if is_horizon_at_risk(pred, model_name, h, risk_group):
+        # เดิมเทียบกับ threshold ที่หักด้วย bias_high ต่อโมเดลต่อ horizon (CSV แยกต่างหาก) — ตอนนี้
+        # ใช้ขอบบน P95 (conformal-adjusted) เทียบกับ threshold ตรงๆ แทน (ดู is_horizon_at_risk)
+        if is_horizon_at_risk(p95_upper_adj, risk_group):
             risk_horizons.append(h)
 
-    log_predictions(latest_time, log_rows)
-    log_notification_snapshot(latest_time.isoformat(), float(latest_pm25))
-    backfill_actuals(df_recent)
-    maybe_generate_daily_nlg(forecast, X_now, risk_group)
+    log_predictions(latest_time, log_rows, province)
+    log_notification_snapshot(latest_time.isoformat(), float(latest_pm25), province)
+    backfill_actuals(df_recent, province)
+    maybe_generate_daily_nlg(forecast, X_now, risk_group, province)
 
     best_time = find_best_time(forecast)
 
     # latest_pm25 เป็นข้อมูลจริง ไม่มี bias จากโมเดล จึงเทียบกับ 37.5 (+ offset ตาม risk_group) ตรงๆ
-    # (ต่างจาก risk_horizons ด้านบนที่ยังต้องหัก bias ของโมเดลด้วย)
+    # (ต่างจาก risk_horizons ด้านบนที่เทียบกับขอบบน P95)
     high_pollution_risk = is_current_at_risk(latest_pm25, risk_group) or len(risk_horizons) > 0
 
     return {
+        "province": {"th": province_meta["province_th"], "en": province_meta["province_en"],
+                      "is_zero_shot": province_meta["is_zero_shot"]},
         "current": {
             "pm25": round(float(latest_pm25), 1),
             "datetime_th": latest_time_th.strftime("%Y-%m-%d %H:%M"),
@@ -1247,8 +1307,8 @@ def get_forecast(risk_group="ทั่วไป"):
         "best_time": best_time,
         "high_pollution_risk": high_pollution_risk,
         "risk_horizons": risk_horizons,
-        "prophet_triggered_horizons": prophet_triggered_horizons,
-        "daily_summary": get_today_daily_nlg(risk_group),
+        "fallback_triggered_horizons": fallback_triggered_horizons,
+        "daily_summary": get_today_daily_nlg(risk_group, province),
         "risk_group": risk_group,
         # activity เลือกฝั่ง frontend เท่านั้น (localStorage, ไม่ persist ที่ backend — ดู
         # compute_risk_score()) จึงส่งแค่ config ให้ frontend คำนวณคะแนนเองจาก pm25 ที่มีอยู่แล้วใน
@@ -1263,12 +1323,17 @@ def get_forecast(risk_group="ทั่วไป"):
 
 
 def scheduled_forecast_job():
-    """เรียก get_forecast() อัตโนมัติทุกชั่วโมง ให้ prediction_log สะสมข้อมูลต่อเนื่อง แม้ไม่มีใครเปิดหน้าเว็บ"""
-    try:
-        get_forecast()
-        print("[scheduler] auto forecast logged OK")
-    except Exception as e:
-        print(f"[scheduler] auto forecast failed: {e}")
+    """เรียก get_forecast() อัตโนมัติทุกชั่วโมงต่อจังหวัด (loop ทั้ง 20 จังหวัดใน PROVINCE_REGISTRY)
+    ให้ prediction_log สะสมข้อมูลต่อเนื่องแม้ไม่มีใครเปิดหน้าเว็บ — try/except ต่อจังหวัด กัน OpenAQ/
+    Open-Meteo hiccup ของจังหวัดเดียวทำให้ job ทั้งหมดล่ม (mirror pattern จาก
+    scripts/backtest_recent_multiprovince.py) + sleep สั้นๆ ระหว่างจังหวัดไม่ให้ยิง API รัวเกินไป"""
+    for p in PROVINCE_REGISTRY:
+        try:
+            get_forecast(province=p["province_en"])
+            print(f"[scheduler] auto forecast logged OK ({p['province_en']})")
+        except Exception as e:
+            print(f"[scheduler] auto forecast failed ({p['province_en']}): {e}")
+        time.sleep(0.5)
 
 
 # ===== Flask routes =====
@@ -1435,10 +1500,32 @@ def resolve_risk_group_from_session():
     return risk_group
 
 
+def resolve_province_from_request():
+    """province query param — default DEFAULT_PROVINCE (khonkaen) ถ้าไม่ส่งมา (backward compatible
+    กับ frontend/route เดิมตอนเปลี่ยนผ่าน) แต่ถ้าส่งมาแล้วไม่ตรงกับ registry ให้ raise ValueError
+    (ผู้เรียก route จับแล้วคืน 400) ไม่ silent fallback เพราะจะกลบบั๊ก typo ฝั่ง frontend"""
+    province = request.args.get("province", DEFAULT_PROVINCE)
+    if province not in PROVINCES_BY_SLUG:
+        raise ValueError(f"ไม่รู้จักจังหวัด: {province}")
+    return province
+
+
+@app.route("/api/provinces", methods=["GET"])
+def api_provinces():
+    return jsonify([
+        {"province_th": p["province_th"], "province_en": p["province_en"],
+         "lat": p["lat"], "lon": p["lon"], "is_zero_shot": p["is_zero_shot"]}
+        for p in PROVINCE_REGISTRY
+    ])
+
+
 @app.route("/api/forecast", methods=["GET"])
 def api_forecast():
     try:
-        return jsonify(get_forecast(resolve_risk_group_from_session()))
+        province = resolve_province_from_request()
+        return jsonify(get_forecast(province, resolve_risk_group_from_session()))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1447,8 +1534,15 @@ def api_forecast():
 def api_notifications():
     """ประวัติการแจ้งเตือน (เฉพาะรอบที่ high_pollution_risk=true) — คำนวณ risk_horizons สดจาก
     prediction_log ตาม risk_group ของผู้เรียก ณ เวลา query ไม่ใช่ค่าที่ freeze ไว้ตอนบันทึก (ดูเหตุผล
-    เต็มที่ comment เหนือ notification_log ใน init_db())"""
+    เต็มที่ comment เหนือ notification_log ใน init_db()) กรองด้วย province เสมอ (ไม่งั้น join กับ
+    prediction_log ผ่าน predicted_at_utc=recorded_at_utc จะ cross จังหวัดที่เผอิญ timestamp ตรงกันได้)
+
+    หมายเหตุ: risk check ที่นี่ใช้ predicted_pm25 ตรงๆ (ไม่มีขอบบน P95 แบบ get_forecast() เพราะ
+    ไม่ได้ persist ค่า P95 ไว้ใน prediction_log) เป็นการประมาณที่หยาบกว่าเล็กน้อยสำหรับหน้าประวัติ
+    ย้อนหลัง — ยอมรับได้เพราะหน้านี้ถูกซ่อนอยู่ใน frontend ตอนนี้ (SHOW_EXTRA_FEATURES=false)
+    """
     try:
+        province = resolve_province_from_request()
         risk_group = resolve_risk_group_from_session()
         limit = request.args.get("limit", default=20, type=int)
         limit = max(1, min(limit, 100))
@@ -1456,24 +1550,26 @@ def api_notifications():
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
-            "SELECT recorded_at_utc, latest_pm25 FROM notification_log ORDER BY recorded_at_utc DESC LIMIT %s",
-            (limit,),
+            "SELECT recorded_at_utc, latest_pm25 FROM notification_log WHERE province = %s "
+            "ORDER BY recorded_at_utc DESC LIMIT %s",
+            (province, limit),
         )
         snapshots = cur.fetchall()
 
         results = []
         for recorded_at_utc, latest_pm25 in snapshots:
             cur.execute(
-                "SELECT horizon, predicted_pm25, model_used FROM prediction_log WHERE predicted_at_utc = %s",
-                (recorded_at_utc,),
+                "SELECT horizon, predicted_pm25, model_used FROM prediction_log "
+                "WHERE predicted_at_utc = %s AND province = %s",
+                (recorded_at_utc, province),
             )
             horizon_rows = cur.fetchall()
 
             risk_horizons = sorted(
                 h for h, pred, model_used in horizon_rows
-                if is_horizon_at_risk(pred, model_used, h, risk_group)
+                if is_horizon_at_risk(pred, risk_group)
             )
-            prophet_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == "prophet")
+            fallback_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == "naive_fallback")
 
             if not (is_current_at_risk(latest_pm25, risk_group) or risk_horizons):
                 continue
@@ -1483,12 +1579,14 @@ def api_notifications():
                 "recorded_at_th": recorded_at_th.strftime("%Y-%m-%d %H:%M"),
                 "latest_pm25": round(float(latest_pm25), 1),
                 "risk_horizons": risk_horizons,
-                "prophet_horizons": prophet_horizons,
+                "fallback_horizons": fallback_horizons,
             })
 
         cur.close()
         conn.close()
         return jsonify(results)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1496,39 +1594,40 @@ def api_notifications():
 @app.route("/api/comparison", methods=["GET"])
 def api_comparison():
     try:
+        province = resolve_province_from_request()
+
         horizon = int(request.args.get("horizon", 1))
         if not 1 <= horizon <= 24:
             return jsonify({"error": "horizon ต้องอยู่ระหว่าง 1-24"}), 400
 
         model = request.args.get("model", "all")
-        if model not in ("all", "lightgbm", "xgboost", "prophet"):
-            return jsonify({"error": "model ต้องเป็น all/lightgbm/xgboost/prophet"}), 400
+        if model not in ("all", "lightgbm_pooled", "xgboost_pooled", "naive_fallback"):
+            return jsonify({"error": "model ต้องเป็น all/lightgbm_pooled/xgboost_pooled/naive_fallback"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
-        # MAE/bias ต้องเทียบสเกลเดียวกับ predicted_pm25 จึงใช้ actual_pm25_calibrated — แถวที่ยังเป็น
-        # NULL (ยังไม่ผ่าน migration) fallback คำนวณสดใน query: backfill สเกล OpenAQ อยู่แล้วใช้ตรงๆ,
-        # live เป็นค่าดิบ Air4Thai ต้องผ่าน a*x+b
-        calibrated_expr = """COALESCE(actual_pm25_calibrated,
-                       CASE WHEN source = 'backfill' THEN actual_pm25
-                            ELSE %s * actual_pm25 + %s END)"""
+        # ไม่มี calibration อีกต่อไป (โมเดล pooled: live/backfill สเกลเดียวกับตอนเทรนเป๊ะ) —
+        # actual_pm25_calibrated ยังคงไว้เป็นคอลัมน์ (เท่ากับ actual_pm25 เสมอสำหรับแถวใหม่ ดู
+        # backfill_actuals()) COALESCE กับ actual_pm25 ตรงๆ ไว้เผื่อแถวที่ actual_pm25_calibrated
+        # ยังเป็น NULL (ยังไม่ผ่าน backfill_actuals)
+        calibrated_expr = "COALESCE(actual_pm25_calibrated, actual_pm25)"
         if model == "all":
             cur.execute(
                 f"""SELECT target_time_utc, predicted_pm25, actual_pm25, {calibrated_expr},
-                          model_used, source
+                          model_used, source, pm25_lo, pm25_hi
                    FROM prediction_log
-                   WHERE horizon = %s
+                   WHERE horizon = %s AND province = %s
                    ORDER BY target_time_utc""",
-                (CALIBRATION_A, CALIBRATION_B, horizon),
+                (horizon, province),
             )
         else:
             cur.execute(
                 f"""SELECT target_time_utc, predicted_pm25, actual_pm25, {calibrated_expr},
-                          model_used, source
+                          model_used, source, pm25_lo, pm25_hi
                    FROM prediction_log
-                   WHERE horizon = %s AND model_used = %s
+                   WHERE horizon = %s AND model_used = %s AND province = %s
                    ORDER BY target_time_utc""",
-                (CALIBRATION_A, CALIBRATION_B, horizon, model),
+                (horizon, model, province),
             )
         rows = cur.fetchall()
         cur.close()
@@ -1537,17 +1636,29 @@ def api_comparison():
         points = []
         errors = []
         live_errors = []
-        for target_time_str, predicted, actual, actual_calibrated, model_used, source in rows:
+        in_interval_flags = []
+        for target_time_str, predicted, actual, actual_calibrated, model_used, source, pm25_lo, pm25_hi in rows:
             target_time_th = pd.Timestamp(target_time_str).tz_convert("Asia/Bangkok")
+            # in_interval: ค่าจริงตกอยู่ในช่วง P05-P95 (conformal) ไหม — None ถ้ายังไม่มีค่าจริง หรือ
+            # แถวเก่าก่อน CHANGELOG 81 ที่ไม่มี pm25_lo/pm25_hi เก็บไว้เลย (ดู migrate_prediction_
+            # interval_columns()) ไม่นับ naive_fallback (pm25_lo=pm25_hi=predicted เสมอ ไม่ใช่ช่วง
+            # ความเชื่อมั่นจริง วัด coverage กับมันไม่มีความหมาย)
+            in_interval = None
+            if actual_calibrated is not None and pm25_lo is not None and pm25_hi is not None and model_used != "naive_fallback":
+                in_interval = pm25_lo <= actual_calibrated <= pm25_hi
+                in_interval_flags.append(in_interval)
             points.append({
                 "time": target_time_th.strftime("%m-%d %H:%M"),
                 "predicted": round(predicted, 1),
-                # แสดงค่า calibrated ในกราฟ เพื่อให้เส้น actual/predicted อยู่สเกลเดียวกัน
-                # (ค่าดิบ Air4Thai ยังอยู่ใน actual_raw เผื่ออยากดูค่าอ่านจริงของสถานี)
+                # actual_raw/actual เท่ากันเสมอสำหรับแถวใหม่ (ไม่มี calibration อีกต่อไป) เก็บ field
+                # ทั้งคู่ไว้เพื่อไม่ต้องแก้ frontend ที่ยังอ้างถึงทั้งสองชื่อ
                 "actual": round(actual_calibrated, 1) if actual_calibrated is not None else None,
                 "actual_raw": round(actual, 1) if actual is not None else None,
                 "model_used": model_used,
                 "source": source,
+                "pm25_lo": round(pm25_lo, 1) if pm25_lo is not None else None,
+                "pm25_hi": round(pm25_hi, 1) if pm25_hi is not None else None,
+                "in_interval": in_interval,
             })
             if actual_calibrated is not None:
                 err = actual_calibrated - predicted
@@ -1567,6 +1678,8 @@ def api_comparison():
             bias = sum(errors) / n_matched if n_matched else None
             n_used, basis = n_matched, None
 
+        coverage_pct = round(100 * sum(in_interval_flags) / len(in_interval_flags), 1) if in_interval_flags else None
+
         return jsonify({
             "horizon": horizon,
             "model": model,
@@ -1579,8 +1692,16 @@ def api_comparison():
                 "basis": basis,
                 "mae": round(mae, 3) if mae is not None else None,
                 "bias": round(bias, 3) if bias is not None else None,
+                # coverage: % ของคู่ที่มีช่วงความเชื่อมั่นบันทึกไว้ (n_coverage) ที่ค่าจริงตกอยู่ในช่วง
+                # จริง — เป้าหมายตาม conformal calibration คือ ~90% (ALPHA=0.10 ใน
+                # scripts/train_multiprovince_models.py) n_coverage มักน้อยกว่า n_matched เพราะแถวเก่า
+                # ก่อน CHANGELOG 81 ไม่มี pm25_lo/pm25_hi เก็บไว้
+                "coverage_pct": coverage_pct,
+                "n_coverage": len(in_interval_flags),
             },
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1588,36 +1709,44 @@ def api_comparison():
 @app.route("/api/comparison/overview", methods=["GET"])
 def api_comparison_overview():
     try:
+        province = resolve_province_from_request()
+
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM prediction_log")
+        cur.execute("SELECT COUNT(*) FROM prediction_log WHERE province = %s", (province,))
         n_total = cur.fetchone()[0]
-        # ใช้ actual_pm25_calibrated (สเกลเดียวกับ predicted_pm25) — fallback logic เดียวกับ
-        # /api/comparison: แถว backfill ใช้ค่าเดิม (OpenAQ scale อยู่แล้ว), แถว live ผ่าน a*x+b
+        # ไม่มี calibration อีกต่อไป (ดูคอมเมนต์เดียวกันใน /api/comparison)
         cur.execute(
-            """SELECT horizon, predicted_pm25,
-                      COALESCE(actual_pm25_calibrated,
-                               CASE WHEN source = 'backfill' THEN actual_pm25
-                                    ELSE %s * actual_pm25 + %s END),
-                      model_used, source
-               FROM prediction_log WHERE actual_pm25 IS NOT NULL""",
-            (CALIBRATION_A, CALIBRATION_B),
+            """SELECT horizon, predicted_pm25, COALESCE(actual_pm25_calibrated, actual_pm25),
+                      model_used, source, pm25_lo, pm25_hi
+               FROM prediction_log WHERE actual_pm25 IS NOT NULL AND province = %s""",
+            (province,),
         )
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
         by_horizon_errors = {h: {"all": [], "live": []} for h in range(1, 25)}
+        by_horizon_coverage = {h: [] for h in range(1, 25)}
         by_model_errors = {}
         all_errors, live_errors = [], []
-        for horizon, predicted, actual, model_used, source in rows:
+        overall_coverage_flags = []
+        for horizon, predicted, actual, model_used, source, pm25_lo, pm25_hi in rows:
             err = actual - predicted
             is_live = source != "backfill"
 
             all_errors.append(err)
             by_horizon_errors[horizon]["all"].append(err)
-            by_model_errors.setdefault(model_used, {"all": [], "live": [], "n_backfill": 0, "n_live": 0})
+            by_model_errors.setdefault(model_used, {"all": [], "live": [], "n_backfill": 0, "n_live": 0, "coverage": []})
             by_model_errors[model_used]["all"].append(err)
+
+            # coverage: เหมือน /api/comparison (ดูคอมเมนต์ที่นั่น) — กันแถวเก่าไม่มี pm25_lo/pm25_hi
+            # และไม่นับ naive_fallback (ช่วงความเชื่อมั่นกว้าง 0 เสมอ ไม่ใช่ conformal interval จริง)
+            if pm25_lo is not None and pm25_hi is not None and model_used != "naive_fallback":
+                covered = pm25_lo <= actual <= pm25_hi
+                overall_coverage_flags.append(covered)
+                by_horizon_coverage[horizon].append(covered)
+                by_model_errors[model_used]["coverage"].append(covered)
 
             if is_live:
                 live_errors.append(err)
@@ -1629,15 +1758,22 @@ def api_comparison_overview():
 
         n_matched = len(all_errors)
         overall_mae, overall_bias, overall_n_used, overall_basis = summarize_errors(all_errors, live_errors)
+        overall_coverage_pct = (
+            round(100 * sum(overall_coverage_flags) / len(overall_coverage_flags), 1)
+            if overall_coverage_flags else None
+        )
 
         by_horizon = []
         for h in range(1, 25):
             mae_h, _, n_h, basis_h = summarize_errors(by_horizon_errors[h]["all"], by_horizon_errors[h]["live"])
+            cov_flags_h = by_horizon_coverage[h]
             by_horizon.append({
                 "horizon": h,
                 "mae": round(mae_h, 2) if mae_h is not None else None,
                 "n": n_h,
                 "basis": basis_h,
+                "coverage_pct": round(100 * sum(cov_flags_h) / len(cov_flags_h), 1) if cov_flags_h else None,
+                "n_coverage": len(cov_flags_h),
             })
 
         with_data = [b for b in by_horizon if b["mae"] is not None]
@@ -1647,6 +1783,7 @@ def api_comparison_overview():
         by_model = []
         for model_used, d in sorted(by_model_errors.items()):
             mae_m, bias_m, n_m, basis_m = summarize_errors(d["all"], d["live"])
+            cov_flags_m = d["coverage"]
             by_model.append({
                 "model_used": model_used,
                 "mae": round(mae_m, 2) if mae_m is not None else None,
@@ -1655,6 +1792,8 @@ def api_comparison_overview():
                 "basis": basis_m,
                 "n_backfill": d["n_backfill"],
                 "n_live": d["n_live"],
+                "coverage_pct": round(100 * sum(cov_flags_m) / len(cov_flags_m), 1) if cov_flags_m else None,
+                "n_coverage": len(cov_flags_m),
             })
 
         return jsonify({
@@ -1664,11 +1803,16 @@ def api_comparison_overview():
             "overall_bias": round(overall_bias, 2) if overall_bias is not None else None,
             "overall_n_used": overall_n_used,
             "overall_basis": overall_basis,
+            # เป้าหมาย ~90% ตาม conformal calibration (ALPHA=0.10) — ดูคอมเมนต์ใน /api/comparison
+            "overall_coverage_pct": overall_coverage_pct,
+            "overall_n_coverage": len(overall_coverage_flags),
             "by_horizon": by_horizon,
             "by_model": by_model,
             "best_horizon": best,
             "worst_horizon": worst,
         })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

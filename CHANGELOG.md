@@ -1,5 +1,173 @@
 # Changelog
 
+## 2026-09-13 (84) — ปรับ design ตัวแสดงช่วงความเชื่อมั่นบนกราฟพยากรณ์อีกรอบ (เลิกใช้ dot+line)
+
+**ที่มา**: entry 80 เคยปรับจาก tick-cap ไปเป็นเส้นบาง+จุดกลมบน-ล่าง (dot+line) ไปแล้วรอบนึง ผู้ใช้ดูของจริงบนเครื่องแล้วบอกว่ายังไม่สวย สกรีนช็อตของจริงมาดูใกล้ๆ พบสาเหตุ: เส้น+จุดลอยพ้นแท่งขึ้นไปสูงในพื้นที่ว่างด้านบน หน้าตาเหมือน "หนวดแมลง"/ลูกโป่งปักอยู่บนแท่งสี ไม่ใช่องค์ประกอบเดียวกับแท่งเลย เป็นการซ้อน mark คนละชนิด (line+dot บนแท่ง) ที่ดูแปลกแยกจากกัน
+
+**สิ่งที่ทำ**: เปลี่ยนแนวทางใหม่ทั้งหมด — เลิกใช้ dot/line ไปเลย ใช้ **ส่วนขยายโปร่งแสงของแท่งเดียวกัน** แทน: `.bar-range-cap` เป็นแท่งเงาสีเดียวกับ `.bar` (ผ่าน `color-mix(in srgb, var(--severity) 28%, transparent)`) สูงเท่า `pm25_hi` เต็ม วางอยู่หลัง `.bar` ทึบ (z-index ต่ำกว่า) ทำให้ส่วนล่าง (0→pm25 จุดพยากรณ์) ถูกแท่งทึบบังไว้หมด เหลือให้เห็นแค่ "ส่วนเกิน" จากจุดพยากรณ์ขึ้นไปถึงขอบบน P95 จริง — อ่านเป็นแท่งเดียวกันที่ค่อยๆ จางขึ้นไป ไม่ใช่ของแปลกปลอมที่ลอยแยก ไม่แสดง `pm25_lo` แยกอีกต่อไป (อยู่ใต้แท่งทึบเสมออยู่แล้ว ไม่มีอะไรให้เห็นเพิ่มบนกราฟ ค่าเต็มยังอยู่ใน tooltip) ลบ `--range-ink`/`--range-ring` และ CSS ของ dot/line ทิ้งทั้งหมด (ไม่ใช้แล้ว) ปรับ caption ใต้หัวข้อกราฟเป็น "ส่วนจางด้านบนคือขอบบนของช่วงความเชื่อมั่น ~90%"
+
+**ทดสอบ**: `npm run build` ผ่าน, สกรีนช็อต Playwright ทั้ง light/dark mode ยืนยันส่วนขยายเรนเดอร์เนียนต่อจากแท่งทึบจริง ไม่มี artifact ขอบ, zoom ดูใกล้ๆ ยืนยันอ่านง่ายกว่าเดิมมาก (ไม่มี element ลอยแยกจากแท่งอีกต่อไป)
+
+**ไฟล์ที่แก้**: `frontend/src/views/ForecastView.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (83) — แก้หน้าเปรียบเทียบไม่รีเฟรชข้อมูลเมื่อสลับจังหวัดจาก header
+
+**ที่มา**: ผู้ใช้ถามว่าหน้าเปรียบเทียบควรแยกตามจังหวัดด้วยไหม — ตรวจสอบแล้วพบว่าจริงๆ `/api/comparison`/`/api/comparison/overview` กรองตาม `province` อยู่แล้ว (ผูกกับตัวเลือกจังหวัดบน header) แต่ `CompareView.vue` ขาด `watch()` บน `provinceState.selected` ต่างจาก `ForecastView.vue` ที่มีอยู่แล้ว (`watch(() => provinceState.selected, loadForecast)`) — ทำให้ถ้าเปิดหน้า compare ค้างไว้แล้วสลับจังหวัดจาก dropdown ข้อมูลจะไม่รีเฟรชตาม ต้องรีโหลดหน้าเองถึงจะเห็นจังหวัดใหม่ ยืนยันแนวทางแก้กับผู้ใช้แล้วดำเนินการ
+
+**สิ่งที่ทำ**: `CompareView.vue` เพิ่ม `watch(() => provinceState.selected, () => { loadOverview(); loadComparison(); })` (pattern เดียวกับ ForecastView.vue เป๊ะ) รีโหลดทั้งการ์ดภาพรวมและกราฟรายละเอียดต่อ horizon เมื่อจังหวัดเปลี่ยน
+
+**ทดสอบ**: สคริปต์ Playwright คลิกสลับจังหวัดจาก dropdown บนหน้า `/compare` ที่เปิดค้างไว้ (ไม่รีเฟรชหน้า) ดัก network request ยืนยันยิง `/api/comparison?...province=loei` และ `/api/comparison/overview?province=loei` ใหม่ถูกต้องหลังสลับ, สกรีนช็อตยืนยันการ์ดภาพรวมเปลี่ยนเป็นข้อมูลของเลยจริง (n=48, MAE ±0.10 ตามข้อมูลจริงของจังหวัดนั้น) ไม่ใช่ข้อมูลขอนแก่นค้างอยู่, `npm run build` ผ่าน
+
+**ไฟล์ที่แก้**: `frontend/src/views/CompareView.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (82) — หน้าเปรียบเทียบแสดงช่วงความเชื่อมั่น 90% + empirical coverage (ให้สอดคล้องกับ pooled model)
+
+**ที่มา**: ผู้ใช้ขอให้ปรับหน้าเปรียบเทียบให้สอดคล้องกับโมเดล pooled ปัจจุบัน สำรวจโค้ดแล้วพบจุดที่ไม่ตรงกันจริง: `get_forecast()` คำนวณช่วงความเชื่อมั่น P05-P95 (conformal calibration, เป้าหมาย ~90% coverage ตาม ALPHA=0.10) และส่งให้ ForecastView แสดงเป็น error bar อยู่แล้ว (CHANGELOG 79) แต่ `prediction_log` ไม่เคยเก็บ `pm25_lo`/`pm25_hi` เลย มีแค่ `predicted_pm25` (จุดเดียว) — ทำให้หน้าเปรียบเทียบไม่มีทางรู้ได้เลยว่า conformal calibration ที่เป็นเทคนิคหลักของงานวิจัยนี้ ทำงานตรงเป้า ~90% coverage จริงไหมเมื่อเทียบกับค่าจริงที่วัดได้ ถือเป็นช่องว่างสำคัญที่สุดระหว่างหน้าเปรียบเทียบกับตัวโมเดลจริง
+
+**สิ่งที่ทำ**:
+- **`app.py`**: migration ใหม่ `migrate_prediction_interval_columns()` เพิ่มคอลัมน์ `pm25_lo`/`pm25_hi` (nullable) ให้ `prediction_log` — แถวเก่าก่อนหน้านี้เป็น NULL ถาวร (ไม่มีทาง backfill ย้อนหลัง เพราะไม่ได้เก็บ quantile prediction ตอนนั้นไว้) `log_predictions()`/`get_forecast()` แก้ให้ log ค่าช่วงที่คำนวณอยู่แล้วลง DB ด้วย (ก่อนหน้านี้คำนวณแล้วทิ้ง ไม่เคย persist)
+- **`/api/comparison`**: คืน `pm25_lo`/`pm25_hi`/`in_interval` ต่อจุด + `coverage_pct`/`n_coverage` ใน summary (% ของคู่ที่ค่าจริงตกอยู่ในช่วง 90% จริง) กรอง `naive_fallback` ออกจาก coverage เสมอ (ช่วงกว้าง 0 เสมอ ไม่ใช่ conformal interval จริง วัด coverage กับมันไม่มีความหมาย) กรองแถวที่ไม่มี `pm25_lo`/`pm25_hi` (แถวเก่า) ออกจากการคำนวณด้วยเช่นกัน
+- **`/api/comparison/overview`**: เพิ่ม `overall_coverage_pct`/`overall_n_coverage` + `coverage_pct`/`n_coverage` แยกตาม `by_horizon` และ `by_model` ด้วย pattern เดียวกัน
+- **`CompareView.vue`**: วาดช่วงความเชื่อมั่นเป็น area wash สีน้ำเงิน ~12% opacity ซ้อนใต้เส้นพยากรณ์/ค่าจริง (ตาม mark spec ของ `dataviz` skill — area fill = series hue ที่ ~10% opacity ไม่ใช่บล็อกทึบ) วาดแยกเป็นช่วงต่อเนื่อง (run) เพื่อข้ามจุดที่ไม่มีค่าช่วงแทนที่จะทำให้แถบขาด เพิ่มข้อความสรุป coverage แบบสามทาง (ใกล้เป้า ~90% / ต่ำกว่าเป้า / สูงกว่าเป้า) ทั้งในการ์ดภาพรวมและรายละเอียดต่อ horizon เพิ่ม legend swatch ใหม่ และ stat tile "Coverage" ในส่วนรายละเอียดทางเทคนิค
+
+**ทดสอบ**: unit test แบบ marker-row (predicted_at ปี 2100 ตาม pattern เดิมของโปรเจกต์ ลบทิ้งใน `finally`) ยืนยัน `log_predictions()` เขียน `pm25_lo`/`pm25_hi` ถูกต้อง และ `/api/comparison/overview` คำนวณ coverage ถูกต้อง (100% เมื่อค่าจริงอยู่ในช่วง) แทรกชุดข้อมูลจำลอง 6 จุดที่มี 1 จุดหลุดช่วงโดยตั้งใจ ยืนยัน `/api/comparison` คืน `coverage_pct=83.3%` ตรงตามที่คำนวณมือ และสกรีนช็อต Playwright ยืนยันแถบสีเรนเดอร์ถูกตำแหน่งจริง (เห็นเส้นค่าจริงหลุดออกนอกแถบตรงจุดที่ตั้งใจให้หลุด) ลบ marker rows ออกหมดหลังทดสอบ, `npm run build` ผ่าน
+
+**ไฟล์ที่แก้**: `app.py`, `frontend/src/views/CompareView.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (81) — เปิดหน้า "เปรียบเทียบ" (/compare) ในเมนูอีกครั้ง แยกจาก SHOW_EXTRA_FEATURES
+
+**ที่มา**: ผู้ใช้ขอให้วางแผนและทำหน้าเปรียบเทียบผลพยากรณ์กับค่าจริง สำรวจโค้ดก่อนแล้วพบว่า `CompareView.vue` + `/api/comparison`, `/api/comparison/overview` มีอยู่ครบแล้ว (hero card สรุปความแม่นยำ, กราฟแท่งความคลาดเคลื่อนตาม horizon, กราฟเส้นพยากรณ์เทียบค่าจริงต่อจุด, breakdown ตามโมเดล) ใช้ชื่อโมเดล pooled + query param `province` ถูกต้องอยู่แล้ว (sync กับ entry 78) — แค่ถูกซ่อนไว้เพราะ entry ตอนตั้งเครื่องใหม่ปิด `SHOW_EXTRA_FEATURES` รวบทุกฟีเจอร์เสริม (compare, notifications, login) ไว้ด้วยกัน ทั้งที่หน้า compare ใช้แค่ Postgres (`prediction_log`) ซึ่งตั้งค่าเสร็จแล้ว ไม่ต้องพึ่ง Gemini/auth เหมือนอีกสองอย่าง จึงไม่จำเป็นต้องรอ
+
+**สิ่งที่ทำ**: `AppHeader.vue` แยกธง `SHOW_COMPARE = true` ออกจาก `SHOW_EXTRA_FEATURES` (ที่ยังคง `false` ไว้สำหรับ notifications/login) ผูกกับ tab "เปรียบเทียบ" ในนำทางแทน ไม่ต้องแก้ `CompareView.vue`/`app.py`/router เลยเพราะของเดิมถูกต่อสายไว้ถูกต้องอยู่แล้วตั้งแต่ entry 78
+
+**ทดสอบ**: `curl /api/comparison/overview?province=khonkaen` ยืนยันคืนข้อมูลจริงจาก `prediction_log` (n_total=48 จากที่ scheduler ยิงไปแล้ว, n_matched=0 เพราะยังไม่ถึงเวลาของ horizon ไหนเลย — ถูกต้องตามที่คาดสำหรับเครื่องที่เพิ่งรันได้ไม่นาน), `npm run build` ผ่าน, สกรีนช็อต Playwright ที่ `/compare` ยืนยัน nav tab ใหม่ขึ้นและ active ถูกต้อง, หน้าเปรียบเทียบเรนเดอร์ empty-state message ที่เป็นมิตรถูกต้อง (ไม่ error) รอข้อมูล backfill เข้ามาเรื่อยๆ ตามเวลาจริง
+
+**ไฟล์ที่แก้**: `frontend/src/components/AppHeader.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (80) — ปรับ design ตัวแสดงช่วงความเชื่อมั่นบนกราฟให้สวยขึ้น (ตาม dataviz skill)
+
+**ที่มา**: entry 79 เพิ่ม error bar แบบ tick-cap (เส้นตรง + ขีดแนวนอนบน-ล่าง) ผู้ใช้บอกว่ายังไม่สวย โหลด `dataviz` skill มาอ้างอิง mark spec ก่อนแก้ (line 2px round cap, marker >=8px มี surface ring แยกจากพื้นหลังที่ทับซ้อนกัน)
+
+**สิ่งที่ทำ**: `ForecastView.vue` เปลี่ยนจาก tick-cap (`.error-bar`/`.error-bar-cap`) เป็นเส้นบาง + จุดกลมเล็กบน-ล่าง (`.range-indicator`/`.range-line`/`.range-dot`) ทรงกลมเข้าชุดกับองค์ประกอบอื่นที่มีอยู่แล้วในหน้านี้ (mood-badge, model-dot ใต้กราฟ ก็เป็นวงกลมทั้งคู่) จุดแต่ละจุดมี ring สีทึบ (`--range-ring`) ล้อมรอบ (ไม่ใช้ `--card-bg` ที่โปร่งแสงแบบกระจก เพราะจะกลืนกับสีแท่งอิ่มตัวด้านล่าง อ่านไม่ออก) ให้ตัดกับสีแท่ง PM2.5 (เขียว/เหลือง/ส้ม/แดง) ได้ชัดในทุกกรณี เพิ่ม `--range-ink`/`--range-ring` เป็น CSS var แยก light/dark mode ตาม pattern เดิมของไฟล์ (เหมือน `--model-*`)
+
+**ทดสอบ**: `npm run build` ผ่าน, สกรีนช็อต Playwright zoom เข้าไปดูใกล้ๆ ยืนยันจุด+เส้นอ่านง่าย ไม่กลืนกับสีแท่งด้านล่างเลยสักจุด (ตรวจครบ 5 สีระดับ PM2.5 ที่ปรากฏในกราฟจริง)
+
+**ไฟล์ที่แก้**: `frontend/src/views/ForecastView.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (79) — แสดงช่วงความเชื่อมั่น (P05-P95 conformal) บนกราฟพยากรณ์
+
+**ที่มา**: หลังเปลี่ยนไปใช้ pooled model (entry 78) ผู้ใช้ถามว่าควรโชว์ช่วงความเชื่อมั่น (P90) ให้ผู้ใช้เห็นด้วยไหม เพราะ backend คำนวณ P05/P95 + conformal calibration ไว้อยู่แล้ว (ใช้แค่เช็ค threshold เตือนภัยข้างใน ไม่เคยส่งออกมาให้ frontend เลย) — เห็นด้วยว่าควรโชว์เพราะเป็นเทคนิคหลักของงานวิจัยนี้ ผู้ใช้ยืนยันให้ทำเลย
+
+**สิ่งที่ทำ**:
+- **`app.py`** `get_forecast()`: เดิมคำนวณแค่ P95 upper bound (`p95_upper_adj`) สำหรับเช็ค risk threshold เพิ่มการคำนวณ P05 lower bound (`p05_adj = p05_pred - q_hat`) คู่กัน แล้วใส่ `pm25_lo`/`pm25_hi` (clamp ไม่ให้ติดลบ เพราะ PM2.5 เป็นปริมาณจริงเชิงบวกเสมอ แต่ residual ที่บวกกลับอาจดันค่าต่ำกว่า 0 ได้ทางคณิตศาสตร์) เข้าไปในแต่ละจุดของ `forecast[]` ที่ตอบกลับ — แถว `naive_fallback` ใช้ `pred` ตรงๆ เป็นทั้ง lo/hi (ไม่มี margin สื่อว่า "ความเชื่อมั่นต่ำ" ผ่าน `model_used` แทนที่จะเป็นช่วงกว้าง)
+- **`frontend/src/views/ForecastView.vue`**: เพิ่ม error bar (เส้นขีด + cap บน-ล่าง) ซ้อนบนกราฟแท่งเดิม แสดงช่วง `pm25_lo`-`pm25_hi` ต่อจุด, ปรับ `maxPm` ให้รวม `pm25_hi` ด้วย (ไม่งั้นเส้น error bar โผล่พ้นกราฟตอน horizon ไกลๆ ที่ช่วงกว้าง), เพิ่ม caption "เส้นขีดคือช่วงความเชื่อมั่น ~90%" ใต้หัวข้อกราฟ, tooltip แต่ละแท่งโชว์ช่วงด้วย
+
+**ทดสอบ**: `curl /api/forecast` ยืนยัน `pm25_lo`/`pm25_hi` มาถูกต้อง (กว้างขึ้นตาม horizon ตามที่คาด), `npm run build` ผ่าน, สกรีนช็อต Playwright ยืนยันเส้น error bar เรนเดอร์ถูกตำแหน่งและกว้างขึ้นตาม horizon จริง
+
+**ไฟล์ที่แก้**: `app.py`, `frontend/src/views/ForecastView.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (78) — เปลี่ยน app.py + frontend ไปใช้ pooled model จริง เปิดให้บริการครบ 20 จังหวัด
+
+**ที่มา**: เทรนโมเดล pooled ใหม่เสร็จแล้ว (CHANGELOG 75-76) ผู้ใช้ต้องการเอาไปใช้งานจริง — ยืนยันขอบเขตผ่าน AskUserQuestion ว่าต้องการ "เปิดให้บริการครบ 20 จังหวัด (มีตัวเลือกจังหวัด)" ไม่ใช่แค่สลับโมเดลขอนแก่นเฉยๆ วางแผนละเอียดผ่าน Plan mode (Explore + Plan agent สำรวจโค้ด `app.py` เต็มไฟล์ก่อน) แล้วดำเนินการตามแผน
+
+**การตัดสินใจสำคัญ (ยืนยันกับผู้ใช้ผ่าน AskUserQuestion)**:
+1. ตัด Prophet ออกทั้งหมด (รวมขอนแก่นด้วย) — เหลือแค่ pooled LightGBM/XGBoost ทุกจังหวัด เลิกใช้ Air4Thai/calibration ไปพร้อมกัน (pooled model เทรนบน OpenAQ ล้วน live inference จึงดึงจาก OpenAQ ตรงๆ ไม่ต้อง calibrate)
+2. Alert threshold ใช้ขอบบน P95 (conformal-adjusted) แทน bias-hack เดิม (โมเดลใหม่ไม่มี bias-by-horizon CSV แยกต่อจังหวัด) — `HIGH_POLLUTION_THRESHOLD=37.5` ยังเป็นค่าเดียวกันทุกจังหวัด
+3. `province` query param default เป็น `khonkaen` ถ้าไม่ส่งมา (backward compatible) แต่ 400 ถ้าส่งมาแล้วไม่ตรง registry
+4. SHAP-based NLG factor explanation ปิดไว้ชั่วคราว (`scripts/shap_analysis.py` ยังผูกกับโครงสร้างโมเดลเก่า `{horizon: model}` ไม่ใช่ `{horizon: {quantile: model}}` ของ pooled model) — fallback ไปข้อความทั่วไปที่มีอยู่แล้ว ไม่ซ่อมให้เข้ากับโมเดลใหม่ในรอบนี้
+
+**สิ่งที่ทำใน `app.py`**:
+- Constants/loading: โหลด `data/province_station_registry.json` เป็น `PROVINCE_REGISTRY`/`PROVINCES_BY_SLUG` ตอน startup, เปลี่ยนไปโหลด pooled pkl 2 ไฟล์ (`lgb_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl`, `xgb_..._20260913_014901.pkl`) + conformal CSV คู่ (`{horizon: q_hat}` ต่อโมเดล) ลบ `PROPHET_MODEL_PATH`/`BIAS_CSV_PATH`/`XGB_BIAS_CSV_PATH`/`CALIBRATION_PATH`/`CALIBRATION_A/B`/`STATION_ID_AIR4THAI`/`STATION_LAT`/`STATION_LON` ทิ้งทั้งหมด (ไฟล์เก่ายังอยู่ใน `models/` ตาม convention)
+- `fetch_recent_pm25()` → `fetch_recent_pm25_openaq(sensor_id)`: ดึงจาก OpenAQ v3 (`/v3/sensors/{id}/measurements`) ย้อนหลัง 72 ชม. พร้อม retry/backoff (429/5xx — เจอ 500 ชั่วคราวจริงตอนเก็บข้อมูลเทรน)
+- `fetch_current_weather()` → `fetch_current_weather_openmeteo(lat, lon)`: เพิ่ม `wind_direction_10m`/`surface_pressure` รับ lat/lon เป็น argument
+- `build_feature_row()`: เขียนใหม่เป็น 23 feature (เพิ่ม wind_dir_sin/cos, pressure, lat, lon) **และแก้จาก positional indexing (`.iloc[-N]`) เป็น time-indexed lookup** เพราะ OpenAQ อาจมีชั่วโมงขาดหายได้ (Air4Thai เดิมมักไม่มี gap ทำให้ positional ใช้ได้ แต่ผิดหลักการ) — interpolate gap ≤48h เหมือนตอนเทรน ปล่อย NaN ถ้ายาวกว่านั้นให้ circuit breaker จับได้ถูกต้อง
+- `select_model()`/`compute_rolling_r2()`/`compute_missing_ratio()`: เพิ่ม `province` param ทุกจุด, ตัด Prophet branch ใส่ `"naive_fallback"` แทน (persistence: ทายเท่า `latest_pm25` ทุก horizon เมื่อ missing_ratio สูงเกิน — ไม่ป้อน NaN เข้าโมเดลเพราะโมเดล pooled ไม่เคยเห็นแถวมี NaN ตอนเทรนเลย), เปลี่ยนชื่อ `model_used` เป็น `"lightgbm_pooled"`/`"xgboost_pooled"` (กัน `compute_rolling_r2()` ปนผลงานโมเดลเก่ากับใหม่ช่วงเปลี่ยนผ่าน)
+- DB migration ใหม่ `migrate_province_column()`: เพิ่ม `province TEXT NOT NULL DEFAULT 'khonkaen'` ให้ `prediction_log`/`daily_nlg_log`/`notification_log` ทั้ง 3 ตาราง + สลับ UNIQUE constraint ให้รวม province (pattern เดียวกับ `migrate_daily_nlg_risk_group()`) — **เจอบั๊กจริงระหว่างทดสอบ**: `migrate_daily_nlg_risk_group()` เช็คแค่ชื่อ constraint ของตัวเอง พอ `migrate_province_column()` รันสำเร็จไปแล้วครั้งนึง (เปลี่ยนชื่อ constraint ไปแล้ว) รอบถัดไป `migrate_daily_nlg_risk_group()` เห็นว่าไม่มีชื่อของตัวเอง พยายามสร้าง constraint 2 คอลัมน์ซ้ำ ชนกับข้อมูลจริงที่มีหลายจังหวัดวันเดียวกันแล้ว (`UniqueViolation`) — แก้โดยให้เช็คทั้ง 2 ชื่อ constraint (ของตัวเองและของ migration ถัดไป) ก่อนตัดสินใจ
+- `get_forecast(province, risk_group)`, `scheduled_forecast_job()` (loop ทุกจังหวัดใน registry, try/except ต่อจังหวัด + sleep กันยิง API รัว): thread province ผ่านทุกจุด, ตัด Prophet fields ใส่ `fallback_triggered_horizons`, echo `"province": {"th","en","is_zero_shot"}` กลับไปให้ frontend
+- Routes: `/api/forecast`, `/api/comparison`, `/api/comparison/overview`, `/api/notifications` เพิ่ม `province` query param + filter SQL ทุกจุด (รวม `/api/notifications`'s join ระหว่าง `notification_log`/`prediction_log` ที่ต้องเพิ่มเงื่อนไข province เท่ากันด้วย ไม่งั้น cross จังหวัดที่ timestamp ตรงกันได้), เพิ่ม `GET /api/provinces` ใหม่คืน registry ให้ frontend
+- ปิด SHAP call ใน `generate_daily_nlg_explanation()` (ส่ง `shap_pairs=None` ตรงๆ — `_format_shap_factor_lines()` รองรับ None อยู่แล้ว), ลบ `import get_shap_explanation`/`sys.path.insert` ที่ไม่ใช้แล้ว
+
+**สิ่งที่ทำใน `frontend/`**:
+- `provinces.js` (ใหม่): reactive state (`list`, `selected` — persist ผ่าน `localStorage`) + `fetchProvinces()`
+- `notifications.js`: `fetchForecast()`/`fetchNotificationHistory()` แนบ `?province=`, เปลี่ยน `prophetHorizons`→`fallbackHorizons` field
+- `AppHeader.vue`: เพิ่ม province `<select>` แสดงเสมอ (ไม่ผูกกับ `SHOW_EXTRA_FEATURES` ที่ซ่อน compare/notif/login อยู่แล้ว), เปลี่ยนแบรนด์ "PM2.5 Khon Kaen" → "PM2.5 ภาคอีสาน", แก้ข้อความ Prophet ในกระดิ่งแจ้งเตือน
+- `ForecastView.vue`: `watch(() => provinceState.selected, loadForecast)` ให้สลับจังหวัดแล้วโหลดใหม่, ชื่อจังหวัดในหัวข้อมาจาก response จริงแทน hardcode "สถานี:ส่วนอุทกวิทยา...", แก้สี/legend กราฟ (LightGBM/XGBoost/Fallback แทน Prophet)
+- `CompareView.vue`: แก้ model names + เพิ่ม province param (แม้หน้านี้ถูกซ่อนอยู่หลัง `SHOW_EXTRA_FEATURES=false` ก็แก้ให้ถูกไว้)
+
+**ทดสอบ**:
+- `python -c "import ast; ast.parse(...)"` ผ่าน, boot `app.py` สำเร็จไม่มี exception
+- `curl /api/forecast` (default → ขอนแก่น) และ `?province=loei/nongkhai/nakhonphanom/roiet/mahasarakham` (รวม 3 จังหวัด zero-shot) → 200 ครบ, `province`/`model_used` (`lightgbm_pooled`/`xgboost_pooled`) ถูกต้อง
+- `curl /api/forecast?province=bangkok` (จังหวัดไม่รู้จัก) → 400 ตามที่ออกแบบไว้
+- `curl /api/provinces` → 20 จังหวัดครบ
+- Unit test ตรง (import `app.py` ผ่าน `importlib`, มาตรฐาน `scripts/test_dynamic_routing.py`): feature row เต็ม NaN → `select_model()` คืน `"naive_fallback"` ถูกต้อง, feature row ปกติ → คืน `"lightgbm_pooled"`/`"xgboost_pooled"` ถูกต้อง — ระหว่างทดสอบเจอบั๊ก migration idempotency ข้างต้น แก้แล้วทดสอบซ้ำผ่าน
+- `npm run build` ผ่าน ไม่มี error
+- สกรีนช็อตจริงผ่าน Playwright: province selector แสดง "ขอนแก่น", หัวข้อ "จังหวัดขอนแก่น" ถูกต้อง, กราฟพยากรณ์แสดง LightGBM/XGBoost (ไม่มี Prophet) ตามที่ออกแบบ
+
+**หมายเหตุ/ขอบเขตที่ยังไม่ทำ**: SHAP explanation, `/api/notifications`'s historical risk check ใช้ `predicted_pm25` ตรงๆ (ไม่มีขอบบน P95 เพราะไม่ได้ persist ค่านี้ลง DB — หน้านี้ถูกซ่อนอยู่ใน frontend ตอนนี้อยู่แล้ว ยอมรับความแม่นยำที่ลดลงได้), ฤดุฝุ่นหนารอบหน้า (พ.ย. 2569) ยังไม่ได้ backtest กับสถาปัตยกรรมนี้ (ดู CHANGELOG 76 เรื่องข้อจำกัดของการ backtest ฤดูฝนที่ทำไปก่อนหน้า)
+
+**ไฟล์ที่แก้**: `app.py` (แก้ใหญ่ทั้งไฟล์), `frontend/src/provinces.js` (ใหม่), `frontend/src/notifications.js`, `frontend/src/components/AppHeader.vue`, `frontend/src/views/ForecastView.vue`, `frontend/src/views/CompareView.vue`, `CLAUDE.md` (อัปเดตสถาปัตยกรรมทุก section ที่เกี่ยวข้อง), `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (77) — ตั้งค่ารัน app.py + frontend บน PC เครื่องใหม่ (Gemini client lazy-init + ปิดฟีเจอร์นอกเหนือจากพยากรณ์ชั่วคราว)
+
+**ที่มา**: ผู้ใช้ย้ายมาทำงานบน PC เครื่องนี้ (โน้ตบุ๊กเดิมพัง) ต้องการให้ `app.py`/`frontend/` รันได้ในเครื่องนี้ — เครื่องนี้ยังไม่เคยตั้งค่าอะไรเลย (ไม่มี PostgreSQL, ไม่มี `.env` ค่าอื่นนอกจาก `OPENAQ_KEY`, ไม่มี `frontend/node_modules`) จากนั้นผู้ใช้ขอให้ปิดฟีเจอร์อื่นที่ไม่ใช่พยากรณ์/ค่าฝุ่นปัจจุบันไว้ก่อน เพื่อลดพื้นผิวที่ต้องทดสอบตอนตั้งเครื่องใหม่
+
+**สิ่งที่ทำ**:
+1. ติดตั้ง PostgreSQL 18 ในเครื่อง (ผู้ใช้ติดตั้งเอง) สร้างฐานข้อมูล `pm25_forecast` ผ่าน `psql` (`CREATE DATABASE`) — `app.py`'s `init_db()`/`migrate_*()` สร้างตารางที่เหลือเองตอน boot ตามที่ออกแบบไว้แล้ว
+2. เติม `.env` ให้ครบตามที่ `_load_env()` ต้องการ (เดิมมีแค่ `OPENAQ_KEY`): สุ่ม `SECRET_KEY` ใหม่ (48 ตัวอักษร), `POSTGRES_HOST=localhost`/`POSTGRES_PORT=5432`/`POSTGRES_DB=pm25_forecast`/`POSTGRES_USER=postgres`/`POSTGRES_PASSWORD` (ตามที่ผู้ใช้ตั้งตอนติดตั้ง Postgres), `GEMINI_KEY` เว้นว่างไว้ก่อน (ผู้ใช้ยังไม่มี key)
+3. **`app.py`**: `_gemini_client = genai.Client(api_key=GEMINI_KEY)` (บรรทัด 898 เดิม) crash ทันทีตอน import ถ้า `GEMINI_KEY` ว่าง เพราะ `google-genai` เช็ค key ตอนสร้าง client เลย — แก้เป็น lazy: สร้าง client เฉพาะเมื่อมี key จริง (`None` ถ้าไม่มี/สร้างไม่สำเร็จ) และเพิ่ม guard ใน `_call_gemini()` ให้คืน `None` ทันทีถ้า client เป็น `None` (fallback ไป template message ผ่าน logic เดิมที่มีอยู่แล้วใน `generate_daily_nlg_explanation()` ไม่ต้องเพิ่ม logic ใหม่)
+4. **`frontend/src/components/AppHeader.vue`**: เพิ่ม constant `SHOW_EXTRA_FEATURES = false` ปิดลิงก์ "เปรียบเทียบ", กระดิ่งแจ้งเตือน, เมนู login/register/profile ไว้ก่อน (เหลือแค่แบรนด์ + แท็บ "พยากรณ์") และข้าม `fetchCurrentUser()`/`fetchForecast()` (ที่ prewarm สำหรับฟีเจอร์ที่ซ่อนอยู่) ตอน mount
+5. **`frontend/src/views/ForecastView.vue`**: เพิ่ม constant `SHOW_EXTRA_CARDS = false` ปิดการ์ดสรุปวันนี้ (NLG), ช่วงเวลาอากาศดีที่สุด, คะแนนความเสี่ยงส่วนบุคคล ไว้ก่อน เหลือแค่การ์ดค่าฝุ่นปัจจุบัน (+สภาพอากาศ) กับกราฟพยากรณ์ 24 ชม. ตามที่ผู้ใช้ขอ — ทั้งสอง flag เปลี่ยนกลับเป็น `true` ได้ทันทีเมื่อพร้อมเปิดฟีเจอร์อื่นอีกครั้ง (ไม่ได้ลบโค้ดทิ้ง)
+6. `pip install -r requirements.txt` + `cd frontend && npm install && npm run build` (ยังไม่เคย install ในเครื่องนี้เลย)
+
+**ทดสอบ**:
+- `python app.py` บูตสำเร็จ ไม่มี exception, DB connect ได้, โมเดลโหลดครบ
+- `curl /api/forecast` → 200, คืนค่าพยากรณ์ 24 ชม. + ค่าฝุ่นปัจจุบันจริงครบ (`daily_summary.used_fallback=true` ตามคาด เพราะไม่มี Gemini key)
+- `curl /` และ `/assets/*.js|css` → 200 (frontend build เสิร์ฟผ่าน Flask ถูกต้อง)
+- สกรีนช็อตจริงผ่าน Playwright ยืนยัน: หน้า dashboard เหลือแค่การ์ดค่าฝุ่นปัจจุบัน + กราฟพยากรณ์ 24 ชม. ตามที่ขอ, header เหลือแค่แท็บ "พยากรณ์" ไม่มีเปรียบเทียบ/แจ้งเตือน/login
+
+**หมายเหตุ**: ยังไม่มี `GEMINI_KEY` จริง — ฟีเจอร์ NLG (ที่ถูกซ่อนอยู่แล้วตอนนี้) จะ fallback ไป template message เสมอจนกว่าจะตั้งค่า ไม่กระทบการทำงานส่วนอื่น
+
+**ไฟล์ที่แก้**: `.env` (เติมค่า ไม่ commit), `app.py` (Gemini client lazy-init), `frontend/src/components/AppHeader.vue`, `frontend/src/views/ForecastView.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (76) — Backtest โมเดล multiprovince กับข้อมูลจริงหลังช่วงเทรน (2 ก.ค.–13 ก.ย. 2569)
+
+**ที่มา**: หลังเทรนโมเดล multiprovince เสร็จ (entry 75) ผู้ใช้ถามว่าควรเอาโมเดลไปทดสอบกับข้อมูลจริง/ค่าจริงไหม — แนะนำว่าควรทำ เพราะ test set เดิม (20% ท้ายของแต่ละจังหวัด) ยังอยู่ในช่วงเวลาเดียวกับที่เทรน (2024-01-01..2026-07-02) การทดสอบกับข้อมูลที่เกิด**หลัง**ช่วงเทรนเป็นการยืนยันที่แข็งแรงกว่าเพราะรั่วเข้าไปตอนเทรนไม่ได้เลย ผู้ใช้ขอบเขตแค่ backtest ก่อน (ยังไม่ต้อง live monitoring ต่อเนื่อง)
+
+**สิ่งที่ทำ**: `scripts/backtest_recent_multiprovince.py` (ใหม่) — ดึงข้อมูลจริงจาก OpenAQ/Open-Meteo ช่วง 2026-06-27 (buffer 5 วันให้ lag_24/roll_24 มีข้อมูลย้อนหลังพอ) ถึงปัจจุบัน (13 ก.ย. 2569) ของ 20 จังหวัด คำนวณ feature ด้วยสูตรเดียวกับตอนเทรนเป๊ะ (ใช้ TRAIN_WINDOW_END=2026-07-02 ตัดเอาเฉพาะแถวที่อยู่**หลัง**ช่วงเทรนจริงมาประเมิน) โหลดโมเดล+conformal calibration ที่เทรนไว้ (`*_20260913_014901.*`) มา predict ทุก horizon แล้วเทียบกับค่าจริงที่เกิดขึ้นแล้ว (MAE, R², coverage หลัง conformal) ไม่แตะ `app.py`/DB
+
+**ผลทดสอบ**:
+- 17 จังหวัดเทรน: LightGBM MAE=1.02 R²=0.61 coverage=92.3% | XGBoost MAE=1.06 R²=0.58 coverage=93.5%
+- 3 จังหวัด zero-shot: LightGBM MAE=1.21 R²=0.76 coverage=87.6% | XGBoost MAE=1.28 R²=0.74 coverage=90.5%
+- **MAE ต่ำกว่า test set เดิมมาก (1.0-1.3 เทียบ 2.9) แต่ R² ตกจาก 0.92-0.93 เหลือ 0.58-0.76** — วิเคราะห์เพิ่มพบว่าไม่ใช่โมเดลมีปัญหา แต่เป็นผล**ฤดูกาล**: ช่วง backtest (ก.ค.-ก.ย.) เป็นฤดูฝนล้วน pm25 นิ่งและต่ำกว่าฤดูฝุ่นหนามาก (std pm25 ฤดูฝุ่นหนา vs ฤดูฝน: บึงกาฬ 29.9 vs 6.6 = ต่างกัน 4.5 เท่า, อุดรธานี/สกลนคร ~2.1-2.2 เท่า) — target variance ต่ำทำให้ R² ไวต่อ noise ผิดปกติ (ดูได้จาก R² ต่อ horizon ที่ไล่จาก 0.93-0.98 ที่ t+1 ลงไปติดลบที่ t+24 อย่างค่อยเป็นค่อยไป สอดคล้องกับ MAE ที่โตขึ้นราบเรียบ ไม่กระโดด) จังหวัดที่ variance ลดเยอะที่สุด (บึงกาฬ) ก็เป็นจังหวัดที่ R² แย่ที่สุด (0.16) พอดี ยืนยันสมมติฐาน
+- Coverage ต่อจังหวัดเริ่มเบี่ยงจาก 90% ที่ horizon ไกล (อุดรธานี ขึ้นไปถึง ~96% ที่ t+24 = interval กว้างเกิน, บึงกาฬ ลงมา ~84% = แคบไป) เพราะ conformal calibration ปัจจุบันคำนวณ q_hat รวมทุกจังหวัดเป็นค่าเดียวต่อ horizon ไม่ได้แยกต่อจังหวัด
+
+**ข้อสรุป/สิ่งที่ต้องติดตามต่อ**:
+- ตัวชี้วัดที่มีผลใช้งานจริง (MAE ขนาด, coverage) ยังอยู่ในเกณฑ์ดี ไม่ถือว่าน่าห่วง — R² ที่ตกเป็นข้อจำกัดทางสถิติของช่วงที่ทดสอบ ไม่ใช่สัญญาณโมเดลพัง
+- **ยังไม่รู้ผลในฤดุฝุ่นหนารอบหน้า** (พ.ย. 2569 เป็นต้นไป) — ต้อง backtest ซ้ำตอนนั้นถึงจะเทียบกับ R² ของ test set เดิม (0.92-0.93) ได้อย่างยุติธรรม
+- แนวทางปรับปรุงที่พบจากรอบนี้: พิจารณาทำ conformal calibration **แยกต่อจังหวัด** แทนการรวมทุกจังหวัดเป็นค่าเดียว เพื่อให้ coverage แม่นต่อจังหวัดมากขึ้น (ยังไม่ได้ทำ เป็นแค่ข้อสังเกตสำหรับเฟสถัดไป)
+
+**ไฟล์ที่แก้/เพิ่ม**: `scripts/backtest_recent_multiprovince.py` (ใหม่), `models/backtest_recent_by_horizon_20260913_135247.csv` (ผลรายละเอียดต่อ horizon ต่อจังหวัด), `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (75) — เทรนโมเดล PM2.5 สถาปัตยกรรมใหม่: 17 จังหวัด + 3 zero-shot (residual + bagging + quantile + conformal calibration)
+
+**ที่มา**: ผู้ใช้ต้องการขยายระบบจากขอนแก่นจังหวัดเดียวเป็น 17 จังหวัดภาคอีสานที่เทรนจริง (เลย, หนองคาย, อุดรธานี, นครราชสีมา, อุบลราชธานี, บุรีรัมย์, สุรินทร์, ศรีสะเกษ, สกลนคร, กาฬสินธุ์, มุกดาหาร, ยโสธร, ชัยภูมิ, อำนาจเจริญ, หนองบัวลำภู, บึงกาฬ + ขอนแก่นเดิม) บวก 3 จังหวัด zero-shot ที่ให้บริการได้แต่ไม่เทรน (นครพนม, ร้อยเอ็ด, มหาสารคาม) ตามผลงานวิจัยที่ทำไว้ก่อนหน้านอก repo นี้ (โน้ตบุ๊กเดิมใช้งานไม่ได้แล้ว ย้ายมาทำต่อบน PC เครื่องนี้ ข้อมูล/โมเดลเดิมไม่มีเหลืออยู่เลย ต้องสร้าง pipeline ใหม่ทั้งหมด) สเปกที่ผู้ใช้ระบุ: 23 features (21 หลัก + lat/lon), เทคนิค residual forecasting + bagging + quantile regression (P05/P50/P95) + conformal calibration, split 65/15/20 (train/calibration/test) แบบ chronological ต่อจังหวัด — **ขอบเขตรอบนี้ตามที่ผู้ใช้ยืนยัน: เทรนโมเดลอย่างเดียว ยังไม่แตะ `app.py`/DB/Dynamic Routing/frontend**
+
+**สิ่งที่ทำ**:
+1. ติดตั้ง `requirements.txt` (ยังไม่เคยติดตั้งในเครื่องนี้เลย) + ผู้ใช้สร้าง `.env` ใหม่ใส่ `OPENAQ_KEY` เอง (สมัครที่ explore.openaq.org)
+2. `scripts/province_registry.py` (ใหม่) — query OpenAQ v3 API จริงหา location/sensor pm25 ของ 20 จังหวัด (ห้ามเดา ID) เลือกด้วยเกณฑ์: provider=`Air4Thai` (เครือข่าย PCD ทางการ ยืนยันจากขอนแก่น 7747 เอง) ก่อน → coverage overlap กับช่วง 2024-01-01..2026-07-02 (query จริงจาก `datetimeFirst/Last`) → ระยะทางจากจุดค้นหา เจอปัญหาว่า 4 จังหวัด (หนองคาย/อุบลราชธานี/บุรีรัมย์/มุกดาหาร) มี pm25 sensor ซ้ำ 2 ตัวต่อสถานี — ตัวใหม่ (id 8 หลัก ขึ้นต้น `1631`) คืน `500 Internal Server Error` จาก OpenAQ เองทุกครั้ง (ยืนยันด้วย query ตรงหลายรอบ ไม่ใช่ปัญหาชั่วคราว) ส่วนตัวเก่า (id เลขน้อย) ใช้งานได้ปกติ — แก้โดยเลือก sensor id ต่ำสุดเสมอเมื่อมีมากกว่า 1 ตัว บันทึกผลลง `data/province_station_registry.json`
+3. `scripts/build_raw_dataset_multiprovince.py` (ใหม่) — ต่อยอด pattern จาก `scripts/build_raw_dataset.py` เดิม (gap ≤48h interpolate / >48h mask ต่อสถานี) ขยายเป็น 20 จังหวัด: ดึง pm25 จาก OpenAQ v3 (ไม่ใช้ Air4Thai's API ตรงๆ เลย — "Air4Thai" ที่เห็นเป็นแค่ชื่อ provider ใน metadata ของ OpenAQ เอง) + weather จาก Open-Meteo archive (เพิ่ม `wind_direction_10m`/`surface_pressure` จากเดิมที่มีแค่ temp/humidity/wind_speed/precip) คำนวณ 23 features (weather 4 + cyclical เวลา 5 + pm25 lag/rolling 9 + wind_dir_sin/cos+pressure 3 + lat/lon 2) มี retry/backoff รองรับ HTTP 500 ชั่วคราวจาก OpenAQ (เจอจริงระหว่างรัน) และ try/except ต่อจังหวัดไม่ให้ 1 จังหวัดพังทั้ง pipeline
+4. `scripts/train_multiprovince_models.py` (ใหม่) — เทรน LightGBM+XGBoost บน 17 จังหวัด (ไม่รวม zero-shot) แบบ residual forecasting (target = pm25_t+h − pm25 ปัจจุบัน) + bagging (per-tree subsample/colsample_bytree) + quantile regression (P05/P50/P95, 24 horizon ตรงแบบ direct multi-step) + conformal calibration (CQR มาตรฐาน, ALPHA=0.10 เป้า coverage 90%) บน split 65/15/20 ต่อจังหวัด
+5. `scripts/eval_zeroshot_multiprovince.py` (ใหม่) — ทดลอง zero-shot ตามวิธีผู้ใช้ระบุ: กันจังหวัดทดสอบ 3 จังหวัด (อุดรธานี/อุบลราชธานี/ชัยภูมิ — คนละชุดกับ 3 จังหวัด zero-shot จริงที่ไม่เคยเทรนเลย) เทรน 2 แบบ (มี/ไม่มีในชุดเทรน) ประเมินบน test rows ชุดเดียวกันของ 3 จังหวัดนั้น (ยืนยันด้วย assert ว่า test rows เท่ากันจริงเพราะ split ต่อจังหวัดแบบ chronological ไม่ขึ้นกับ pool)
+
+**ผลทดสอบ**:
+- `data/multiprovince_pm25_features_raw_20260913_012629.csv`: รวม 363,332 แถว — **17 จังหวัดเทรน = 323,347 แถวพอดี ตรงกับตัวเลขที่ผู้ใช้รายงานไว้เป๊ะ**, 3 จังหวัด zero-shot = 39,985 แถว (มหาสารคาม/ร้อยเอ็ด gap เยอะกว่าปกติ ~10,400 แถว เพราะช่วง >48h ถูก mask เยอะ) self-check `pm25_lag_1` ตรงสูตรอ้างอิง (เฉพาะคู่แถวที่ติดกันจริง 1 ชม.)
+- โมเดล deploy (`*_multiprovince_residual_bagged_quantile_20260913_014901.pkl`): LightGBM MAE(P50)=2.914 (ผู้ใช้รายงาน 2.912), coverage 85.8%→89.4% (รายงาน 86.7%→89.5%) | XGBoost MAE(P50)=3.008 (รายงาน 2.993), coverage 82.0%→88.8% (รายงาน 83.1%→88.9%) — **ใกล้เคียงตัวเลขต้นฉบับมาก** ยืนยันว่า pipeline ที่สร้างใหม่สอดคล้องกับงานวิจัยเดิม
+- Zero-shot eval (`zeroshot_eval_20260913_021526.csv`): LightGBM in-training MAE=3.061→zero-shot MAE=3.188 (R²=0.920) | XGBoost in-training MAE=3.113→zero-shot MAE=3.273 (R²=0.915) — ทิศทาง/ขนาดผลกระทบสอดคล้องกับที่ผู้ใช้รายงาน (in-training 3.278→zero-shot 3.375, R²=0.912) แม้ตัวเลขสัมบูรณ์ต่างเล็กน้อยเพราะเป็นชุดข้อมูลที่ดึงใหม่ทั้งหมด
+
+**หมายเหตุ/ข้อควรตรวจสอบเพิ่ม**: สถานีที่ registry เลือกให้มหาสารคาม (zero-shot) เป็น Air4Thai "Pramuan Suk Health Park" (coverage 544.9/913 วัน) ซึ่งขัดกับที่ผู้ใช้เคยระบุว่ามหาสารคามมีแต่เซนเซอร์ AirGradient ราคาถูก ไม่ใช่ reference-grade — อาจเป็นเพราะสถานีนี้เพิ่งเริ่มมีข้อมูลใน OpenAQ ทีหลัง ยังไม่ต้องแก้อะไรตอนนี้ (มหาสารคามไม่ได้อยู่ใน 17 จังหวัดเทรน ไม่กระทบผลเทรนรอบนี้) แต่ต้องตัดสินใจตอนเข้า phase serving จริง
+
+**ไฟล์ที่แก้/เพิ่ม**: `scripts/province_registry.py`, `scripts/build_raw_dataset_multiprovince.py`, `scripts/train_multiprovince_models.py`, `scripts/eval_zeroshot_multiprovince.py` (ใหม่ทั้งหมด), `data/province_station_registry.json`, `data/multiprovince_pm25_features_raw_20260913_012629.csv`, `data/multiprovince_build_log_20260913_012629.csv`, `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl`, `models/conformal_calibration_{lgb,xgb}_20260913_014901.csv`, `models/multiprovince_eval_summary_20260913_014901.csv`, `models/zeroshot_eval_20260913_021526.csv`, `.env` (ผู้ใช้สร้างเอง, ไม่ commit), `CHANGELOG.md` (entry นี้)
+
 ## 2026-07-22 (74) — ทำ scripts/ ให้ path-independent (รองรับการเปลี่ยนชื่อ/ย้ายโฟลเดอร์)
 
 **ที่มา**: ผู้ใช้ถามว่าเปลี่ยนชื่อโฟลเดอร์โปรเจกต์ (`c:\Project1\Model1`) เป็นชื่ออื่นได้ไหม — ตรวจแล้วพบว่า `app.py` portable อยู่แล้ว (relative path + `os.path.dirname(os.path.abspath(__file__))`) แต่ `scripts/*.py` ~30 ไฟล์ hardcode `c:\Project1\Model1\...` เต็มๆ 79 จุด ซึ่งจะพังเวลาเปลี่ยนชื่อ ผู้ใช้เลือกให้ทำ scripts เป็น path-independent (ผ่าน AskUserQuestion)

@@ -1,6 +1,7 @@
 <script setup>
-import { ref, computed, onMounted, nextTick } from "vue";
+import { ref, computed, onMounted, nextTick, watch } from "vue";
 import { CircleCheck, CircleAlert, CircleX, ChevronDown } from "@lucide/vue";
+import { provinceState } from "../provinces";
 
 const horizon = ref(1);
 const model = ref("all");
@@ -9,7 +10,10 @@ const showAdvanced = ref(false);
 const state = ref("loading"); // "loading" | "error" | "content"
 const errorMessage = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
 
-const summary = ref({ mae: null, bias: null, n_matched: 0, n_total: 0, n_backfill: 0, n_used: 0, basis: null });
+const summary = ref({
+  mae: null, bias: null, n_matched: 0, n_total: 0, n_backfill: 0, n_used: 0, basis: null,
+  coverage_pct: null, n_coverage: 0,
+});
 const points = ref([]);
 const currentHorizonLabel = ref(1);
 
@@ -21,8 +25,8 @@ const chartEl = ref(null);
 // model-breakdown chip ของส่วน "รายละเอียดทางเทคนิค" เท่านั้น กราฟหลักไม่ encode สีตามโมเดลแล้ว (ดู
 // drawChart() — ผู้ใช้ตัดสินใจแล้วว่าให้ซ่อนชื่อ/สีโมเดลไว้ในส่วนขั้นสูงเท่านั้น)
 function modelHex(modelUsed) {
-  if (modelUsed === "xgboost") return "#1baf7a";
-  if (modelUsed === "prophet") return "#eda100";
+  if (modelUsed === "xgboost_pooled") return "#1baf7a";
+  if (modelUsed === "naive_fallback") return "#eda100";
   return "#2a78d6";
 }
 
@@ -41,6 +45,20 @@ function biasPhrase(bias) {
     return `และมีแนวโน้ม<strong>ทายค่าสูงกว่าความเป็นจริง</strong> โดยเฉลี่ยประมาณ ${Math.abs(bias).toFixed(2)} µg/m³`;
   }
   return `และ<strong>ไม่มีอคติชัดเจน</strong> (ไม่ได้ทายสูงหรือต่ำกว่าจริงอย่างเป็นระบบ)`;
+}
+
+// coverage: % ของค่าจริงที่ตกอยู่ในช่วงความเชื่อมั่น 90% (P05-P95 conformal) — เป้าหมายตามงานวิจัยคือ
+// ~90% พอดี (ALPHA=0.10 ใน scripts/train_multiprovince_models.py) ไม่ใช่ "ยิ่งสูงยิ่งดี" เหมือน MAE
+// เพราะช่วงกว้างเกินไปก็ทำให้ coverage สูงเกิน 90% ได้เหมือนกัน (แต่แปลว่าช่วงกว้างเกินความจำเป็น
+// ไม่มีประโยชน์กับผู้ใช้) จึงให้ข้อความสามทาง: ใกล้เป้า / ต่ำกว่าเป้า / สูงกว่าเป้า
+function coveragePhrase(pct, n) {
+  if (pct == null) return "";
+  const diff = pct - 90;
+  let verdict;
+  if (Math.abs(diff) <= 5) verdict = "ใกล้เคียงเป้าหมาย ~90% ตามที่ออกแบบไว้";
+  else if (diff < 0) verdict = "ต่ำกว่าเป้าหมาย ~90% — ช่วงที่แสดงอาจแคบไปสำหรับสภาพจริงตอนนี้";
+  else verdict = "สูงกว่าเป้าหมาย ~90% — ช่วงที่แสดงกว้างกว่าที่จำเป็น (ระวังไม่ได้)";
+  return `ช่วงความเชื่อมั่น 90% ที่แสดงบนกราฟครอบคลุมค่าจริงได้จริง <strong>${pct.toFixed(1)}%</strong> ของคู่ที่วัดได้ (n=${n}) ${verdict}`;
 }
 
 function barColorForMae(mae) {
@@ -85,12 +103,16 @@ const summaryNoteText = computed(() =>
     : ""
 );
 
+const summaryCoverageHtml = computed(() =>
+  coveragePhrase(summary.value.coverage_pct, summary.value.n_coverage)
+);
+
 const emptyMsgVisible = computed(() => points.value.filter((p) => p.actual != null).length === 0);
 
 async function loadComparison() {
   state.value = "loading";
   try {
-    const res = await fetch(`/api/comparison?horizon=${horizon.value}&model=${model.value}`);
+    const res = await fetch(`/api/comparison?horizon=${horizon.value}&model=${model.value}&province=${provinceState.selected}`);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || `Server error (${res.status})`);
@@ -128,6 +150,8 @@ function drawChart(pts) {
   pts.forEach((p) => {
     values.push(p.predicted);
     if (p.actual != null) values.push(p.actual);
+    if (p.pm25_lo != null) values.push(p.pm25_lo);
+    if (p.pm25_hi != null) values.push(p.pm25_hi);
   });
   const minV = Math.min(...values, 0);
   const maxV = Math.max(...values, 37.5);
@@ -173,6 +197,42 @@ function drawChart(pts) {
     svg.appendChild(label);
   });
 
+  // ช่วงความเชื่อมั่น 90% (P05-P95 conformal) เป็น area wash สีเดียวกับเส้นพยากรณ์ ความเข้ม ~10%
+  // ตาม mark spec ของ dataviz skill (area fill = series hue ที่ ~10% opacity, ไม่ใช่บล็อกทึบ) วาด
+  // แยกเป็นช่วงต่อเนื่อง (run) เพราะบางจุดอาจไม่มี pm25_lo/pm25_hi (แถวเก่าก่อน CHANGELOG 81 หรือยัง
+  // ไม่ backfill) ข้ามจุดที่ไม่มีค่าแทนที่จะทำให้ทั้งแถบขาดหาย
+  function drawBand() {
+    let run = [];
+    const runs = [];
+    pts.forEach((p, i) => {
+      if (p.pm25_lo != null && p.pm25_hi != null) {
+        run.push(i);
+      } else if (run.length) {
+        runs.push(run);
+        run = [];
+      }
+    });
+    if (run.length) runs.push(run);
+
+    runs.forEach((r) => {
+      if (r.length < 2) return;
+      let d = "";
+      r.forEach((i, idx) => {
+        d += (idx === 0 ? "M" : "L") + xFor(i) + "," + yFor(pts[i].pm25_hi) + " ";
+      });
+      for (let k = r.length - 1; k >= 0; k--) {
+        d += "L" + xFor(r[k]) + "," + yFor(pts[r[k]].pm25_lo) + " ";
+      }
+      d += "Z";
+      const band = document.createElementNS(ns, "path");
+      band.setAttribute("d", d.trim());
+      band.setAttribute("fill", "rgba(37, 99, 235, 0.12)");
+      band.setAttribute("stroke", "none");
+      svg.appendChild(band);
+    });
+  }
+  drawBand();
+
   function drawPath(key, color) {
     let d = "";
     let drawing = false;
@@ -215,8 +275,9 @@ function drawChart(pts) {
     circle.setAttribute("cy", yFor(p.predicted));
     circle.setAttribute("r", "3");
     circle.setAttribute("fill", "#2563eb");
+    const rangeText = p.pm25_lo != null && p.pm25_hi != null ? `, ช่วง ${p.pm25_lo}-${p.pm25_hi}` : "";
     circle.appendChild(Object.assign(document.createElementNS(ns, "title"), {
-      textContent: `${p.time}: predicted ${p.predicted} (${p.model_used}, ${p.source})`,
+      textContent: `${p.time}: predicted ${p.predicted}${rangeText} (${p.model_used}, ${p.source})`,
     }));
     svg.appendChild(circle);
   });
@@ -224,7 +285,7 @@ function drawChart(pts) {
 
 async function loadOverview() {
   try {
-    const res = await fetch("/api/comparison/overview");
+    const res = await fetch(`/api/comparison/overview?province=${provinceState.selected}`);
     if (!res.ok) throw new Error(`Server error (${res.status})`);
     overviewData.value = await res.json();
     overviewLoaded.value = true;
@@ -256,6 +317,12 @@ const overviewHtml = computed(() => {
   );
 });
 
+const overviewCoverageHtml = computed(() => {
+  const d = overviewData.value;
+  if (!d) return "";
+  return coveragePhrase(d.overall_coverage_pct, d.overall_n_coverage);
+});
+
 const overviewNoteHtml = computed(() => {
   const d = overviewData.value;
   if (!d || d.n_matched === 0) return "";
@@ -280,7 +347,7 @@ const overviewBars = computed(() => {
   }));
 });
 
-const modelLabel = { lightgbm: "LightGBM", xgboost: "XGBoost", prophet: "Prophet" };
+const modelLabel = { lightgbm_pooled: "LightGBM", xgboost_pooled: "XGBoost", naive_fallback: "Fallback" };
 const modelBreakdown = computed(() => {
   const byModel = overviewData.value?.by_model || [];
   return byModel.map((m) => ({
@@ -289,10 +356,19 @@ const modelBreakdown = computed(() => {
     color: modelHex(m.model_used),
     line1: `MAE ±${m.mae} µg/m³ (n=${m.n}${m.basis === "mixed" ? ", รวม backfill" : m.basis === "live" ? ", live ล้วน" : ""})`,
     line2: `backfill ${m.n_backfill} / live ${m.n_live}`,
+    // naive_fallback ไม่มี coverage (ช่วงกว้าง 0 เสมอ ไม่ใช่ conformal interval จริง — ดู backend)
+    line3: m.coverage_pct != null ? `coverage ${m.coverage_pct}% (n=${m.n_coverage})` : m.model_used === "naive_fallback" ? "ไม่มีช่วงความเชื่อมั่น (persistence)" : null,
   }));
 });
 
 onMounted(() => {
+  loadOverview();
+  loadComparison();
+});
+
+// สลับจังหวัดจาก dropdown บน header ขณะเปิดหน้านี้ค้างไว้ — ต้องรีโหลดทั้งภาพรวมและกราฟรายละเอียด
+// ตาม pattern เดียวกับ ForecastView.vue (ไม่งั้นข้อมูลจะค้างเป็นของจังหวัดเดิมจนกว่าจะรีเฟรชหน้าเอง)
+watch(() => provinceState.selected, () => {
   loadOverview();
   loadComparison();
 });
@@ -322,6 +398,7 @@ onMounted(() => {
               {{ overviewQuality ? overviewQuality.label : "กำลังประเมิน..." }}
             </div>
             <div class="hero-detail" v-html="overviewLoaded ? overviewHtml : 'กำลังโหลดภาพรวม...'"></div>
+            <div v-if="overviewCoverageHtml" class="summary-note" v-html="overviewCoverageHtml"></div>
           </div>
         </div>
       </div>
@@ -368,10 +445,12 @@ onMounted(() => {
             <span class="detail-text" v-html="summaryHtml"></span>
           </div>
           <div v-if="summaryNoteText" class="summary-note">{{ summaryNoteText }}</div>
+          <div v-if="summaryCoverageHtml" class="summary-note" v-html="summaryCoverageHtml"></div>
 
           <div class="legend">
             <span><span class="dot" style="background: var(--predicted)"></span>ค่าพยากรณ์</span>
             <span><span class="dot" style="background: var(--actual)"></span>ค่าจริง</span>
+            <span><span class="swatch-band"></span>ช่วงความเชื่อมั่น 90%</span>
           </div>
           <div class="chart-wrap">
             <svg ref="chartEl"></svg>
@@ -407,6 +486,10 @@ onMounted(() => {
             <div class="stat-value">{{ summary.n_backfill }}</div>
             <div class="stat-label">เป็น backfill (ทดสอบย้อนหลัง ไม่ใช่พยากรณ์สด)</div>
           </div>
+          <div class="stat">
+            <div class="stat-value">{{ summary.coverage_pct != null ? summary.coverage_pct + "%" : "-" }}</div>
+            <div class="stat-label">Coverage — ค่าจริงตกในช่วง 90% กี่ % (เป้า ~90%, n={{ summary.n_coverage }})</div>
+          </div>
         </div>
 
         <div class="section-title" style="margin-top: 20px">แยกตามโมเดลที่ระบบ Dynamic Routing เลือกใช้ (ภาพรวมทุก horizon)</div>
@@ -414,9 +497,9 @@ onMounted(() => {
           <label for="modelSelect">กรองกราฟด้านบนเฉพาะโมเดล:</label>
           <select id="modelSelect" v-model="model" @change="loadComparison">
             <option value="all">ทุกโมเดล</option>
-            <option value="lightgbm">LightGBM</option>
-            <option value="xgboost">XGBoost</option>
-            <option value="prophet">Prophet</option>
+            <option value="lightgbm_pooled">LightGBM</option>
+            <option value="xgboost_pooled">XGBoost</option>
+            <option value="naive_fallback">Fallback</option>
           </select>
         </div>
         <div class="model-breakdown">
@@ -424,6 +507,7 @@ onMounted(() => {
             <div class="name">{{ m.label }}</div>
             <div class="stat-line">{{ m.line1 }}</div>
             <div class="stat-line">{{ m.line2 }}</div>
+            <div v-if="m.line3" class="stat-line">{{ m.line3 }}</div>
           </div>
         </div>
       </div>
@@ -454,7 +538,7 @@ onMounted(() => {
 
   --model-lightgbm: #6366f1;
   --model-xgboost: #10b981;
-  --model-prophet: #ec4899;
+  --model-fallback: #ec4899;
 
   min-height: 100vh;
   background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-bottom) 100%);
@@ -715,6 +799,13 @@ select:focus {
 }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.legend .swatch-band {
+  width: 16px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+  background: rgba(37, 99, 235, 0.12);
+}
 
 .advanced-toggle {
   display: flex;

@@ -12,9 +12,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico'],
       manifest: {
-        name: 'พยากรณ์ PM2.5 - Khon Kaen',
-        short_name: 'PM2.5 Khon Kaen',
-        description: 'พยากรณ์ PM2.5 ล่วงหน้า 24 ชั่วโมงด้วย Dynamic Routing (LightGBM/XGBoost/Prophet)',
+        name: 'พยากรณ์ PM2.5 - ภาคอีสาน',
+        short_name: 'PM2.5 ภาคอีสาน',
+        description: 'พยากรณ์ PM2.5 ล่วงหน้า 24 ชั่วโมง 20 จังหวัดภาคอีสาน ด้วย Dynamic Routing (LightGBM/XGBoost)',
         lang: 'th',
         start_url: '/',
         display: 'standalone',
