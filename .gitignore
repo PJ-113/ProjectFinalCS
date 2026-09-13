@@ -23,6 +23,11 @@ backups/
 scripts/_openaq_raw_5y_cache.csv
 scripts/_test_routing_temp.db
 
+# ===== ไฟล์ raw feature ขนาดใหญ่เกิน GitHub hard limit (100MB/ไฟล์) =====
+# regenerate ได้จาก scripts/build_raw_dataset_multiprovince.py (ดึงจาก OpenAQ/Open-Meteo ใหม่) —
+# ไม่ commit ตัว raw dataset เอง เก็บแค่ build log (เล็ก) ไว้เป็นหลักฐานผลรัน
+data/multiprovince_pm25_features_raw_*.csv
+
 # ===== Editor / OS / tooling =====
 .claude/
 .vscode/

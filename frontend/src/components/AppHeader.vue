@@ -10,7 +10,15 @@ import {
   fetchNotificationHistory,
   summarizeHistoryItem,
 } from '../notifications'
+import { provinceState, fetchProvinces, selectProvince } from '../provinces'
 import logoIcon from '../assets/logo-icon.svg'
+
+// ชั่วคราว: ปิด notifications/auth ไว้ก่อน (ยังไม่ได้ตั้งค่า Gemini ฯลฯ) เหลือแค่หน้าพยากรณ์ +
+// ค่าฝุ่นปัจจุบัน + เปรียบเทียบ เปลี่ยนกลับเป็น true เมื่อพร้อมเปิดฟีเจอร์อื่นอีกครั้ง
+const SHOW_EXTRA_FEATURES = false
+// หน้าเปรียบเทียบ (/compare) แยกออกมาเปิดเอง — ใช้แค่ Postgres (prediction_log) ซึ่งตั้งค่าเสร็จแล้ว
+// ไม่ต้องพึ่ง auth/Gemini เหมือนฟีเจอร์อื่นที่ปิดอยู่ข้างบน
+const SHOW_COMPARE = true
 
 const notifOpen = ref(false)
 const notifWrapperEl = ref(null)
@@ -31,8 +39,11 @@ function handleOutsideClick(e) {
 }
 
 onMounted(() => {
-  fetchCurrentUser()
-  fetchForecast()
+  fetchProvinces() // ต้องมีเสมอ ไม่ผูกกับ SHOW_EXTRA_FEATURES — province selector เป็น core feature
+  if (SHOW_EXTRA_FEATURES) {
+    fetchCurrentUser()
+    fetchForecast() // เติม notificationState สำหรับกระดิ่งแจ้งเตือน (ปิดอยู่ตอนนี้)
+  }
   document.addEventListener('click', handleOutsideClick)
 })
 onUnmounted(() => {
@@ -45,12 +56,24 @@ onUnmounted(() => {
     <nav class="app-header-nav">
       <router-link to="/" class="brand">
         <img :src="logoIcon" alt="" class="brand-logo" />
-        PM2.5 Khon Kaen
+        PM2.5 ภาคอีสาน
       </router-link>
       <router-link to="/" class="nav-link nav-tab">พยากรณ์</router-link>
-      <router-link to="/compare" class="nav-link nav-tab">เปรียบเทียบ</router-link>
+      <router-link v-if="SHOW_COMPARE" to="/compare" class="nav-link nav-tab">เปรียบเทียบ</router-link>
     </nav>
-    <nav class="app-header-auth">
+    <nav class="app-header-province">
+      <select
+        class="province-select"
+        :value="provinceState.selected"
+        @change="selectProvince($event.target.value)"
+        aria-label="เลือกจังหวัด"
+      >
+        <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
+          {{ p.province_th }}{{ p.is_zero_shot ? ' (zero-shot)' : '' }}
+        </option>
+      </select>
+    </nav>
+    <nav v-if="SHOW_EXTRA_FEATURES" class="app-header-auth">
       <div class="notif-wrapper" ref="notifWrapperEl">
         <button
           class="notif-bell"
@@ -67,11 +90,11 @@ onUnmounted(() => {
             <div v-if="notificationState.highPollutionRisk" class="notif-item notif-item-alert">
               ⚠️ {{ buildWarningMessage(notificationState.riskGroup) }}
             </div>
-            <div v-if="notificationState.prophetHorizons.length > 0" class="notif-item notif-item-info">
-              ℹ️ ข้อมูล input ไม่สมบูรณ์ในบางช่วงเวลา ระบบสลับไปใช้ Prophet ชั่วคราว
+            <div v-if="notificationState.fallbackHorizons.length > 0" class="notif-item notif-item-info">
+              ℹ️ ข้อมูล input ไม่สมบูรณ์ในบางช่วงเวลา ใช้ค่าพยากรณ์แบบคงที่ชั่วคราว (ความเชื่อมั่นต่ำ)
             </div>
             <div
-              v-if="!notificationState.highPollutionRisk && notificationState.prophetHorizons.length === 0"
+              v-if="!notificationState.highPollutionRisk && notificationState.fallbackHorizons.length === 0"
               class="notif-empty"
             >
               ✅ ไม่มีการแจ้งเตือนในขณะนี้ คุณภาพอากาศอยู่ในเกณฑ์ปกติ
@@ -204,6 +227,22 @@ onUnmounted(() => {
 
 .nav-muted {
   color: var(--auth-muted);
+}
+
+.app-header-province {
+  display: flex;
+  align-items: center;
+}
+
+.province-select {
+  border: 1px solid var(--auth-border);
+  background: transparent;
+  color: var(--auth-text);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
 }
 
 .notif-wrapper {
