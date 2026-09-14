@@ -1,5 +1,224 @@
 # Changelog
 
+## 2026-09-14 (100) — เพิ่ม humidity + แยกวิเคราะห์หน้าหนาวใน shap_analysis.py (feedback อาจารย์ข้อ 2, ส่วนสุดท้ายที่เหลือ)
+
+**ที่มา**: ประเด็นย่อยสุดท้ายที่ยังไม่ทำจาก feedback อาจารย์ — "ความชื้น/น้ำค้างในหน้าหนาวมีผลต่อ PM2.5 ไหม" ต่อยอดจาก task E (SHAP plausibility check ที่ทำแค่ precipitation/pressure/wind_speed)
+
+**วิธีทำ**: แก้ `scripts/shap_analysis.py` — เพิ่ม `humidity` เข้า `METEOROLOGICAL_HYPOTHESES` (ตั้งสมมติฐานล่วงหน้า: humidity สูง → ฝุ่นควรเพิ่มขึ้น จาก hygroscopic growth + temperature inversion ตอนเช้าหน้าหนาว) เพิ่ม `WINTER_STRATIFIED_FEATURES = ["humidity"]` + `WINTER_MONTHS = {11,12,1,2}` แล้วแก้ `_meteorological_plausibility_check()` ให้เช็คแยก correlation ระหว่างหน้าหนาว vs นอกหน้าหนาวสำหรับ feature ที่ระบุ (ใช้ `datetime_utc` จาก test split เดิม)
+
+**ผลลัพธ์**: **ขัดกับสมมติฐานเดิมอย่างชัดเจนและสม่ำเสมอ** — correlation(humidity, shap) = **-0.79 ถึง -0.95** (ลบแรงมาก) ทุก horizon (t+1/12/24) ทั้ง 2 โมเดล **และไม่ต่างกันระหว่างหน้าหนาวกับนอกหน้าหนาวเลย** (เช่น LGB t+12: หน้าหนาว -0.948 vs นอกหน้าหนาว -0.955 — แทบเท่ากัน)
+
+**การตีความที่แก้ไขจากสมมติฐานเดิม**: สมมติฐาน hygroscopic growth (ความชื้นทำให้ฝุ่นหนักขึ้น) ไม่ใช่กลไกหลักที่โมเดลเรียนรู้ — คำอธิบายที่สอดคล้องกับผลจริงมากกว่าคือ **humidity เป็นตัวแทน (proxy) ของฤดูแล้ง/ฤดูฝนในภูมิอากาศไทย**: ฤดูแล้ง (ความชื้นต่ำ) ตรงกับฤดูเผาไร่/ฝุ่นสูง (สอดคล้องกับ task A ที่พบ MAE/ฝุ่นสูงช่วง ก.พ.-เม.ย.) ส่วนฤดูฝน (ความชื้นสูง) มีฝนช่วยชะล้างฝุ่น (สอดคล้องกับ precipitation ที่ตรงสมมติฐานอยู่แล้วใน task E) — กลไกนี้แรงกว่าและครอบงำผลของ hygroscopic growth จนไม่เห็นผลต่างระหว่างฤดู **โมเดลยังคงเรียนรู้สิ่งที่สมเหตุสมผลทางภูมิอากาศ เพียงแต่ผ่านกลไกคนละแบบจากที่ตั้งสมมติฐานไว้ตอนแรก** — เป็นตัวอย่างที่ดีของการที่ SHAP ช่วยแก้ไขความเข้าใจผิดเชิงสมมติฐานได้จริง
+
+**สรุป feedback อาจารย์ข้อ 2 (อุตุนิยมวิทยา) ครบทุกส่วนย่อยแล้ว**: precipitation/pressure/wind_speed (task E) + humidity/หน้าหนาว (entry นี้) — ทุกตัวโมเดลเรียนรู้ pattern ที่อธิบายได้ทางวิทยาศาสตร์ ไม่มีตัวไหนดูเหมือน fit มั่วๆ
+
+**ไฟล์ที่แก้/เพิ่ม**: `scripts/shap_analysis.py`, `models/shap_values_by_horizon_20260914_215121.pkl`, `models/shap_top_features_by_horizon_20260914_215121.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (99) — Validate elevation เป็น model feature: ไม่คุ้มลงทุน (สรุปประเด็นภูมิประเทศ)
+
+**ที่มา**: ต่อจาก entry 98 (elevation ไม่สัมพันธ์กับ PM2.5 volatility) — ทดสอบคนละคำถาม: แม้ elevation จะไม่อธิบาย volatility ตรงๆ มันอาจยังช่วยโมเดลแยกแยะ "ลักษณะพื้นที่" ได้ (คล้าย lat/lon) จึง validate แบบเดียวกับ spatial-lag feature (task F) ก่อนตัดสินใจ
+
+**วิธีทำ**: `scripts/validate_elevation_feature.py` (ใหม่) — เทียบ baseline (19 feature ปัจจุบัน) vs +elevation_m (20 feature) วิธีเดียวกับ `validate_spatial_lag_feature.py` เป๊ะ (P50-only, 5 horizon ตัวแทน, reuse `split_train_calib_test()`)
+
+**ผลลัพธ์**: **delta เล็กน้อยมาก แทบเป็น noise** — LightGBM -0.11% (2.644→2.641), XGBoost -0.20% (2.759→2.754) เทียบกับ spatial-lag feature ที่ validate ได้ -4.1%/-4.3% (entry 94) ต่างกันลิบลับ — **ไม่คุ้มที่จะลงทุน sync feature formula 4 จุด + retrain เต็มรูปแบบ**
+
+**สรุปประเด็นภูมิประเทศทั้งหมด (entry 98-99)**: ตรวจสอบครบทั้ง 2 มุม (ความสัมพันธ์กับ volatility และประโยชน์ต่อความแม่นยำโมเดล) แล้วไม่พบผลที่มีนัยสำคัญทั้งคู่ — สรุปตรงไปตรงมาได้ว่า **ภายในขอบเขต 20 จังหวัดอีสาน (elevation ต่างกันแค่ ~100m) ปัจจัยภูมิประเทศไม่ใช่ตัวขับสำคัญของ PM2.5 pattern หรือความแม่นยำของโมเดล** ต่างจากการเปรียบเทียบข้ามภาค (อีสาน vs เหนือ) ที่อาจารย์ยกตัวอย่างซึ่งมีความต่างของภูมิประเทศมากกว่านี้มาก แต่โปรเจกต์นี้ไม่มีข้อมูลภาคเหนือให้ทดสอบ — นี่คือคำตอบที่สมบูรณ์และซื่อตรงต่อ feedback ข้อนี้ (ไม่ใช่ทุก feature ที่มีเหตุผลทางทฤษฎีดีจะช่วยจริงเสมอ ต้อง validate ด้วยข้อมูลจริงก่อนเชื่อ)
+
+**ไฟล์ที่เพิ่ม**: `scripts/validate_elevation_feature.py`, `models/elevation_feature_validation_20260914_214630.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (98) — เพิ่ม elevation เข้า registry + วิเคราะห์ความสัมพันธ์กับ PM2.5 pattern (ภูมิประเทศ, feedback อาจารย์ข้อ 1)
+
+**ที่มา**: ตรวจ feedback อาจารย์ละเอียดอีกรอบพบประเด็นย่อยที่ยังไม่ทำ — "พิจารณาสภาพแวดล้อมทางภูมิประเทศ เช่น ภาคอีสานที่เป็นพื้นที่สูงมักมีความรุนแรงของฝุ่นไม่ต่อเนื่อง" ขอบเขตที่ตกลงกับผู้ใช้: โฟกัสภายในอีสาน 20 จังหวัดเอง ไม่เทียบกับภาคเหนือ (ไม่มีข้อมูล)
+
+**วิธีทำ**:
+1. `scripts/fetch_province_elevation.py` (ใหม่) — ดึง elevation จาก Open-Meteo Elevation API (ฟรี ไม่ต้อง key, Copernicus DEM 2021, 90m resolution) 1 request เดียวครบ 20 จังหวัด เขียน `elevation_m` กลับเข้า `data/province_station_registry.json` in-place
+2. `scripts/analyze_elevation_vs_pm25_pattern.py` (ใหม่) — ทดสอบสมมติฐานอาจารย์ตรงๆ ด้วย 2 metric: pm25_std (ความผันผวนโดยรวม) และ mean|hour-to-hour diff| (ความไม่ต่อเนื่องเชิงเวลา) เทียบ correlation กับ elevation_m ต่อจังหวัด
+
+**ผลลัพธ์**:
+- Elevation ของ 20 จังหวัดอีสานอยู่ในช่วงแคบ 123-237m (เฉลี่ย 166.3m) — เพราะเป็นที่ราบสูงโคราชทั้งหมด ไม่ใช่ภูเขาสูงแบบภาคเหนือ (เลย/หนองบัวลำภูสูงสุด, อุบลราชธานีต่ำสุด)
+- **ไม่ยืนยันสมมติฐานอาจารย์** — correlation(elevation, pm25_std) = -0.116 (อ่อนมาก ไม่มีนัย), correlation(elevation, hourly_volatility) = -0.323 (**ขัดทิศทาง** — จังหวัดสูงกว่ากลับผันผวนน้อยกว่าเล็กน้อย ไม่ใช่มากกว่าตามที่คาด)
+- จังหวัดผันผวนสูงสุด (นครพนม, บึงกาฬ) เป็นจังหวัดริมโขง elevation ปานกลาง-ต่ำ ไม่ใช่จังหวัดที่สูงที่สุด — บ่งชี้ว่าปัจจัยอื่น (เช่น ความใกล้แม่น้ำโขง, หมอกควันข้ามพรมแดนจากลาว) มีผลมากกว่า elevation ในช่วงแคบแบบนี้
+
+**การตีความ**: ไม่ใช่ว่าภูมิประเทศไม่มีผลต่อ PM2.5 เลย — แต่**ในขอบเขตของอีสาน 20 จังหวัดที่ elevation ต่างกันแค่ ~100m** (เทียบกับภาคเหนือที่มีหุบเขา/ภูเขาต่างกันเป็นพันเมตร) ผลของ elevation ไม่ชัดพอจะยืนยันสมมติฐานที่อาจารย์ยกตัวอย่างมา (ซึ่งเปรียบเทียบข้ามภาค ไม่ใช่ภายในอีสาน) — เป็นคำตอบที่ถูกต้องเช่นกันตามหลักวิทยาศาสตร์ (ไม่พบความสัมพันธ์ก็เป็นผลที่ต้องรายงานตรงไปตรงมา) ต่อไปจะ validate ว่า elevation ช่วย MAE ของโมเดล predict ได้ไหม (คนละคำถามกับเรื่อง volatility)
+
+**ไฟล์ที่แก้/เพิ่ม**: `scripts/fetch_province_elevation.py` (ใหม่), `scripts/analyze_elevation_vs_pm25_pattern.py` (ใหม่), `data/province_station_registry.json` (เพิ่ม elevation_m), `models/elevation_vs_pm25_pattern_20260914_214519.csv`, `figures/elevation_vs_pm25_pattern_20260914_214519.png`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (97) — Retrain รอบสุดท้าย: spatial-lag + ตัด time_cyclical (19 feature, ยังไม่ deploy)
+
+**ที่มา**: ต่อจาก entry 96 (ยืนยันซ้ำแล้วว่าตัด time_cyclical ยังช่วยหลังมี spatial-lag) — retrain เต็มรูปแบบรวมทั้ง 2 การปรับปรุง (เพิ่ม `pm25_neighbor_avg`, ตัด `hour_sin/cos, month_sin/cos, dayofweek` ออก) เป็น 19 feature
+
+**วิธีทำ**: แก้ `FEATURE_COLS` ใน `scripts/train_multiprovince_models.py` เหลือ 19 ตัว (`assert len(FEATURE_COLS) == 19`) แล้วรัน training เต็ม (residual + bagging + quantile P05/P50/P95 + conformal เหมือนเดิมทุกจุด, `DATA_PATH` เดิมจาก entry 95)
+
+**ผลลัพธ์เทียบทั้ง 3 เวอร์ชัน**:
+
+| เวอร์ชัน | feature | LGB MAE(P50) | LGB coverage | XGB MAE(P50) | XGB coverage |
+|---|---|---|---|---|---|
+| เดิม (deploy อยู่) | 23 | 2.914 | 85.8%→89.4% | 3.008 | 82.0%→88.8% |
+| +spatial-lag (entry 95) | 24 | 2.797 (-4.0%) | 85.9%→89.6% | 2.897 (-3.7%) | 81.2%→88.6% |
+| **+spatial-lag -time_cyclical (รอบนี้)** | 19 | **2.754 (-5.5%)** | 85.4%→88.8% | **2.858 (-5.0%)** | 81.9%→88.2% |
+
+**ข้อสังเกตที่ต้องรายงานตรงไปตรงมา**: MAE ดีขึ้นสุดในรอบนี้ (-5.5%/-5.0% จากเดิม) แต่ **coverage หลัง conformal กลับลดลงเล็กน้อยเทียบกับเวอร์ชัน spatial-lag อย่างเดียว** (LGB 89.6%→88.8%, XGB 88.6%→88.2%) — ยังต่ำกว่าเป้าหมาย 90% ทั้งคู่เหมือนเดิม (ไม่ใช่เรื่องใหม่ ปัญหานี้มีมาตั้งแต่โมเดลแรกและเป็นสิ่งที่ entry 89 เจอว่าแย่ลงอีกช่วงฝุ่นสูง) แต่ในรอบนี้ห่างจากเป้าเพิ่มขึ้นอีกนิด — เป็น trade-off เล็กน้อยระหว่าง MAE กับ coverage ที่ควรบันทึกไว้ ไม่ใช่ประเด็นที่ทำให้เวอร์ชันนี้แย่กว่าเดิม (ยังดีกว่าเดิมทั้งคู่ในภาพรวม) แต่เป็นข้อมูลสำหรับพิจารณาต่อว่าควรทำ per-severity conformal calibration (ข้อเสนอจาก entry 89) ควบคู่ไปด้วย
+
+**สถานะ**: โมเดลสุดท้ายบันทึกที่ `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260914_211416.pkl` — **`app.py` ยังไม่แก้ ยังใช้โมเดลเดิมให้บริการอยู่** รอผู้ใช้ตัดสินใจเรื่อง deploy (ต้องออกแบบ live-inference fetch ข้อมูลจังหวัดเพื่อนบ้านก่อน)
+
+**ไฟล์ที่แก้/เพิ่ม**: `scripts/train_multiprovince_models.py`, `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260914_211416.pkl`, `models/conformal_calibration_{lgb,xgb}_20260914_211416.csv`, `models/multiprovince_eval_summary_20260914_211416.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (96) — ตรวจซ้ำ finding "ตัด time_cyclical แล้ว MAE ดีขึ้น" บนโมเดลที่มี spatial-lag แล้ว
+
+**ที่มา**: task D (entry 90) พบว่าตัด time_cyclical ออกช่วย MAE ดีขึ้น แต่ทดสอบตอนยังไม่มี `pm25_neighbor_avg` (task F, entry 94-95) — feature ใหม่อาจเปลี่ยน interaction ทำให้ finding เดิมไม่จริงอีกต่อไป ต้องตรวจซ้ำก่อนตัดสินใจ retrain รอบสุดท้าย
+
+**วิธีทำ**: `scripts/validate_drop_time_cyclical.py` (ใหม่) — วิธีเดียวกับ D (P50-only, 5 horizon ตัวแทน) แต่รันบนชุดข้อมูล+FEATURE_COLS 24-feature ปัจจุบัน (มี `pm25_neighbor_avg` แล้ว) เทียบ baseline (24 feature) vs without_time_cyclical (19 feature)
+
+**ผลลัพธ์**: **ยืนยันซ้ำ ทิศทางเดิม** — LightGBM -1.49% (เดิมตอน D วัดได้ -1.7%), XGBoost -0.69% (เดิม -2.5%, ขนาดเล็กลงแต่ยังเป็นบวกทั้งคู่) → ตัด time_cyclical ออกยังคงช่วยแม้หลังเพิ่ม spatial-lag แล้ว เดินหน้า retrain รอบสุดท้ายด้วย 19 feature (23 เดิม - time_cyclical 5 + spatial-lag 1)
+
+**ไฟล์ที่เพิ่ม**: `scripts/validate_drop_time_cyclical.py`, `models/validate_drop_time_cyclical_20260914_211141.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (95) — Retrain โมเดลเต็มรูปแบบพร้อม spatial-lag feature (task F, ยังไม่ deploy)
+
+**ที่มา**: task ต่อยอดจาก entry 94 (validate scaled-down แล้วว่า `pm25_neighbor_avg` ช่วย MAE จริง) — ผู้ใช้ยืนยันให้ retrain เต็มรูปแบบ (quantile P05/P50/P95 + conformal calibration ตามสถาปัตยกรรม deploy จริง) แต่**ยังไม่ต้อง deploy** เข้า `app.py`
+
+**วิธีทำ**:
+1. แก้ `scripts/build_raw_dataset_multiprovince.py`: เพิ่ม `SPATIAL_FEATURE_COLS = ["pm25_neighbor_avg"]`, ฟังก์ชัน `haversine_km()` + `add_spatial_lag_feature()` (คำนวณหลัง concat ทุกจังหวัดแล้วเท่านั้น เพราะต้องเห็นข้อมูลข้ามจังหวัดพร้อมกัน ต่างจาก feature อื่นที่คำนวณต่อสถานีได้) — `FEATURE_COLS` เป็น 24 ตัวแล้ว (`BASE_FEATURE_COLS` 23 ตัวเดิม + spatial 1 ตัว) เพื่อให้การ rebuild เต็มจาก OpenAQ/Open-Meteo ในอนาคตมี feature นี้ในตัวโดยอัตโนมัติ
+2. `scripts/augment_raw_dataset_with_spatial_lag.py` (ใหม่) — เพิ่ม `pm25_neighbor_avg` เข้าไฟล์ raw ที่มีอยู่แล้วโดยไม่ fetch ใหม่ (feature คำนวณได้จาก pm25 ที่มีอยู่แล้วล้วนๆ) reuse `add_spatial_lag_feature()` จากข้อ 1 → ได้ `data/multiprovince_pm25_features_raw_spatial_20260914_203924.csv` (363,000 แถว, ตัดทิ้ง 332 แถวที่ไม่มีเพื่อนบ้านให้ข้อมูล ณ เวลานั้น)
+3. แก้ `scripts/train_multiprovince_models.py`: `FEATURE_COLS` เพิ่ม `pm25_neighbor_avg` (23→24), `DATA_PATH` ชี้ไปไฟล์ augmented ใหม่ แล้วรัน training เต็ม (residual + bagging + quantile P05/P50/P95 + conformal, เหมือนเดิมทุกจุด)
+
+**ผลลัพธ์**: **สอดคล้องกับผล validate ก่อนหน้าเป๊ะ** (ยืนยันว่า scaled-down validation เชื่อถือได้จริง):
+- LightGBM: MAE(P50) **2.797** (เดิม 2.914, -4.0%), coverage 85.9%→89.6% (ใกล้เคียงเดิม)
+- XGBoost: MAE(P50) **2.897** (เดิม 3.008, -3.7%), coverage 81.2%→88.6% (ใกล้เคียงเดิม)
+
+**สถานะ**: โมเดลใหม่บันทึกแล้วที่ `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260914_204009.pkl` — **`app.py` ยังไม่ได้แก้ ยังชี้ไปโมเดลเดิม (`_20260913_014901`) ตามที่ผู้ใช้ระบุ** ถ้าจะ deploy จริงต้องตัดสินใจเพิ่มเติมเรื่อง live inference (`build_feature_row()` ต้องรู้ pm25 ปัจจุบันของ 3 จังหวัดเพื่อนบ้านด้วย — ยังไม่ได้ออกแบบว่าจะ fetch/cache ยังไง)
+
+**ไฟล์ที่แก้/เพิ่ม**: `scripts/build_raw_dataset_multiprovince.py`, `scripts/augment_raw_dataset_with_spatial_lag.py` (ใหม่), `scripts/train_multiprovince_models.py`, `data/multiprovince_pm25_features_raw_spatial_20260914_203924.csv`, `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260914_204009.pkl`, `models/conformal_calibration_{lgb,xgb}_20260914_204009.csv`, `models/multiprovince_eval_summary_20260914_204009.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (94) — Validate spatial-lag feature ก่อนตัดสินใจทำ task F เต็มรูปแบบ
+
+**ที่มา**: task B ยืนยัน spatial correlation แข็งแรง (r=-0.644) แต่ task C ไม่ยืนยันในระดับโมเดลจริง (n=3 จุดน้อยเกินไป) — แทนที่จะลงทุนแก้ feature formula ที่ซ้ำกัน 4 จุด (`app.py`, `build_raw_dataset_multiprovince.py`, `backtest_recent_multiprovince.py`, `train_multiprovince_models.py`) + retrain เต็มระบบไปเลยโดยไม่รู้ผล ทำ scaled-down validation ก่อน (เพิ่ม feature เดียว วัดผลแบบ ablation)
+
+**วิธีทำ**: `scripts/validate_spatial_lag_feature.py` (ใหม่) — สร้าง feature `pm25_neighbor_avg` = ค่าเฉลี่ย pm25 ปัจจุบันของ 3 จังหวัดที่ใกล้ที่สุด (haversine, จากทั้ง 20 จังหวัดรวม zero-shot เพราะ production จริงมีข้อมูลนี้ให้ใช้อยู่แล้วผ่าน `scheduled_forecast_job()`) ณ เวลาเดียวกับแถวนั้น (contemporaneous ไม่ leak อนาคต) เทียบ MAE แบบ baseline (23 feature) vs with_spatial_lag (24 feature) บน train/test split เดียวกับ task A/D (P50-only, representative horizons)
+
+**ผลลัพธ์**: **MAE ดีขึ้นชัดเจนทั้ง 2 โมเดล** — LightGBM -4.26% (2.804→2.684), XGBoost -4.10% (2.897→2.778) และผลดีขึ้นมากกว่าที่ horizon ไกล (t+24: LGB 5.16→4.89 คือ -5.2%, XGB 5.43→5.13 คือ -5.6%) — เกือบเท่ากับผลของทั้งกลุ่ม weather รวมกัน (จาก task D, +1.3-1.7%) ด้วย feature เดียว
+
+**สรุป**: **คุ้มที่จะลงทุนทำ F เต็มรูปแบบ** — มีหลักฐานเชิงประจักษ์ชัดเจนรองรับแล้ว (ต่างจากตอนเริ่ม B/C ที่เป็นแค่สมมติฐาน) ขั้นต่อไปคือแก้ feature formula 4 จุด (เพิ่ม `pm25_neighbor_avg` ให้สอดคล้องกัน) + ออกแบบว่า `app.py`'s live inference จะ fetch ข้อมูลจังหวัดเพื่อนบ้านยังไง (ยังไม่ได้ทำ ต้องคุยกับผู้ใช้ก่อนเพราะกระทบโค้ด production จริง ไม่ใช่แค่ script วิจัย) + retrain โมเดล deploy ใหม่ทั้งชุด
+
+**ไฟล์ที่เพิ่ม**: `scripts/validate_spatial_lag_feature.py`, `models/spatial_lag_validation_20260914_203234.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (93) — Zero-shot MAE เทียบระยะทางจังหวัดเทรนที่ใกล้ที่สุด (task C, งานสุดท้ายก่อนตัดสินใจ task F)
+
+**ที่มา**: ต่อยอดจาก task B (correlation -0.644 ยืนยันว่าจังหวัดใกล้กัน PM2.5 สัมพันธ์กันสูงกว่า) — ทดสอบว่า pattern นี้สะท้อนออกมาใน zero-shot generalization ของโมเดลจริงไหม (จังหวัดที่ไม่เคยเทรน แต่อยู่ใกล้จังหวัดที่เทรน ควรทายแม่นกว่าจังหวัดที่อยู่ไกล)
+
+**วิธีทำ**: `scripts/eval_zeroshot_spatial_distance.py` (ใหม่) — reuse `eval_zeroshot_multiprovince.py` ทั้งชุด (FEATURE_COLS, HELD_OUT, split_train_test, fit_p50) ผ่าน importlib เทรนโมเดล P50 บน 14 จังหวัด zero-shot pool ครบ 24 horizon แล้ว evaluate แยกต่อจังหวัด held-out ทั้ง 3 (อุดรธานี/อุบลราชธานี/ชัยภูมิ — ต่างชุดกับ 3 จังหวัด zero-shot จริง) แทนที่จะรวมเป็นก้อนเดียวแบบสคริปต์ต้นฉบับ + save per-horizon per-province ผลลง CSV จริง (ของเดิมคำนวณแล้วทิ้ง) + หาระยะทางไปจังหวัดเทรนที่ใกล้ที่สุดต่อจังหวัด held-out (reuse `haversine_km()`)
+
+**ผลลัพธ์**: **ไม่ยืนยันสมมติฐาน** — อุดรธานี (ใกล้สุด 42km) MAE=2.89, อุบลราชธานี (กลาง 58km) MAE=3.93 (สูงสุด!), ชัยภูมิ (ไกลสุด 93km) MAE=2.75 (ต่ำสุด) — correlation(distance, mae) = -0.31 (ทิศทางขัดสมมติฐานเล็กน้อย) ทั้ง LightGBM และ XGBoost ให้ผลทิศทางเดียวกัน
+
+**การตีความ**: ตามที่ระบุ limitation ไว้ล่วงหน้าในสคริปต์แล้ว — **n=3 จุดข้อมูลน้อยเกินไปสำหรับสรุปทางสถิติ** ผลนี้น่าจะเป็น noise จากปัจจัยอื่นที่ไม่ใช่ระยะทางล้วน (เช่น คุณภาพ/ความสมบูรณ์ของข้อมูลเซนเซอร์แต่ละจังหวัด, ลักษณะภูมิประเทศเฉพาะจุด) มากกว่าที่จะหักล้าง task B — **สรุปโดยรวมของ 2 งานนี้**: หลักฐานเชิงสถิติที่แข็งแรงกว่า (task B, n=190 คู่, r=-0.644) ยืนยันว่า spatial correlation มีอยู่จริงในข้อมูลดิบ ส่วน task C (n=3, ไม่มีนัยสำคัญ) แค่ไม่สามารถยืนยัน/ปฏิเสธได้ว่าโมเดลปัจจุบันใช้ประโยชน์จาก pattern นั้นแล้วหรือยัง — **แนะนำเดินหน้า task F (spatial-lag feature) โดยอิงหลักฐานหลักจาก B** แต่ต้องระวังว่าการปรับปรุงอาจไม่ได้สะท้อนออกมาใน metric ระดับจังหวัดเดี่ยวๆ ชัดเจนแบบ 1-1 เพราะปัจจัยกวนอื่นเยอะ
+
+**ไฟล์ที่เพิ่ม**: `scripts/eval_zeroshot_spatial_distance.py`, `models/zeroshot_spatial_distance_per_horizon_20260914_201822.csv`, `models/zeroshot_spatial_distance_summary_20260914_201822.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (92) — Spatial correlation heatmap ระหว่างจังหวัด (task B ตาม feedback อาจารย์ ข้อ 1)
+
+**ที่มา**: อาจารย์เตือนว่า lat/lon เฉยๆ ไม่พอ ต้องวิเคราะห์ spatial correlation ระหว่างจุดวัดต่างๆ ไม่ใช่มองจุดเดียว — ทำก่อนตัดสินใจว่าจะ engineer spatial feature เพิ่ม (task F) คุ้มไหม
+
+**วิธีทำ**: `scripts/analyze_spatial_correlation.py` (ใหม่) — pivot `data/multiprovince_pm25_features_raw_20260913_012629.csv` เป็น matrix (datetime_utc × province_en) หา Pearson correlation แบบ pairwise (min_periods=100 ชม. overlap) ทั้ง 20 จังหวัด (190 คู่) คำนวณระยะทาง haversine ระหว่างทุกคู่ (reuse `haversine_km()` จาก `province_registry.py`) เทียบ correlation กับระยะทาง
+
+**สมมติฐาน**: correlation ลดลงตามระยะทาง (Tobler's First Law of Geography)
+
+**ผลลัพธ์**: **ยืนยันสมมติฐานชัดเจนมาก** — Pearson correlation(distance_km, pm25_correlation) = **-0.644** (ครบทั้ง 190/190 คู่จังหวัดมีข้อมูลพอ) คู่จังหวัดใกล้กันสุด (กาฬสินธุ์-มหาสารคาม 37km) correlation=0.94, คู่ไกลสุด (บึงกาฬ-นครราชสีมา 411km) correlation=0.46 — ความสัมพันธ์เชิงพื้นที่ของ PM2.5 มีอยู่จริงและแรงพอสมควร **เป็นหลักฐานสนับสนุนว่าควรทำ task F (spatial-lag feature) ต่อ** — ไม่ใช่แค่ lat/lon ดิบที่ใช้อยู่ตอนนี้
+
+**ไฟล์ที่เพิ่ม**: `scripts/analyze_spatial_correlation.py`, `models/spatial_correlation_pairs_20260914_201542.csv`, `figures/spatial_correlation_heatmap_20260914_201542.png`, `figures/spatial_correlation_vs_distance_20260914_201542.png`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (91) — แก้ shap_analysis.py ให้ใช้กับโมเดล pooled ได้ + เช็คความสมเหตุสมผลเชิงอุตุนิยมวิทยา (task E)
+
+**ที่มา**: อาจารย์ให้ feedback ว่าต้องเข้าใจหลักอุตุนิยมวิทยาเพื่อตรวจสอบว่าโมเดลเรียนรู้สมเหตุสมผลจริง — ทำต่อจาก task D (ดู entry 90) `scripts/shap_analysis.py` เดิมผูกกับโมเดล single-station เก่า (path เก่า + structure `models[h]`=model เดียว) ใช้กับโมเดล pooled ไม่ได้เลย (`models[h]` ของ pooled จริงคือ dict ของ 3 quantile ไม่ใช่ model เดียว — ยืนยันจาก `train_multiprovince_models.py`)
+
+**วิธีทำ**: แก้ `scripts/shap_analysis.py` ทั้งไฟล์ (ไม่ใช่แค่สลับ path) — (1) เปลี่ยน DATA_PATH/LGB_MODEL_PATH/XGB_MODEL_PATH เป็นไฟล์ pooled ปัจจุบัน (2) แก้ indexing เป็น `models[h][0.5]` (อธิบายเฉพาะ P50) (3) เปลี่ยน MODEL_PACKAGES key เป็น `lightgbm_pooled`/`xgboost_pooled` ตรงกับชื่อจริงใน Dynamic Routing, ตัด branch "prophet" ทิ้ง (สถาปัตยกรรมเก่าที่ retired ไปแล้ว) แทนด้วย "naive_fallback" (คืน None เหมือนเดิม เพราะไม่มี quantile model ให้อธิบาย) (4) ระบุชัดเจนในทุก output ว่า SHAP อธิบาย residual (pm25_t+h - pm25_now) ไม่ใช่ค่าสัมบูรณ์ (5) reuse `split_train_calib_test()` จาก `train_multiprovince_models.py` ให้ได้ test split ชุดเดียวกับ task A/D (6) เพิ่มฟังก์ชันใหม่ `_meteorological_plausibility_check()` — ตั้งสมมติฐานทิศทางไว้ก่อน (precipitation → ฝุ่นลด/scavenging, pressure → ฝุ่นเพิ่ม/inversion trapping, wind_speed → ฝุ่นลด/dispersion) แล้วเช็คด้วย correlation ระหว่างค่า feature กับ SHAP value ของมันจริง
+
+**ผลลัพธ์**: **ทุกสมมติฐาน (3 feature × 3 horizon ตัวแทน × 2 โมเดล = 18 จุดตรวจ) ตรงทิศทางที่คาดหมดทุกจุด**:
+- `pressure`: correlation +0.23 ถึง +0.90 (แรงสุดที่ LightGBM, horizon ไกล) — ยืนยัน temperature inversion trapping
+- `wind_speed`: correlation -0.74 ถึง -0.79 — ยืนยัน dispersion effect ชัดเจนมาก สม่ำเสมอทุก horizon/โมเดล
+- `precipitation`: correlation -0.28 ถึง -0.51 — ยืนยัน scavenging effect (อ่อนกว่า 2 ตัวข้างต้นแต่ทิศทางถูกทุกจุด)
+
+โมเดลเรียนรู้ความสัมพันธ์เชิงฟิสิกส์ได้สมเหตุสมผล ไม่ใช่แค่ fit ตัวเลขมั่วๆ — ตอบ feedback อาจารย์ข้อ 2 ได้ตรงจุด
+
+**ข้อสังเกตเพิ่มเติมที่เชื่อมกับ task D**: ที่ t+24 ของ LightGBM, `month_sin`/`temp`/`humidity` ขึ้น top-5 feature สำคัญ (SHAP magnitude สูง) แต่ ablation study (entry 90) กลับพบว่าตัด `time_cyclical` ทั้งกลุ่มออกทำให้ MAE ดีขึ้น — ไม่ขัดแย้งกันเสียทีเดียว (SHAP วัด "มีอิทธิพลต่อ prediction จริง" ส่วน ablation วัด "ช่วย generalize บน test set จริงไหม" คนละมิติ) แต่ชี้ว่า `month_sin` อาจถูกใช้ไปในทาง overfit ต่อ pattern เฉพาะช่วงเทรน มากกว่าช่วยจริง — ควรตรวจเพิ่มถ้ามีเวลา (ไม่ใช่ขอบเขต task นี้)
+
+**ไฟล์ที่แก้/เพิ่ม**: `scripts/shap_analysis.py` (แก้ทั้งไฟล์), `models/shap_values_by_horizon_20260914_201025.pkl`, `models/shap_top_features_by_horizon_20260914_201025.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (90) — Ablation study ทีละ feature group (task D ตาม feedback อาจารย์ ข้อ 4)
+
+**ที่มา**: อาจารย์ให้ feedback ว่าต้องออกแบบการทดลองแบบตั้งสมมติฐานก่อน แล้วทดสอบทีละตัวแปร ไม่ใช่โยนทุก feature เข้าโมเดลพร้อมกันโดยไม่เคยแยกวัดผล — ทำต่อจาก task A (ดู entry 89)
+
+**วิธีทำ**: `scripts/ablation_feature_groups.py` (ใหม่) — ตั้งสมมติฐานล่วงหน้าต่อ 5 feature group (pm25_lag_rolling 9 ตัว, weather 4 ตัว, wind_pressure 3 ตัว, time_cyclical 5 ตัว, lat_lon 2 ตัว) แล้ว leave-one-group-out เทียบ baseline (feature ครบ 23 ตัว) บน train/test split เดียวกับ task A (P50-only, reuse `split_train_calib_test()`) วัดที่ horizon ตัวแทน 5 จุด (t+1/6/12/18/24) ไม่ครบ 24 horizon เพื่อความเร็ว (60 model fits รวม)
+
+**ผลลัพธ์** (delta MAE จาก baseline, LGB baseline=2.806, XGB baseline=2.900):
+- `pm25_lag_rolling`: ตัดออก MAE แย่ลง **+9.1% (LGB) / +8.0% (XGB)** — ยืนยันสมมติฐาน เป็นกลุ่มสำคัญที่สุดชัดเจน
+- `weather`: +1.3% / +1.7% — ช่วยจริงแต่เล็กกว่าที่คาด (ไม่ใช่ "พอสมควร" ตามสมมติฐาน)
+- `wind_pressure`: +0.5% / +0.1% — ผลเล็กมาก ตรงสมมติฐานว่าเล็กกว่า weather/lag
+- `lat_lon`: +1.0% / -0.3% — ผลต่อ MAE ใน-training แทบไม่มี (ผลจริงของ lat/lon คือ zero-shot generalization ไม่ใช่ MAE ใน-training ตรงตามสมมติฐาน)
+- **`time_cyclical`: -1.7% (LGB) / -2.5% (XGB) — ขัดกับสมมติฐาน!** ตัด hour/month/dayofweek ออกกลับทำให้ MAE **ดีขึ้น** ทั้ง 2 โมเดล ที่ representative horizons ที่ทดสอบ — เป็นไปได้ว่า feature กลุ่มนี้ไม่ได้ช่วยจับ pattern เพิ่มเติมนอกเหนือจากที่ `pm25_lag/rolling` (ซึ่งมี autocorrelation แฝง diurnal/seasonal pattern อยู่แล้วในตัว) ให้ไปแล้ว กลับเพิ่ม noise/overfitting เล็กน้อยแทน — ควรตรวจสอบเพิ่มเติม (เช่น ลองตัดเฉพาะบางตัวในกลุ่มนี้ ไม่ใช่ตัดทั้งกลุ่ม) ก่อนตัดสินใจเอาออกจากโมเดล deploy จริง
+
+**ไฟล์ที่เพิ่ม**: `scripts/ablation_feature_groups.py`, `models/ablation_feature_groups_20260914_200754.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-14 (89) — Backtest ช่วงฤดูฝุ่น (ก.พ.-เม.ย.) เทียบกับช่วงปกติ (task A ตาม feedback อาจารย์)
+
+**ที่มา**: อาจารย์ที่ปรึกษาให้ feedback ว่า evaluation ต้อง backtest แบบ time-series โดยเฉพาะช่วงฝุ่นสูง (ยกตัวอย่าง 1-2 เม.ย.) ไม่ใช่ดูแค่ MAE เฉลี่ยรวม — วางแผนงานร่วมกับผู้ใช้เป็น 6 งาน (A-F, ดู plan file) เริ่มจาก A ก่อนเพราะใช้ test split ที่มีอยู่แล้วได้เลย ไม่ต้องดึงข้อมูลใหม่
+
+**วิธีทำ**: `scripts/analyze_burning_season_backtest.py` (ใหม่) — reuse `split_train_calib_test()` จาก `train_multiprovince_models.py` ตรงๆ ให้ได้ test split ชุดเดียวกับที่รายงาน MAE(P50)/coverage อย่างเป็นทางการใน CHANGELOG (75) (กันอคติเลือกช่วงทดสอบเอง) predict ทุก horizon บน test rows (64,686 แถว, ช่วง 2026-01-20 ถึง 2026-07-02) ใช้ q_hat ที่บันทึกไว้ใน `eval_by_horizon` ของแต่ละโมเดลอยู่แล้ว (ไม่ต้อง reconstruct calibration split ใหม่) แท็ก `is_burning_season` = เดือน ก.พ.-เม.ย. + breakdown เพิ่มตาม severity percentile ของ PM2.5 จริง
+
+**ผลลัพธ์**:
+- MAE ช่วงฤดูฝุ่นสูงกว่าช่วงปกติชัดเจน — LightGBM สูงกว่า **87.2%** (1.96→3.66), XGBoost สูงกว่า **89.2%** (2.00→3.79) ยืนยันสมมติฐาน (เหตุการณ์ฝุ่นหนักมีสัดส่วนน้อยในข้อมูลเทรน)
+- ที่ horizon ไกล (t+24) ต่างกันหนักกว่าอีก — ปกติ MAE~3.4-3.5, ฤดูฝุ่น MAE~6.6-6.9 (เกือบเท่าตัว)
+- **finding ที่ไม่ได้คาดไว้ในสมมติฐานเดิม**: coverage ที่ severity bin สูงสุด (>p90 ของ PM2.5 จริง) ต่ำกว่าเป้าหมาย 90% ชัดเจน — LightGBM 85.5%, XGBoost 81.9% (เทียบกับ bin อื่นที่ยังใกล้ 90%) แปลว่าช่วงความเชื่อมั่น (conformal interval) **under-cover พอดีตอนฝุ่นวิกฤตที่สุด** ซึ่งเป็นช่วงที่ผู้ใช้ต้องการความแม่นยำของ uncertainty มากที่สุด — สอดคล้อง/เสริมข้อสังเกตเดิมใน CHANGELOG (76) ที่พบว่า conformal q_hat รวมทุกจังหวัดเป็นค่าเดียวทำให้ coverage เบี่ยงต่อจังหวัด ตอนนี้พบเพิ่มว่าเบี่ยงตาม**ความรุนแรงของเหตุการณ์**ด้วย — เป็นหลักฐานสนับสนุนแนวทางปรับปรุง conformal calibration แบบ stratified (ต่อจังหวัด และ/หรือต่อช่วงความรุนแรง) ในอนาคต
+
+**ไฟล์ที่เพิ่ม**: `scripts/analyze_burning_season_backtest.py`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (88) — แก้ dropdown เลือกจังหวัดอ่านไม่ออกตอนเปิด (popup โปร่งแสงทะลุพื้นหลังหน้าเว็บ)
+
+**ที่มา**: ผู้ใช้ส่งสกรีนช็อตมาว่าเปิด dropdown เลือกจังหวัดแล้วอ่านตัวเลือกไม่ออก (ตัวอักษรจางมากจนแทบมองไม่เห็น ยกเว้นตัวที่เลือกอยู่) ตรวจ CSS พบว่า `.province-select` ตั้งใจให้ `background: transparent` เพื่อให้ตัว select เข้ากับทรงพิลกระจกของ header ตอนปิดอยู่ — แต่ native `<select>` popup (ตัว listbox ที่เด้งขึ้นมาตอนคลิก) ไม่รับค่า transparent นี้แบบตรงไปตรงมา กลายเป็นโชว์ gradient สีฟ้าของพื้นหลังหน้าเว็บทะลุเข้ามาแทน ทำให้ตัวอักษร option (สีเข้มจาก `--auth-text` ที่ออกแบบไว้สำหรับพื้นขาว) ไปชนกับพื้นหลังสีฟ้าแทน อ่านไม่ออก
+
+**สิ่งที่ทำ**: เพิ่ม CSS rule `.province-select option` ให้สีพื้นหลัง+ตัวอักษรทึบตรงๆ แยกจาก `.province-select` เอง (ขาว/เข้มสลับตาม light/dark mode) — `<option>` ส่วนใหญ่ยอมรับ background/color ตรงๆ แม้ browser จะไม่ยอมให้ปรับแต่ง popup listbox ทั้งกล่องแบบเต็มที่ก็ตาม ไม่แตะ `.province-select` เอง (ทรงพิลกระจกตอนปิดยังสวยเหมือนเดิม)
+
+**ทดสอบ**: `npm run build` ผ่าน, สกรีนช็อต Playwright คลิกเปิด dropdown จริงยืนยันตัวเลือกทุกจังหวัดอ่านออกชัดเจน (พื้นขาวทึบ ตัวอักษรเข้ม) ทั้งจังหวัดปกติและ zero-shot
+
+**ไฟล์ที่แก้**: `frontend/src/components/AppHeader.vue`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (87) — ย่อ comment ใน app.py ให้กระชับขึ้น
+
+**ที่มา**: ผู้ใช้บอกว่า comment ใน app.py รกไป ขอให้จัดการให้ดูสะอาดขึ้น ถามกลับว่าจะเอาแบบไหน (ย่อสั้นลง / ย้ายไปไฟล์แยก / ตัดเกือบหมด) ผู้ใช้เลือก "ย่อให้สั้นลง เก็บแค่ WHY สำคัญ" เพราะ comment ยาวๆ จำนวนมากซ้ำกับ CHANGELOG.md อยู่แล้ว (ประวัติ/เหตุผลละเอียดยังหาได้จากที่นั่น ไม่ต้องเล่าซ้ำในโค้ด)
+
+**สิ่งที่ทำ**: ไล่ทั้งไฟล์ย่อ docstring/comment ที่ยาวเกิน 1-2 บรรทัดลงเกือบทั้งหมด (~60 จุด) ตัดส่วนที่เป็นประวัติศาสตร์/เล่าที่มาซ้ำ CHANGELOG ออก เหลือแค่ WHY ที่จำเป็นต่อการอ่านโค้ดจริง — comment ที่อธิบาย algorithm ที่ไม่ชัดเจนในตัวเอง (เช่น `_find_keyword_occurrences`/`_mentioned_levels` ของ NLG safety check, Dynamic Routing's None-handling ทั้ง 2 ทิศทาง) ยังคงรายละเอียดไว้พอสมควร ไม่ตัดทิ้งจนขาดบริบทที่จำเป็น
+
+**ทดสอบ**: `python -c "import ast; ast.parse(...)"` ผ่าน (ไม่มี syntax error จากการแก้), `scripts/test_dynamic_routing.py` รันซ้ำหลังแก้ **4/4 PASS เหมือนเดิมทุกเคส** (ยืนยันว่าย่อ comment ไม่ได้แตะ logic เลย), รีสตาร์ท `app.py` สะอาดๆ แล้วยิง `/api/forecast`/`/api/comparison/overview` ยืนยันคืนค่าถูกต้อง (HTTP 200) ทั้งคู่
+
+**ผล**: ไฟล์ลดจาก 1889 บรรทัด เหลือ 1720 บรรทัด (~170 บรรทัด, ตัด comment ไปมากกว่านั้นเพราะมีการเพิ่ม logic เล็กน้อยระหว่างทางด้วย)
+
+**ไฟล์ที่แก้**: `app.py`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (86) — ลด Dynamic Routing จาก 48 DB connection/request เหลือ 1 (แก้จังหวัดโหลดช้า)
+
+**ที่มา**: ผู้ใช้ถามว่าทำไมสลับจังหวัดโหลดข้อมูลนาน วัดเวลาจริงพบว่า `/api/forecast` ใช้เวลารวม ~6 วิ แยกได้เป็น OpenAQ fetch ~1.7 วิ, Open-Meteo ~0.8 วิ, และ **`select_model()` ที่ถูกเรียก 24 รอบ (1 ต่อ horizon) ใช้เวลารวม ~2.3 วิ** ต้นเหตุคือแต่ละรอบเรียก `compute_rolling_r2()` 2 ครั้ง (เช็ค R² ของ XGBoost/LightGBM แยกกัน) และ `get_db_connection()` เปิด connection Postgres ใหม่ทุกครั้งไม่มี pooling เลย — รวมแล้วเปิด-ปิด connection ใหม่ **48 ครั้งต่อการพยากรณ์ 1 จังหวัด 1 ครั้ง**
+
+**สิ่งที่ทำ**:
+- เพิ่ม `fetch_rolling_r2_lookup(province, N=24)` — query เดียว ใช้ window function (`ROW_NUMBER() OVER (PARTITION BY model_used, horizon ORDER BY target_time_utc DESC)`) หา N แถวล่าสุดต่อ (model, horizon) ทุกคู่พร้อมกัน แทนที่จะ query แยกทีละคู่ คำนวณ R² ในหน่วยความจำ (Python) จาก resultset เดียว คืน dict `{(model_used, horizon): r2 หรือ None}`
+- `select_model(feature_row, horizon, province, r2_lookup)` — เพิ่ม param `r2_lookup` (บังคับ ไม่มี default) อ่านจาก dict ที่คำนวณไว้ล่วงหน้าแทนการเรียก `compute_rolling_r2()` เอง (ตัด DB call ออกจากฟังก์ชันนี้ทั้งหมด)
+- `get_forecast()` เรียก `fetch_rolling_r2_lookup(province)` แค่ครั้งเดียวก่อนเริ่ม loop 24 horizon แล้วส่ง `r2_lookup` เดียวกันเข้า `select_model()` ทุกรอบ
+- `compute_rolling_r2()` (query แยกทีละคู่) **ยังเก็บไว้** ไม่ลบทิ้ง — ยังมีประโยชน์สำหรับ diagnostics/cross-check เดี่ยวๆ แค่ไม่ได้อยู่ใน hot path ของ `select_model()` อีกต่อไป
+
+**ทดสอบ**: อัปเดต `scripts/test_dynamic_routing.py` ให้ตรงกับสถาปัตยกรรม pooled model ปัจจุบัน (เดิม broken อยู่แล้ว อ้างอิง "prophet"/ไม่มี province param ใช้กับ app.py ตอนนี้ไม่ได้เลย) เพิ่ม 2 เคสใหม่ (cold-start ทั้งคู่ไม่มีข้อมูล, cold-start มีแค่ฝั่งเดียว — regression guard สำหรับบั๊กที่เคยแก้ใน CHANGELOG (20)) รันเป็น **baseline ก่อนแก้** (4/4 PASS ด้วย logic เดิม) แล้วรันซ้ำ **หลังแก้** (4/4 PASS เหมือนเดิมทุกเคส รวม cross-check ว่า `fetch_rolling_r2_lookup()` ให้ค่า R² ตรงกับ `compute_rolling_r2()` แบบ query เดี่ยวเป๊ะ) ยืนยันว่า refactor ไม่เปลี่ยนพฤติกรรม Dynamic Routing เลย
+
+วัดเวลาจริงหลังแก้: `fetch_rolling_r2_lookup()` (1 query) ใช้ ~0.03 วิ, `select_model()` x24 (อ่านจาก lookup อย่างเดียว ไม่ query) ใช้ ~0.01 วิ (จากเดิม 2.3 วิ) `/api/forecast` รวมทั้ง request ลดจาก ~6 วิ เหลือ **~2-3 วิ** (ส่วนที่เหลือเป็น OpenAQ/Open-Meteo fetch ซึ่งเป็น external API ควบคุมเวลาไม่ได้)
+
+**ไฟล์ที่แก้**: `app.py`, `scripts/test_dynamic_routing.py`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-13 (85) — ลบข้อมูลปนเปื้อนจาก process app.py ที่ค้างซ้อนกันหลายตัว
+
+**ที่มา**: ผู้ใช้สังเกตว่าค่าพยากรณ์ขอนแก่นคลาดเคลื่อนมาก ถามว่าเกี่ยวกับฝนไหม — ตรวจ `prediction_log` จริงพบว่า MAE ที่ดูแย่ (~5.7) มาจากข้อมูลปนเปื้อน 2 แถวที่ `model_used='xgboost'` (ชื่อรุ่นเก่า ไม่มี `_pooled`) ทายผิดมหาศาล (9.6 เทียบค่าจริง 26.2) ไม่เกี่ยวกับฝนเลย ตรวจ process เพิ่มเติมพบว่ามี **`python app.py` ค้างอยู่พร้อมกันถึง 4 โปรเซส** (เศษจากตอนเซิร์ฟเวอร์ crash/รีสตาร์ทซ้ำๆ ระหว่างดีบัก — ดู entry ก่อนหน้าเรื่อง `WinError 10038`) โปรเซสเก่าที่ค้างยังใช้โค้ด/ชื่อโมเดลก่อนเปลี่ยนมาใช้ pooled model log ข้อมูลปนเข้ากับโปรเซสใหม่ที่ถูกต้อง
+
+**สิ่งที่ทำ**: ปิดโปรเซส `app.py` ที่ค้างอยู่ทั้ง 4 ตัว (`taskkill /T`) เหลือรันแค่ชุดเดียว (parent+reloader child ตามปกติ) ตรวจสอบด้วย SQL ว่าทุกแถวที่มี `model_used IN ('xgboost','lightgbm','prophet')` (24 แถวทั้งหมด) เป็นข้อมูลปนเปื้อนจาก `predicted_at_utc='2026-09-13T07:00:00+00:00'` ของขอนแก่นล้วนๆ (ไม่ใช่ข้อมูลประวัติศาสตร์จริง เพราะเครื่องนี้เพิ่งตั้งใหม่ ไม่มีข้อมูลเก่าจากยุค Air4Thai ตกค้างอยู่แล้ว) ลบทิ้งทั้งหมด
+
+**ทดสอบ**: หลังลบ+เริ่ม process ใหม่สะอาดๆ `/api/comparison/overview?province=khonkaen` MAE ลดจาก 5.72 เหลือ **0.32** (n_matched เหลือแค่แถว `xgboost_pooled` ที่ถูกต้อง) ยืนยันว่า pooled model ที่ขอนแก่นแม่นยำมากอยู่แล้ว ปัญหาเป็นเรื่อง data hygiene ไม่ใช่โมเดล
+
+**ไฟล์ที่แก้**: ไม่มีไฟล์โค้ด (แก้ที่ระดับ process/DB เท่านั้น), `CHANGELOG.md` (entry นี้)
+
 ## 2026-09-13 (84) — ปรับ design ตัวแสดงช่วงความเชื่อมั่นบนกราฟพยากรณ์อีกรอบ (เลิกใช้ dot+line)
 
 **ที่มา**: entry 80 เคยปรับจาก tick-cap ไปเป็นเส้นบาง+จุดกลมบน-ล่าง (dot+line) ไปแล้วรอบนึง ผู้ใช้ดูของจริงบนเครื่องแล้วบอกว่ายังไม่สวย สกรีนช็อตของจริงมาดูใกล้ๆ พบสาเหตุ: เส้น+จุดลอยพ้นแท่งขึ้นไปสูงในพื้นที่ว่างด้านบน หน้าตาเหมือน "หนวดแมลง"/ลูกโป่งปักอยู่บนแท่งสี ไม่ใช่องค์ประกอบเดียวกับแท่งเลย เป็นการซ้อน mark คนละชนิด (line+dot บนแท่ง) ที่ดูแปลกแยกจากกัน

@@ -1,10 +1,11 @@
 """
 ทดสอบ Circuit Breaker + Dynamic Routing (select_model, compute_missing_ratio, compute_rolling_r2)
+สำหรับสถาปัตยกรรม pooled model (หลัง CHANGELOG 78) — เดิมทดสอบ "prophet" branch + ไม่มี province
+param เลย (ใช้ไม่ได้กับ app.py ปัจจุบันแล้ว ตัดทิ้งเปลี่ยนมาทดสอบ "naive_fallback" branch + ส่ง
+province ทุกจุดแทน)
 
-Test 1-2 เขียนแถวทดสอบลง prediction_log จริงใน Postgres แต่ใช้ predicted_at_utc ปี 2100
-(ไม่มีทางชนกับข้อมูลจริง) แล้วลบทิ้งเองทั้งก่อน/หลังรัน (idempotent, safe to re-run) แทนการ
-สร้าง temp sqlite db แยกแบบเดิม เพราะ app.py ย้ายไป Postgres แล้วไม่มี DB_PATH ให้ monkeypatch
-เป็นไฟล์แยกอีกต่อไป (ดู CHANGELOG: migrate predictions.db -> PostgreSQL)
+Test เขียนแถวทดสอบลง prediction_log จริงใน Postgres แต่ใช้ predicted_at_utc ปี 2100 (ไม่มีทางชน
+ข้อมูลจริง) แล้วลบทิ้งเองทั้งก่อน/หลังรัน (idempotent, safe to re-run)
 """
 import importlib.util
 
@@ -15,6 +16,7 @@ import os
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_PATH = os.path.join(_ROOT, r"app.py")
 _TEST_MARKER = "2100-"  # predicted_at_utc ของแถวทดสอบทั้งหมดขึ้นต้นด้วยปีนี้เสมอ
+_TEST_PROVINCE = "khonkaen"
 
 
 def load_app():
@@ -34,7 +36,10 @@ def make_feature_row(app, missing_count=0):
 def clear_test_rows(app):
     conn = app.get_db_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM prediction_log WHERE predicted_at_utc LIKE %s", (f"{_TEST_MARKER}%",))
+    cur.execute(
+        "DELETE FROM prediction_log WHERE predicted_at_utc LIKE %s AND province = %s",
+        (f"{_TEST_MARKER}%", _TEST_PROVINCE),
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -47,13 +52,15 @@ def insert_rows(app, model_name, horizon, actual_values, predicted_values, start
     rows = []
     for i, (actual, pred) in enumerate(zip(actual_values, predicted_values)):
         t = base + pd.Timedelta(hours=start_hour + i)
-        # เขียน actual ตรงๆ ลง actual_pm25_calibrated เลย (ไม่ผ่าน calibrate_pm25) เพราะ test นี้
-        # ทดสอบ logic เปรียบเทียบ R2 ของ compute_rolling_r2() ตรงๆ ไม่ได้ทดสอบ calibration pipeline
-        rows.append((t.isoformat(), t.isoformat(), horizon, float(pred), float(actual), float(actual), model_name))
+        # ไม่มี calibration อีกต่อไป (pooled model) — actual_pm25_calibrated เก็บค่าเดียวกับ
+        # actual_pm25 ตรงๆ ตาม backfill_actuals() จริง
+        rows.append((t.isoformat(), t.isoformat(), horizon, float(pred), float(actual), float(actual),
+                     model_name, _TEST_PROVINCE))
     cur.executemany(
         """INSERT INTO prediction_log
-           (predicted_at_utc, target_time_utc, horizon, predicted_pm25, actual_pm25, actual_pm25_calibrated, model_used)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+           (predicted_at_utc, target_time_utc, horizon, predicted_pm25, actual_pm25, actual_pm25_calibrated,
+            model_used, province)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
         rows,
     )
     conn.commit()
@@ -63,7 +70,7 @@ def insert_rows(app, model_name, horizon, actual_values, predicted_values, start
 
 def test_1_circuit_breaker(app):
     print("=" * 90)
-    print("TEST 1: Circuit Breaker (missing_ratio > SIGMA_CRITICAL -> prophet)")
+    print("TEST 1: Circuit Breaker (missing_ratio > SIGMA_CRITICAL -> naive_fallback)")
     print("=" * 90)
 
     n_features = len(app.FEATURE_COLS)
@@ -72,10 +79,10 @@ def test_1_circuit_breaker(app):
     ratio = app.compute_missing_ratio(row)
     print(f"n_features={n_features}, n_missing={n_missing}, missing_ratio={ratio:.3f} (SIGMA_CRITICAL={app.SIGMA_CRITICAL})")
 
-    result = app.select_model(row, horizon=1)
+    result = app.select_model(row, horizon=1, province=_TEST_PROVINCE, r2_lookup=app.fetch_rolling_r2_lookup(_TEST_PROVINCE))
     print(f"select_model() -> {result}")
 
-    passed = ratio > app.SIGMA_CRITICAL and result == "prophet"
+    passed = ratio > app.SIGMA_CRITICAL and result == "naive_fallback"
     print("RESULT:", "PASS" if passed else "FAIL")
     return passed
 
@@ -88,32 +95,86 @@ def test_2_rolling_r2(app):
     clear_test_rows(app)
     normal_row = make_feature_row(app, missing_count=0)
 
-    # กรณี A: xgboost ดีกว่า (error น้อย) ที่ horizon=5
+    # กรณี A: xgboost_pooled ดีกว่า (error น้อย) ที่ horizon=5
     actual = [20 + 8 * np.sin(i / 4) for i in range(30)]
     xgb_pred_good = [a + np.random.uniform(-0.3, 0.3) for a in actual]
     lgb_pred_bad = [a + 8 + np.random.uniform(-1, 1) for a in actual]
-    insert_rows(app, "xgboost", horizon=5, actual_values=actual, predicted_values=xgb_pred_good, start_hour=0)
-    insert_rows(app, "lightgbm", horizon=5, actual_values=actual, predicted_values=lgb_pred_bad, start_hour=1000)
+    insert_rows(app, "xgboost_pooled", horizon=5, actual_values=actual, predicted_values=xgb_pred_good, start_hour=0)
+    insert_rows(app, "lightgbm_pooled", horizon=5, actual_values=actual, predicted_values=lgb_pred_bad, start_hour=1000)
 
-    r2_xgb_a = app.compute_rolling_r2("xgboost", 5)
-    r2_lgb_a = app.compute_rolling_r2("lightgbm", 5)
-    result_a = app.select_model(normal_row, horizon=5)
-    print(f"[case A] r2_xgb={r2_xgb_a:.3f} r2_lgb={r2_lgb_a:.3f} -> select_model()={result_a} (expected: xgboost)")
+    r2_xgb_a = app.compute_rolling_r2("xgboost_pooled", 5, _TEST_PROVINCE)
+    r2_lgb_a = app.compute_rolling_r2("lightgbm_pooled", 5, _TEST_PROVINCE)
+    r2_lookup = app.fetch_rolling_r2_lookup(_TEST_PROVINCE)
+    result_a = app.select_model(normal_row, horizon=5, province=_TEST_PROVINCE, r2_lookup=r2_lookup)
+    print(f"[case A] r2_xgb={r2_xgb_a:.3f} r2_lgb={r2_lgb_a:.3f} -> select_model()={result_a} (expected: xgboost_pooled)")
 
-    # กรณี B: สลับกัน lightgbm ดีกว่า ที่ horizon=6
+    # กรณี B: สลับกัน lightgbm_pooled ดีกว่า ที่ horizon=6
     lgb_pred_good = [a + np.random.uniform(-0.3, 0.3) for a in actual]
     xgb_pred_bad = [a + 8 + np.random.uniform(-1, 1) for a in actual]
-    insert_rows(app, "lightgbm", horizon=6, actual_values=actual, predicted_values=lgb_pred_good, start_hour=0)
-    insert_rows(app, "xgboost", horizon=6, actual_values=actual, predicted_values=xgb_pred_bad, start_hour=1000)
+    insert_rows(app, "lightgbm_pooled", horizon=6, actual_values=actual, predicted_values=lgb_pred_good, start_hour=0)
+    insert_rows(app, "xgboost_pooled", horizon=6, actual_values=actual, predicted_values=xgb_pred_bad, start_hour=1000)
 
-    r2_xgb_b = app.compute_rolling_r2("xgboost", 6)
-    r2_lgb_b = app.compute_rolling_r2("lightgbm", 6)
-    result_b = app.select_model(normal_row, horizon=6)
-    print(f"[case B] r2_xgb={r2_xgb_b:.3f} r2_lgb={r2_lgb_b:.3f} -> select_model()={result_b} (expected: lightgbm)")
+    r2_xgb_b = app.compute_rolling_r2("xgboost_pooled", 6, _TEST_PROVINCE)
+    r2_lgb_b = app.compute_rolling_r2("lightgbm_pooled", 6, _TEST_PROVINCE)
+    result_b = app.select_model(normal_row, horizon=6, province=_TEST_PROVINCE, r2_lookup=r2_lookup)
+    print(f"[case B] r2_xgb={r2_xgb_b:.3f} r2_lgb={r2_lgb_b:.3f} -> select_model()={result_b} (expected: lightgbm_pooled)")
 
     clear_test_rows(app)
 
-    passed = (result_a == "xgboost") and (result_b == "lightgbm")
+    passed = (result_a == "xgboost_pooled") and (result_b == "lightgbm_pooled")
+    print("RESULT:", "PASS" if passed else "FAIL")
+    return passed
+
+
+def test_3_cold_start_both_none(app):
+    print("\n" + "=" * 90)
+    print("TEST 3: Cold start - both models have no data -> random 50/50 (not always the same model)")
+    print("=" * 90)
+
+    clear_test_rows(app)
+    normal_row = make_feature_row(app, missing_count=0)
+
+    horizon = 9  # horizon ที่ไม่มีข้อมูลทดสอบใดๆ เลย
+    r2_lookup = app.fetch_rolling_r2_lookup(_TEST_PROVINCE)
+    results = {app.select_model(normal_row, horizon=horizon, province=_TEST_PROVINCE, r2_lookup=r2_lookup) for _ in range(60)}
+    print(f"outcomes seen across 60 draws: {results}")
+
+    passed = results == {"xgboost_pooled", "lightgbm_pooled"}
+    print("RESULT:", "PASS" if passed else "FAIL")
+    return passed
+
+
+def test_4_single_none_explores(app):
+    print("\n" + "=" * 90)
+    print("TEST 4: Single-model cold start -> explores the missing one sometimes (both directions)")
+    print("=" * 90)
+    print("(regression guard for the bug fixed in CHANGELOG (20): checking only one side of")
+    print(" None used to starve the other model of live data forever)")
+
+    clear_test_rows(app)
+    normal_row = make_feature_row(app, missing_count=0)
+
+    # ฝั่ง A: มีแค่ xgboost_pooled ข้อมูลพอ (lightgbm_pooled ไม่มีข้อมูลเลย) -> ต้อง explore ไป
+    # lightgbm_pooled บ้าง (ไม่ fallback ไป xgboost_pooled 100%)
+    actual = [20 + 5 * np.sin(i / 3) for i in range(30)]
+    xgb_pred = [a + np.random.uniform(-0.3, 0.3) for a in actual]
+    insert_rows(app, "xgboost_pooled", horizon=11, actual_values=actual, predicted_values=xgb_pred, start_hour=0)
+    r2_lookup_a = app.fetch_rolling_r2_lookup(_TEST_PROVINCE)
+    results_a = {app.select_model(normal_row, horizon=11, province=_TEST_PROVINCE, r2_lookup=r2_lookup_a) for _ in range(80)}
+    print(f"[A: only xgboost_pooled has data] outcomes across 80 draws: {results_a}")
+
+    clear_test_rows(app)
+
+    # ฝั่ง B: สลับกัน มีแค่ lightgbm_pooled ข้อมูลพอ -> ต้อง explore ไป xgboost_pooled บ้าง
+    lgb_pred = [a + np.random.uniform(-0.3, 0.3) for a in actual]
+    insert_rows(app, "lightgbm_pooled", horizon=12, actual_values=actual, predicted_values=lgb_pred, start_hour=0)
+    r2_lookup_b = app.fetch_rolling_r2_lookup(_TEST_PROVINCE)
+    results_b = {app.select_model(normal_row, horizon=12, province=_TEST_PROVINCE, r2_lookup=r2_lookup_b) for _ in range(80)}
+    print(f"[B: only lightgbm_pooled has data] outcomes across 80 draws: {results_b}")
+
+    clear_test_rows(app)
+
+    passed = (results_a == {"xgboost_pooled", "lightgbm_pooled"}) and (results_b == {"xgboost_pooled", "lightgbm_pooled"})
     print("RESULT:", "PASS" if passed else "FAIL")
     return passed
 
@@ -123,11 +184,15 @@ if __name__ == "__main__":
     try:
         r1 = test_1_circuit_breaker(app)
         r2 = test_2_rolling_r2(app)
+        r3 = test_3_cold_start_both_none(app)
+        r4 = test_4_single_none_explores(app)
     finally:
         clear_test_rows(app)  # กันแถวทดสอบตกค้างแม้ assertion จะพังกลางคัน
 
     print("\n" + "=" * 90)
     print("SUMMARY")
     print("=" * 90)
-    print(f"Test 1 (circuit breaker):  {'PASS' if r1 else 'FAIL'}")
-    print(f"Test 2 (rolling R2 route): {'PASS' if r2 else 'FAIL'}")
+    print(f"Test 1 (circuit breaker):        {'PASS' if r1 else 'FAIL'}")
+    print(f"Test 2 (rolling R2 route):       {'PASS' if r2 else 'FAIL'}")
+    print(f"Test 3 (cold start, both None):  {'PASS' if r3 else 'FAIL'}")
+    print(f"Test 4 (cold start, single None):{'PASS' if r4 else 'FAIL'}")

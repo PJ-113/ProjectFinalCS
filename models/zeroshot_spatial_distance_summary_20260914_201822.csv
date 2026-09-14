@@ -1,0 +1,7 @@
+model,province_en,mae,held_out_province,nearest_trained_province,distance_to_nearest_trained_km
+lgb,chaiyaphum,2.7498599750470327,chaiyaphum,nakhonratchasima,92.86148213942789
+lgb,ubonratchathani,3.9268148289712035,ubonratchathani,sisaket,58.46032310810596
+lgb,udonthani,2.8896944540933975,udonthani,nongbualamphu,42.09496635512331
+xgb,chaiyaphum,2.811077583730853,chaiyaphum,nakhonratchasima,92.86148213942789
+xgb,ubonratchathani,4.048638395773064,ubonratchathani,sisaket,58.46032310810596
+xgb,udonthani,2.9629515307202303,udonthani,nongbualamphu,42.09496635512331

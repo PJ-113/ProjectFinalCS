@@ -47,10 +47,53 @@ PM25_FEATURE_COLS = [
 ]
 ENV_FEATURE_COLS = ["wind_dir_sin", "wind_dir_cos", "pressure"]
 STATION_FEATURE_COLS = ["lat", "lon"]
-FEATURE_COLS = WEATHER_FEATURE_COLS + TIME_FEATURE_COLS + PM25_FEATURE_COLS + ENV_FEATURE_COLS + STATION_FEATURE_COLS
+SPATIAL_FEATURE_COLS = ["pm25_neighbor_avg"]  # task F (CHANGELOG 94) — validate ก่อนแล้วว่าช่วย MAE จริง (-4.1% ถึง -4.3%)
+# BASE_FEATURE_COLS คำนวณได้ต่อสถานีเดี่ยวๆ (ใช้ใน build_one_station) ส่วน pm25_neighbor_avg
+# ต้องเห็นข้อมูลข้ามจังหวัดพร้อมกัน เพิ่มทีหลังตอน main() รวมทุกจังหวัดแล้วเท่านั้น
+BASE_FEATURE_COLS = WEATHER_FEATURE_COLS + TIME_FEATURE_COLS + PM25_FEATURE_COLS + ENV_FEATURE_COLS + STATION_FEATURE_COLS
+FEATURE_COLS = BASE_FEATURE_COLS + SPATIAL_FEATURE_COLS
 TARGET_COLS = [f"pm25_t+{h}" for h in range(1, 25)]
 ID_COLS = ["province_th", "province_en", "is_zero_shot", "datetime_utc"]
-assert len(FEATURE_COLS) == 23, f"expected 23 features, got {len(FEATURE_COLS)}"
+K_NEAREST_NEIGHBORS = 3
+assert len(BASE_FEATURE_COLS) == 23, f"expected 23 base features, got {len(BASE_FEATURE_COLS)}"
+assert len(FEATURE_COLS) == 24, f"expected 24 features (23 เดิม + pm25_neighbor_avg), got {len(FEATURE_COLS)}"
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """สูตรเดียวกับ scripts/province_registry.py:haversine_km() — คัดลอกมาแยกต่างหากตามธรรมเนียม
+    เดิมของไฟล์นี้ที่ implement feature formula ของตัวเองแบบ self-contained (ดู CLAUDE.md)"""
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
+    return 2 * r * math.asin(a ** 0.5)
+
+
+def add_spatial_lag_feature(combined, registry_provinces, k=K_NEAREST_NEIGHBORS):
+    """เพิ่ม pm25_neighbor_avg = ค่าเฉลี่ย pm25 (หลัง interpolate/mask แล้ว) ของ k จังหวัดที่ใกล้
+    ที่สุด ณ เวลาเดียวกัน (contemporaneous, ไม่ leak อนาคต) — ต้องทำหลัง concat ทุกจังหวัดแล้ว
+    เพราะต้องเห็นข้อมูลข้ามจังหวัดพร้อมกัน (ต่างจาก feature อื่นที่คำนวณต่อสถานีได้เลย)"""
+    pivot = combined.pivot_table(index="datetime_utc", columns="province_en", values="pm25")
+    all_provinces = pivot.columns.tolist()
+
+    neighbor_avg = {}
+    for p in all_provinces:
+        p_meta = registry_provinces[p]
+        dists = {
+            other: haversine_km(p_meta["lat"], p_meta["lon"], registry_provinces[other]["lat"], registry_provinces[other]["lon"])
+            for other in all_provinces if other != p
+        }
+        nearest = sorted(dists, key=dists.get)[:k]
+        neighbor_avg[p] = pivot[nearest].mean(axis=1)
+
+    neighbor_avg_wide = pd.DataFrame(neighbor_avg)
+    neighbor_avg_long = (
+        neighbor_avg_wide.stack(future_stack=True).rename("pm25_neighbor_avg").reset_index()
+        .rename(columns={"level_1": "province_en"})
+    )
+    combined = combined.merge(neighbor_avg_long, on=["datetime_utc", "province_en"], how="left")
+    return combined
 
 
 def _load_env_key(name):
@@ -210,10 +253,10 @@ def build_one_station(province, pm25_raw, weather):
     grid_final = grid_final.reset_index(drop=True)
 
     grid_final = grid_final.drop(columns=["pm25"]).rename(columns={"pm25_filled": "pm25"})
-    out_cols = ID_COLS + ["pm25"] + FEATURE_COLS + TARGET_COLS
+    out_cols = ID_COLS + ["pm25"] + BASE_FEATURE_COLS + TARGET_COLS
     grid_final = grid_final[out_cols]
 
-    assert grid_final[FEATURE_COLS].isna().sum().sum() == 0, \
+    assert grid_final[BASE_FEATURE_COLS].isna().sum().sum() == 0, \
         f"{province['province_en']}: ยังมี NaN หลงเหลือใน feature columns"
 
     return grid_final, n_short_gap, n_long_gap, before_drop
@@ -291,6 +334,14 @@ def main():
 
     combined = pd.concat(all_frames, ignore_index=True)
     self_check(combined)
+
+    print("\nคำนวณ pm25_neighbor_avg (spatial-lag feature, task F/CHANGELOG 94)...")
+    registry_provinces = {p["province_en"]: p for p in registry["provinces"]}
+    combined = add_spatial_lag_feature(combined, registry_provinces)
+    n_missing_spatial = combined["pm25_neighbor_avg"].isna().sum()
+    print(f"  แถวที่ไม่มีเพื่อนบ้านให้ข้อมูล ณ เวลานั้น (ตัดทิ้ง): {n_missing_spatial}/{len(combined)}")
+    combined = combined.dropna(subset=["pm25_neighbor_avg"]).reset_index(drop=True)
+    combined = combined[ID_COLS + ["pm25"] + FEATURE_COLS + TARGET_COLS]
 
     combined.to_csv(OUT_PATH, index=False)
     pd.DataFrame(log_rows).to_csv(LOG_PATH, index=False)

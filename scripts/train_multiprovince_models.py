@@ -1,27 +1,3 @@
-"""
-Phase 2 (แผนขยาย 17+3 จังหวัด): เทรนโมเดล LightGBM + XGBoost แบบ deploy จริง บน 17 จังหวัด
-(ไม่รวม 3 จังหวัด zero-shot) ด้วยสถาปัตยกรรมตามที่ระบุ: residual forecasting + bagging
-(per-tree row/feature subsampling) + quantile regression (P05/P50/P95) + conformal
-calibration — เทียบผลกับตัวเลขที่ผู้ใช้รายงานไว้ (LightGBM MAE(P50)=2.912, coverage
-86.7%->89.5% | XGBoost MAE(P50)=2.993, coverage 83.1%->88.9%)
-
-Split: chronological ต่อสถานี (กันอนาคตรั่วต่อจังหวัด) 65/15/20 = train/calibration/test
-- train: เทรนโมเดล quantile (P05/P50/P95) ต่อ horizon
-- calibration: คำนวณ conformal nonconformity score (ไม่เคยเห็นตอนเทรน)
-- test: ประเมินผลสุดท้าย (MAE(P50), coverage ก่อน/หลัง conformal)
-
-Residual forecasting: target ต่อ horizon = pm25_t+h - pm25 (ค่าปัจจุบันของแถวนั้น) โมเดลทาย
-ส่วนต่าง แล้วบวก pm25 ปัจจุบันกลับตอน predict/evaluate ทุกจุด
-
-Bagging: ใช้ subsample/colsample per-tree ของทั้ง LightGBM (bagging_fraction/feature_fraction
-ผ่าน sklearn API เป็น subsample+subsample_freq/colsample_bytree) และ XGBoost (subsample/
-colsample_bytree) — ให้แต่ละต้นไม้เห็นข้อมูล/ตัวแปรบางส่วนแบบสุ่มตามสเปกที่ผู้ใช้ระบุ ("bagging")
-ไม่ใช่การเทรนโมเดลซ้ำหลายชุดมา average (นั่นคือคนละเทคนิคกับที่สเปกอธิบายไว้)
-
-Conformal calibration: CQR (Conformalized Quantile Regression) แบบมาตรฐาน — nonconformity
-score = max(lo-y, y-hi) บน calibration split, ปรับช่วง [lo,hi] ด้วย split-conformal quantile
-ของ score นั้น ให้ coverage เข้าใกล้เป้าหมาย 90% (ALPHA=0.10)
-"""
 import os
 import pickle
 from datetime import datetime as dt
@@ -33,7 +9,9 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, r2_score
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_PATH = os.path.join(_ROOT, "data", "multiprovince_pm25_features_raw_20260913_012629.csv")
+# task F (CHANGELOG 94) — เพิ่ม pm25_neighbor_avg (spatial-lag feature, validate แล้วว่าช่วย MAE
+# -4.1% ถึง -4.3%) ชี้ไปไฟล์ augmented ใหม่แทนไฟล์เดิม (ดู scripts/augment_raw_dataset_with_spatial_lag.py)
+DATA_PATH = os.path.join(_ROOT, "data", "multiprovince_pm25_features_raw_spatial_20260914_203924.csv")
 MODEL_DIR = os.path.join(_ROOT, "models")
 TIMESTAMP = dt.now().strftime("%Y%m%d_%H%M%S")
 
@@ -43,14 +21,17 @@ N_ESTIMATORS = 300
 BAGGING_PARAMS_LGB = dict(subsample=0.8, subsample_freq=1, colsample_bytree=0.8)
 BAGGING_PARAMS_XGB = dict(subsample=0.8, colsample_bytree=0.8)
 
+# time_cyclical (hour/month/dayofweek) ตัดออกจากที่นี่เพราะ ablation study (CHANGELOG 90) +
+# ตรวจซ้ำหลังเพิ่ม spatial-lag แล้ว (CHANGELOG 96) ยืนยันสม่ำเสมอทั้ง 2 โมเดลว่าตัดออกแล้ว MAE
+# ดีขึ้น — น่าจะเป็นเพราะ pm25_lag/rolling มี autocorrelation ที่แฝง seasonal pattern ไว้อยู่แล้ว
 FEATURE_COLS = [
     "temp", "humidity", "wind_speed", "precipitation",
-    "hour_sin", "hour_cos", "month_sin", "month_cos", "dayofweek",
     "pm25_lag_1", "pm25_lag_3", "pm25_lag_6", "pm25_lag_12", "pm25_lag_24",
     "pm25_roll_mean_6", "pm25_roll_std_6", "pm25_roll_mean_24", "pm25_roll_std_24",
     "wind_dir_sin", "wind_dir_cos", "pressure", "lat", "lon",
+    "pm25_neighbor_avg",
 ]
-assert len(FEATURE_COLS) == 23
+assert len(FEATURE_COLS) == 19
 TARGET_COLS = [f"pm25_t+{h}" for h in range(1, 25)]
 
 

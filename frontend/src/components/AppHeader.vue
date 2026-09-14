@@ -55,8 +55,7 @@ onUnmounted(() => {
   <header class="app-header">
     <nav class="app-header-nav">
       <router-link to="/" class="brand">
-        <img :src="logoIcon" alt="" class="brand-logo" />
-        PM2.5 ภาคอีสาน
+        PM2.5 Forecast
       </router-link>
       <router-link to="/" class="nav-link nav-tab">พยากรณ์</router-link>
       <router-link v-if="SHOW_COMPARE" to="/compare" class="nav-link nav-tab">เปรียบเทียบ</router-link>
@@ -243,6 +242,18 @@ onUnmounted(() => {
   padding: 6px 10px;
   border-radius: 999px;
   cursor: pointer;
+}
+/* native <select> popup ไม่รับ background โปร่งแสงของ .province-select เอง (บาง browser/OS ทำให้
+   popup โชว์พื้นหลัง gradient ของหน้าเว็บทะลุมา ตัวอักษรอ่านไม่ออก) ต้องให้สีทึบตรงๆ ที่ option เอง */
+.province-select option {
+  background: #ffffff;
+  color: #0f172a;
+}
+@media (prefers-color-scheme: dark) {
+  .province-select option {
+    background: #1e293b;
+    color: #f1f5f9;
+  }
 }
 
 .notif-wrapper {

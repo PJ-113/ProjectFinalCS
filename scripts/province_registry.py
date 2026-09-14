@@ -1,16 +1,3 @@
-"""
-Phase 0 (แผนขยาย 17+3 จังหวัด): หา OpenAQ location/sensor ID ของสถานีวัด PM2.5
-อ้างอิง (reference-grade เท่าที่มี) ใน 20 จังหวัดภาคอีสาน แล้วบันทึกเป็น registry
-กลาง (JSON) ให้ data-collection script และ training script ในเฟสถัดไปใช้ร่วมกัน
-
-ห้ามเดา location/sensor ID เอง — ทุกค่า query จาก OpenAQ v3 API จริง
-(coordinates + radius search รอบเมืองแต่ละจังหวัด, radius สูงสุดที่ v3 อนุญาตคือ 25km)
-แล้วเลือกสถานีที่วัด pm25 ที่อยู่ใกล้จุดค้นหาที่สุด — ขอนแก่นใช้ location 7747/sensor
-1304249 ตรงตามที่ CLAUDE.md ระบุไว้แล้ว (ยืนยันซ้ำด้วย query จริง ไม่ hardcode ข้าม)
-
-จังหวัดที่ไม่เจอสถานีในรัศมี 25km หรือเจอมากกว่า 1 ตัวเลือกที่ก้ำกึ่งกัน จะถูก print
-ออกมาให้ตรวจสอบเอง ไม่เลือกให้อัตโนมัติแบบเดา
-"""
 import json
 import os
 import time
@@ -24,7 +11,7 @@ OUT_PATH = os.path.join(_ROOT, "data", "province_station_registry.json")
 
 RADIUS_M = 25000  # ค่าสูงสุดที่ OpenAQ v3 /v3/locations อนุญาต
 REQUEST_SLEEP_S = 0.5
-PREFERRED_PROVIDER = "Air4Thai"  # = เครือข่าย PCD ทางการของไทย ยืนยันแล้วว่าขอนแก่น 7747 ก็เป็น provider นี้
+PREFERRED_PROVIDER = "Air4Thai"  
 WINDOW_START = pd.Timestamp("2024-01-01T00:00:00Z")
 WINDOW_END = pd.Timestamp("2026-07-02T00:00:00Z")
 
@@ -41,8 +28,6 @@ OPENAQ_KEY = _load_env_key("OPENAQ_KEY")
 HEADERS = {"X-API-Key": OPENAQ_KEY}
 BASE = "https://api.openaq.org/v3"
 
-# จุดค้นหา = พิกัดเมือง/ศาลากลางจังหวัด (โดยประมาณ) ใช้เป็นศูนย์กลางรัศมีค้นหาเท่านั้น
-# lat/lon จริงของสถานีที่ deploy จะมาจากผลลัพธ์ API ไม่ใช่ค่าพวกนี้
 PROVINCES = [
     # --- 17 จังหวัดเทรน ---
     {"th": "ขอนแก่น", "en": "khonkaen", "lat": 16.44538333, "lon": 102.83525, "zero_shot": False,
@@ -94,13 +79,8 @@ def get_pm25_parameter_id():
 
 
 def find_pm25_sensor_in_location(loc):
-    """คืน sensor id + parameter display name ของ pm25 ใน location detail, หรือ None ถ้าไม่มี
-
-    บาง location (เช่น Air4Thai หลายจังหวัด) มี pm25 sensor ซ้ำ 2 ตัว: ตัวเก่า (id เลขน้อย
-    เช่น 1304xxx) ที่ยังมีข้อมูลจริงใช้งานได้ กับตัวใหม่ (id เลขเยอะ เช่น 1631xxxx) ที่พบว่า
-    /v3/sensors/{id} คืน 500 Internal Server Error ทุกครั้ง (ยืนยันด้วย query จริงหลายรอบ ไม่ใช่
-    ปัญหาชั่วคราว) จึงเลือก sensor id ที่น้อยที่สุดเสมอ (สม่ำเสมอกับทุกจังหวัดที่ query สำเร็จ
-    ปกติอยู่แล้ว ซึ่งล้วนมี sensor id หลักเดียวเลขน้อย)"""
+    """คืน sensor id + parameter display name ของ pm25 ใน location detail หรือ None ถ้าไม่มี —
+    เลือก id ต่ำสุดเสมอถ้ามีซ้ำ (เหตุผล: ดู CHANGELOG 75)"""
     pm25_sensor_ids = [s["id"] for s in loc.get("sensors", []) if s.get("parameter", {}).get("name", "").lower() == "pm25"]
     if not pm25_sensor_ids:
         return None, None
