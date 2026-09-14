@@ -1,17 +1,28 @@
 """
-SHAP analysis (proposal 4.1.3 / 5.3.4) สำหรับ LightGBM และ XGBoost ที่ deploy อยู่จริง
-(ไม่ทำกับ Prophet เพราะ shap.TreeExplainer ใช้ไม่ได้กับโมเดลที่ไม่ใช่ tree-based และ Prophet
-เองก็อธิบายตัวเองได้อยู่แล้วผ่านโครงสร้าง trend/seasonality/holiday)
+SHAP analysis (proposal 4.1.3 / 5.3.4) — เดิมทำกับโมเดล single-station เก่า (ก่อน CHANGELOG 78)
+ตอนนี้แก้ให้ใช้กับโมเดล pooled จริง (task E ตาม feedback อาจารย์ ข้อ 2: ตรวจสอบว่าโมเดลเรียนรู้
+ความสัมพันธ์ทางอุตุนิยมวิทยาสมเหตุสมผลไหม) — ไม่ใช่แค่สลับ path เพราะโครงสร้าง pkl ต่างกัน:
+โมเดลเก่า models[h] = model เดียว, โมเดล pooled models[h][quantile] (nested อีกชั้น, quantile ใน
+{0.05, 0.5, 0.95}) — สคริปต์นี้อธิบายเฉพาะ P50 (จุดพยากรณ์หลัก) เท่านั้น
 
-ไฟล์นี้ทำ 2 หน้าที่แยกกัน:
-1. Batch analysis (รันเมื่อเรียกเป็นสคริปต์โดยตรง): คำนวณ SHAP บน test set จริงที่ horizon
-   ตัวแทน t+1/t+12/t+24 ของทั้ง 2 โมเดล, สรุป top-5 feature ต่อ (model, horizon), save ผลลัพธ์
-2. get_shap_explanation(): ฟังก์ชัน reusable สำหรับอธิบายค่าพยากรณ์ "จุดเดียว" ตามโมเดลที่
-   Dynamic Routing เลือกใช้จริง (model_used) — import ได้โดยไม่ trigger batch analysis
-   (โหลดแค่โมเดล ไม่รัน SHAP จนกว่าจะถูกเรียกจริง)
+สำคัญ: โมเดล pooled ทายค่า **residual** (pm25_t+h - pm25_now) ไม่ใช่ค่าจริง — SHAP values
+ที่ได้จึงอธิบายอิทธิพลต่อ "ส่วนต่าง" ไม่ใช่ค่า PM2.5 สัมบูรณ์ ตีความทิศทาง (+/-) ได้ตามปกติ
+แค่ต้องระบุให้ชัดว่าเป็น residual เวลารายงานผล
+
+ไฟล์นี้ทำ 3 หน้าที่แยกกัน:
+1. Batch analysis (รันเมื่อเรียกเป็นสคริปต์โดยตรง): คำนวณ SHAP บน test set จริง (split เดียวกับ
+   task A/D — reuse split_train_calib_test()) ที่ horizon ตัวแทน t+1/t+12/t+24 ของทั้ง 2 โมเดล
+   สรุป top-5 feature ต่อ (model, horizon)
+2. Meteorological plausibility check: ตั้งสมมติฐานทิศทางไว้ก่อนต่อ feature อุตุนิยมวิทยาหลัก
+   (precipitation, pressure, wind_speed) แล้วเช็คว่า SHAP value จริงไปทิศทางเดียวกับสมมติฐานไหม
+3. get_shap_explanation(): ฟังก์ชัน reusable สำหรับอธิบายค่าพยากรณ์ "จุดเดียว" ตามโมเดลที่
+   Dynamic Routing เลือกใช้จริง (model_used ใน app.py: "lightgbm_pooled"/"xgboost_pooled"/
+   "naive_fallback") — import ได้โดยไม่ trigger batch analysis
 
 ยังไม่ integrate เข้า app.py/get_forecast() — เป็นขั้นตอนแยกต่างหากทีหลัง
 """
+import importlib.util
+import os
 import pickle
 import sys
 
@@ -21,15 +32,29 @@ import shap
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-import os
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_PATH = os.path.join(_ROOT, r"data\khonkaen_pm25_features_raw_20260712_191249.csv")
-LGB_MODEL_PATH = os.path.join(_ROOT, r"models\lgb_pm25_multistep_weighted_20260712_191056.pkl")
-XGB_MODEL_PATH = os.path.join(_ROOT, r"models\xgb_pm25_multistep_20260712_191350.pkl")
-OUT_PKL_PATH = os.path.join(_ROOT, r"models\shap_values_by_horizon.pkl")
-OUT_CSV_PATH = os.path.join(_ROOT, r"models\shap_top_features_by_horizon.csv")
+DATA_PATH = os.path.join(_ROOT, "data", "multiprovince_pm25_features_raw_20260913_012629.csv")
+LGB_MODEL_PATH = os.path.join(_ROOT, "models", "lgb_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl")
+XGB_MODEL_PATH = os.path.join(_ROOT, "models", "xgb_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl")
+TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+OUT_PKL_PATH = os.path.join(_ROOT, "models", f"shap_values_by_horizon_{TIMESTAMP}.pkl")
+OUT_CSV_PATH = os.path.join(_ROOT, "models", f"shap_top_features_by_horizon_{TIMESTAMP}.csv")
 REP_HORIZONS = [1, 12, 24]
 TOP_N = 5
+EXPLAIN_QUANTILE = 0.5  # อธิบายเฉพาะ P50 (จุดพยากรณ์หลัก)
+
+# สมมติฐานทิศทางเชิงอุตุนิยมวิทยา (ต้องระบุก่อนเห็นผล ตามที่อาจารย์ขอ) —
+# "+"=ค่า feature สูง ควรทำให้ residual (และ pm25) ทายสูงขึ้น, "-"=ตรงข้าม
+METEOROLOGICAL_HYPOTHESES = {
+    "precipitation": ("-", "ฝนตกชะล้าง PM2.5 ออกจากอากาศ (scavenging effect) — ฝนมาก ควรทายฝุ่นลดลง"),
+    "pressure": ("+", "ความกดอากาศสูงมักสัมพันธ์กับ temperature inversion ที่กดฝุ่นไว้ใกล้พื้น — ควรทายฝุ่นสูงขึ้น"),
+    "wind_speed": ("-", "ลมแรงช่วยกระจาย/เจือจางฝุ่น (dispersion) — ควรทายฝุ่นลดลง"),
+    "humidity": ("+", "ความชื้นสูง (โดยเฉพาะอากาศนิ่ง ไม่ใช่ฝนตก) ทำให้ฝุ่นดูดความชื้นขยายตัว/หนักขึ้น "
+                       "(hygroscopic growth) และมักเกิดร่วมกับ temperature inversion ตอนเช้าหน้าหนาว — "
+                       "ควรทายฝุ่นสูงขึ้น (เป็น feature ที่อาจารย์ระบุเจาะจงเรื่องหน้าหนาว จึงเช็คแยกฤดูเพิ่มด้านล่าง)"),
+}
+WINTER_MONTHS = {11, 12, 1, 2}  # หน้าหนาวไทย (พ.ย.-ก.พ.) — ตามที่อาจารย์ระบุเจาะจงเรื่องน้ำค้าง/ความชื้น
+WINTER_STRATIFIED_FEATURES = ["humidity"]
 
 with open(LGB_MODEL_PATH, "rb") as f:
     _lgb_package = pickle.load(f)
@@ -38,27 +63,43 @@ with open(XGB_MODEL_PATH, "rb") as f:
 
 FEATURE_COLS = _lgb_package["feature_cols"]
 assert FEATURE_COLS == _xgb_package["feature_cols"], \
-    "feature_cols ของ LightGBM กับ XGBoost ต้องตรงกันเป๊ะ (ควรเป็นแบบนี้เสมอเพราะ " \
-    "train_xgb_prophet_v2.py โหลด feature_cols มาจาก LightGBM pkl ตอนเทรน)"
+    "feature_cols ของ LightGBM กับ XGBoost ต้องตรงกันเป๊ะ (เทรนจาก FEATURE_COLS เดียวกันใน train_multiprovince_models.py)"
 
-MODEL_PACKAGES = {"lightgbm": _lgb_package, "xgboost": _xgb_package}
+MODEL_PACKAGES = {"lightgbm_pooled": _lgb_package, "xgboost_pooled": _xgb_package}
 
 # cache explainer ต่อ (model_name, horizon) เพราะสร้าง TreeExplainer ใหม่ทุกครั้งไม่จำเป็น
 _EXPLAINER_CACHE = {}
 
 
+def _load_test_split():
+    """reuse split_train_calib_test() จาก train_multiprovince_models.py ตรงๆ ให้ได้ test rows
+    ชุดเดียวกับที่ใช้ backtest ฤดูฝุ่น (task A) และ ablation study (task D)"""
+    spec = importlib.util.spec_from_file_location(
+        "train_multiprovince_models", os.path.join(_ROOT, "scripts", "train_multiprovince_models.py")
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    df = pd.read_csv(DATA_PATH)
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"])
+    df = df[~df["is_zero_shot"]].reset_index(drop=True)
+    _, _, test_df = mod.split_train_calib_test(df)
+    return test_df
+
+
 def get_shap_explanation(model_used, horizon, feature_row):
-    """คืนอิทธิพลของแต่ละ feature ต่อค่าพยากรณ์ ณ จุดเดียว (feature_row) โดยใช้ SHAP explainer
-    ของโมเดลที่ Dynamic Routing เลือกใช้จริง (model_used จาก select_model() ใน app.py) —
-    ไม่ใช่อธิบายด้วย LightGBM เสมอแม้จุดนั้นจะมาจาก XGBoost หรือ Prophet
+    """คืนอิทธิพลของแต่ละ feature ต่อค่าพยากรณ์ P50 ณ จุดเดียว (feature_row) โดยใช้ SHAP explainer
+    ของโมเดลที่ Dynamic Routing เลือกใช้จริง (model_used จาก select_model() ใน app.py:
+    "lightgbm_pooled"/"xgboost_pooled"/"naive_fallback")
 
     feature_row: DataFrame แถวเดียว มีคอลัมน์ตรงกับ FEATURE_COLS (รูปแบบเดียวกับที่
-    build_feature_row() ใน app.py คืนกลับมา หลัง calibrate แล้ว)
+    build_feature_row() ใน app.py คืนกลับมา)
 
     คืนค่า: list of (feature_name, shap_value) เรียงจากอิทธิพลสูงสุด (|shap_value|) ไปต่ำสุด
-    หรือ None ถ้า model_used == "prophet" (ไม่มี SHAP explainer ให้ ดูหมายเหตุด้านบนไฟล์)
+    (shap_value อธิบายผลต่อ residual ไม่ใช่ pm25 สัมบูรณ์) หรือ None ถ้า model_used ==
+    "naive_fallback" (ไม่มีโมเดล quantile ให้อธิบาย เป็นแค่ persistence)
     """
-    if model_used == "prophet":
+    if model_used == "naive_fallback":
         return None
 
     if model_used not in MODEL_PACKAGES:
@@ -66,7 +107,7 @@ def get_shap_explanation(model_used, horizon, feature_row):
 
     cache_key = (model_used, horizon)
     if cache_key not in _EXPLAINER_CACHE:
-        model = MODEL_PACKAGES[model_used]["models"][horizon]
+        model = MODEL_PACKAGES[model_used]["models"][horizon][EXPLAIN_QUANTILE]
         _EXPLAINER_CACHE[cache_key] = shap.TreeExplainer(model)
     explainer = _EXPLAINER_CACHE[cache_key]
 
@@ -76,13 +117,42 @@ def get_shap_explanation(model_used, horizon, feature_row):
     return pairs
 
 
-def _run_batch_analysis():
-    df = pd.read_csv(DATA_PATH)
-    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"])
-    split_idx = int(len(df) * 0.8)
-    test = df.iloc[split_idx:]
+def _meteorological_plausibility_check(model_name, h, X_test, shap_values, datetime_series=None):
+    """เช็คว่าทิศทางที่โมเดลเรียนรู้จริง (correlation ระหว่างค่า feature กับ SHAP value ของมัน)
+    ตรงกับสมมติฐานเชิงฟิสิกส์ที่ตั้งไว้ล่วงหน้าไหม + เช็คแยกหน้าหนาวสำหรับ feature ที่ระบุใน
+    WINTER_STRATIFIED_FEATURES (อาจารย์ระบุเจาะจงว่าความชื้น/น้ำค้างหน้าหนาวควรตรวจสอบแยก)"""
+    print(f"\n  -- meteorological plausibility check ({model_name} t+{h}) --")
+    for feat, (expected_sign, reason) in METEOROLOGICAL_HYPOTHESES.items():
+        idx = FEATURE_COLS.index(feat)
+        feat_values = X_test[feat].values
+        feat_shap = shap_values[:, idx]
+        if np.std(feat_values) == 0:
+            print(f"    {feat}: ข้ามเช็ค (ค่าคงที่ในชุดทดสอบนี้)")
+            continue
+        corr = np.corrcoef(feat_values, feat_shap)[0, 1]
+        observed_sign = "+" if corr > 0 else "-"
+        verdict = "ตรงสมมติฐาน" if observed_sign == expected_sign else "ขัดสมมติฐาน"
+        print(f"    {feat}: corr(value, shap)={corr:+.3f} (คาด {expected_sign}, ได้ {observed_sign}) -> {verdict}")
+        print(f"      เหตุผล: {reason}")
 
-    shap_values_by_horizon = {"lightgbm": {}, "xgboost": {}}
+        if feat in WINTER_STRATIFIED_FEATURES and datetime_series is not None:
+            months = pd.to_datetime(datetime_series).dt.month.values
+            is_winter = np.isin(months, list(WINTER_MONTHS))
+            for label, mask in (("หน้าหนาว (พ.ย.-ก.พ.)", is_winter), ("นอกหน้าหนาว", ~is_winter)):
+                if mask.sum() < 30 or np.std(feat_values[mask]) == 0:
+                    print(f"      [{label}] ข้ามเช็ค (ข้อมูลน้อยเกินไปหรือค่าคงที่, n={mask.sum()})")
+                    continue
+                corr_season = np.corrcoef(feat_values[mask], feat_shap[mask])[0, 1]
+                sign_season = "+" if corr_season > 0 else "-"
+                verdict_season = "ตรงสมมติฐาน" if sign_season == expected_sign else "ขัดสมมติฐาน"
+                print(f"      [{label}, n={mask.sum()}] corr={corr_season:+.3f} -> {verdict_season}")
+
+
+def _run_batch_analysis():
+    test = _load_test_split()
+    print(f"test rows (split เดียวกับ task A/D): {len(test)}")
+
+    shap_values_by_horizon = {"lightgbm_pooled": {}, "xgboost_pooled": {}}
     top_features_rows = []
 
     for model_name, package in MODEL_PACKAGES.items():
@@ -92,7 +162,7 @@ def _run_batch_analysis():
             test_valid = test.dropna(subset=[target])
             X_test = test_valid[FEATURE_COLS]
 
-            model = models[h]
+            model = models[h][EXPLAIN_QUANTILE]
             explainer = shap.TreeExplainer(model)
             shap_values = explainer.shap_values(X_test)
 
@@ -100,7 +170,7 @@ def _run_batch_analysis():
 
             mean_abs_shap = np.abs(shap_values).mean(axis=0)
             order = np.argsort(mean_abs_shap)[::-1][:TOP_N]
-            print(f"\n=== {model_name} t+{h} (n={len(X_test)}) top {TOP_N} features ===")
+            print(f"\n=== {model_name} t+{h} (n={len(X_test)}, อธิบาย residual pm25_t+{h}-pm25_now, P50) top {TOP_N} features ===")
             for rank, idx in enumerate(order, start=1):
                 feat = FEATURE_COLS[idx]
                 val = mean_abs_shap[idx]
@@ -109,6 +179,8 @@ def _run_batch_analysis():
                     "model_name": model_name, "horizon": h, "rank": rank,
                     "feature": feat, "mean_abs_shap": val,
                 })
+
+            _meteorological_plausibility_check(model_name, h, X_test, shap_values, test_valid["datetime_utc"])
 
     with open(OUT_PKL_PATH, "wb") as f:
         pickle.dump({"feature_cols": FEATURE_COLS, "shap_values": shap_values_by_horizon}, f)
@@ -121,24 +193,23 @@ def _run_batch_analysis():
 
     print("\n=== เทียบ top features LightGBM vs XGBoost ต่อ horizon ===")
     for h in REP_HORIZONS:
-        lgb_top = set(top_df[(top_df.model_name == "lightgbm") & (top_df.horizon == h)]["feature"])
-        xgb_top = set(top_df[(top_df.model_name == "xgboost") & (top_df.horizon == h)]["feature"])
+        lgb_top = set(top_df[(top_df.model_name == "lightgbm_pooled") & (top_df.horizon == h)]["feature"])
+        xgb_top = set(top_df[(top_df.model_name == "xgboost_pooled") & (top_df.horizon == h)]["feature"])
         overlap = lgb_top & xgb_top
         print(f"\nt+{h}: overlap {len(overlap)}/{TOP_N} -> {sorted(overlap)}")
         print(f"   LightGBM only: {sorted(lgb_top - xgb_top)}")
         print(f"   XGBoost only:  {sorted(xgb_top - lgb_top)}")
 
     # self-test: get_shap_explanation() ต้องให้ค่าเรียงลำดับตรงกับ mean_abs_shap ของ batch
-    # (ยืนยันว่า per-point explainer กับ batch explainer สอดคล้องกัน ไม่ใช่ implementation คนละแบบ)
-    print("\n=== self-test: get_shap_explanation() เทียบ prophet -> None ===")
+    print("\n=== self-test: get_shap_explanation() เทียบ naive_fallback -> None ===")
     sample_row = test.dropna(subset=["pm25_t+1"])[FEATURE_COLS].iloc[[-1]]
-    for model_name in ("lightgbm", "xgboost"):
+    for model_name in ("lightgbm_pooled", "xgboost_pooled"):
         pairs = get_shap_explanation(model_name, 1, sample_row)
         top3 = [f"{feat}={val:+.3f}" for feat, val in pairs[:3]]
         print(f"  {model_name} t+1 (จุดตัวอย่างสุดท้ายใน test set): top3 = {top3}")
-    prophet_result = get_shap_explanation("prophet", 1, sample_row)
-    print(f"  prophet -> {prophet_result} (คาด None)")
-    assert prophet_result is None, "get_shap_explanation('prophet', ...) ต้องคืน None"
+    fallback_result = get_shap_explanation("naive_fallback", 1, sample_row)
+    print(f"  naive_fallback -> {fallback_result} (คาด None)")
+    assert fallback_result is None, "get_shap_explanation('naive_fallback', ...) ต้องคืน None"
 
 
 if __name__ == "__main__":
