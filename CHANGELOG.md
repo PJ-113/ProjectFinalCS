@@ -1,5 +1,186 @@
 # Changelog
 
+## 2026-09-17 (110) — Retrain เต็มรูปแบบด้วย k=1 (spatial-lag): ยืนยันผลจาก entry 108 จริง MAE ดีขึ้น 1.2-1.9%
+
+**ที่มา**: entry 108 validate แบบย่อ (P50-only, 5 horizon ตัวแทน) แล้วพบว่า k=1 ดีกว่า k=3 ที่ใช้อยู่ +1.43%/+2.07% — ผู้ใช้ตกลงให้ retrain เต็มรูปแบบด้วย k=1 จริง (ไม่ต้อง refetch API เพราะ pm25 ดิบมีอยู่แล้ว)
+
+**วิธีทำ**:
+1. `scripts/augment_raw_dataset_with_spatial_lag_k1.py` — ทิ้งคอลัมน์ `pm25_neighbor_avg` เดิม (k=3) แล้วคำนวณใหม่ด้วย `add_spatial_lag_feature(..., k=1)` (reuse ฟังก์ชันเดิมจาก `build_raw_dataset_multiprovince.py` ตรงๆ) → `data/multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv` (302,751 แถว 17 จังหวัดเทรน — ตรงกับที่ entry 108 คำนวณไว้เป๊ะ ยืนยัน pipeline ถูกต้อง)
+2. เปลี่ยน `DATA_PATH` ใน `train_multiprovince_models.py` ไปชี้ไฟล์ใหม่ แล้วรันเต็มรูปแบบ (24 horizon × 3 quantile × 2 โมเดล = 144 fit)
+
+**ผลลัพธ์ — ยืนยันตรงกับที่ validate ไว้**:
+| | k=3 เดิม (`_211416`) | k=1 ใหม่ (`_001147`) | เปลี่ยน |
+|---|---|---|---|
+| LGB MAE(P50) เฉลี่ย 24h | 2.754 | **2.720** | −1.23% |
+| XGB MAE(P50) เฉลี่ย 24h | 2.858 | **2.805** | −1.85% |
+| LGB coverage (หลัง conformal) | ~88.8% | 88.8% | ไม่เปลี่ยน |
+| XGB coverage (หลัง conformal) | ~88.2% | 88.3% | ไม่เปลี่ยน |
+
+ทิศทางและขนาดตรงกับที่ validate แบบย่อไว้ในงาน entry 108 (+1.43%/+2.07% ตอนวัดแบบ 5 horizon ตัวแทน เทียบ −1.23%/−1.85% ตอนวัดเต็ม 24 horizon — ต่างกันเล็กน้อยเพราะคนละชุด horizon ที่วัด แต่ทิศทางเดียวกันชัดเจน) — ยืนยันว่าผลจาก validation ไม่ใช่ noise
+
+**Coverage ไม่เปลี่ยนแปลงตามที่คาด** เพราะ conformal calibration เป็นขั้นตอนแยกจาก feature engineering — เปลี่ยน k มีผลต่อความแม่นยำของค่าพยากรณ์ (MAE) แต่ไม่ได้แก้ปัญหา coverage-gap เชิงโครงสร้างที่ entry 101-103 เจอ (ยังเป็นคำถามเปิดเหมือนเดิม)
+
+**สถานะ**: โมเดลนี้เป็น candidate ใหม่เท่านั้น **ยังไม่ deploy เข้า `app.py`** ตามธรรมเนียม session นี้ (แยก scope การตัดสินใจ deploy จากการทดลอง/ปรับปรุงโมเดล)
+
+**ไฟล์ที่เพิ่ม**: `scripts/augment_raw_dataset_with_spatial_lag_k1.py`, `data/multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv`, `models/lgb_pm25_multiprovince_residual_bagged_quantile_20260917_001147.pkl`, `models/xgb_pm25_multiprovince_residual_bagged_quantile_20260917_001147.pkl`, `models/conformal_calibration_{lgb,xgb}_20260917_001147.csv`, `models/multiprovince_eval_summary_20260917_001147.csv`, `CHANGELOG.md` (entry นี้)
+
+**ไฟล์ที่แก้**: `scripts/train_multiprovince_models.py` (`DATA_PATH` ชี้ไปไฟล์ k=1 ใหม่)
+
+## 2026-09-17 (109) — เทียบ Ensemble LGB+XGB กับ Dynamic Routing (offline proxy): ไม่ช่วย MAE, coverage ใกล้เคียงเดิม
+
+**ที่มา**: ผู้ใช้อยากรู้ว่าการรวมพยากรณ์ทั้ง 2 โมเดล (ensemble) จะดีกว่าการเลือกทีละตัวแบบ Dynamic Routing (`select_model()`, `app.py`) หรือไม่ — วางแผนไว้ก่อนว่าต้องระบุ caveat ชัดว่า Dynamic Routing จริงเป็นระบบ online ที่ปรับตาม rolling window แยกตาม province ไม่สามารถ replay จากออฟไลน์ train/calib/test split เดียวได้ตรงๆ
+
+**วิธีทำ**: `scripts/eval_ensemble_vs_routing.py` — ใช้โมเดล candidate ล่าสุด (`_20260914_211416`, 19 feature) ที่เทรนไว้แล้ว ไม่ retrain ใหม่ predict P05/P50/P95 ดิบบน calib+test แล้วสร้าง variant: `lgb_only`/`xgb_only`/`simple_avg`/`weighted_avg`(น้ำหนักเลือกจาก calib ไม่ใช่ test)/`oracle_routing`(เลือกโมเดลดีสุดต่อ horizon แบบ perfect-hindsight — เพดานบนเท่านั้น ไม่ใช่สิ่งที่ระบบ live ทำได้จริง)
+
+**ผลลัพธ์ MAE (P50, เฉลี่ยทุก horizon)**: `lgb_only`=2.7541 ชนะทุก horizon เทียบ `xgb_only`=2.8581 — เพราะ LGB ดีกว่า XGB สม่ำเสมอในทุก horizon ที่ทดสอบ ทำให้ `oracle_routing` (2.7541) เท่ากับ `lgb_only` เป๊ะ (เลือก LGB 100% ของเวลา) ส่วน ensemble ทั้ง `simple_avg` (+0.65%) และ `weighted_avg(w=0.7 lgb)` (+0.07%) **แย่กว่า lgb_only เดี่ยวๆทั้งคู่** — สรุปตรงไปตรงมา: **ในสถานการณ์ที่โมเดลหนึ่งชนะอีกโมเดลอย่างสม่ำเสมอทุก horizon (ไม่ใช่กรณีที่โมเดลสลับกันชนะคนละ horizon) ensembling ไม่ช่วยอะไร เพราะเป็นการ "เจือจาง" โมเดลที่ดีอยู่แล้วด้วยโมเดลที่แย่กว่า** ไม่ใช่กรณีคลาสสิกที่ ensemble ควรช่วย (โมเดลที่มีจุดแข็งต่างกันคนละด้าน)
+
+**ผลลัพธ์ Coverage**: ensemble ให้ coverage รวม ~88.9-89.0% (เทียบ lgb_only เดี่ยว 88.8%, xgb_only 88.2%) — ใกล้เคียงกันมาก ไม่ดีขึ้นชัดเจน คำนวณ coverage แยกช่วงฤดูฝุ่น (ก.พ.-เม.ย., ตามเดือน) ได้ ~88.4-88.5% **หมายเหตุสำคัญ**: นี่เป็นการแบ่งตาม**เดือน**ของฤดูฝุ่น ไม่ใช่การแบ่งตาม**severity bin ของ actual PM2.5** (>p90) ที่ entry 103 ใช้ (ซึ่งพบ coverage ตกไปที่ 85.0%/81.4%) — เลขทั้งสองชุด**ไม่เทียบกันตรงๆได้** เพราะเป็นการแบ่งกลุ่มคนละแบบ งานนี้จึงยังไม่ได้ยืนยันหรือปฏิเสธว่า ensemble ช่วยปัญหา coverage เฉพาะช่วงฝุ่นวิกฤต (severity-based) ที่ entry 101-103 เจอ — ยังเป็นคำถามเปิดถ้าจะตรวจสอบต่อ
+
+**สรุป**: จากข้อมูลที่มี ไม่แนะนำเปลี่ยนจาก Dynamic Routing ไปเป็น ensemble แบบง่าย (simple/weighted average) — Dynamic Routing (ถึงจะ real-time และมี exploration noise) ก็ไม่น่าแย่กว่า ensemble ในกรณีนี้ เพราะโมเดลหนึ่ง (LGB) ชนะสม่ำเสมออยู่แล้ว การเลือกทีละตัวจึงมีข้อได้เปรียบอยู่แล้วในทางทฤษฎี
+
+**ไฟล์ที่เพิ่ม**: `scripts/eval_ensemble_vs_routing.py`, `models/ensemble_vs_routing_mae_by_horizon_20260916_235551.csv`, `models/ensemble_vs_routing_coverage_20260916_235551.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-17 (108) — Tune จำนวนจังหวัดเพื่อนบ้าน (k) ใน spatial-lag feature: k=1 ดีกว่า k=3 ที่ใช้อยู่
+
+**ที่มา**: `pm25_neighbor_avg` (entry 94-95, 107 ยืนยันว่าเป็น feature เดี่ยวที่ทรงพลังสุด) ใช้ k=3 คงที่มาตลอด ไม่เคยลองค่าอื่นเทียบกันจริง — ตั้งสมมติฐานไว้ล่วงหน้าว่า MAE ควรดีขึ้นตาม k จนถึงจุดหนึ่งแล้วแย่ลง (เพื่อนบ้านไกลเกินไปเริ่มเป็น noise)
+
+**วิธีทำ**: `scripts/tune_spatial_lag_k.py` — ไม่ต้องเรียก API ใหม่ (pm25 ดิบทุกจังหวัดมีอยู่แล้วใน dataset) กวาด k ∈ {1,2,3,5,7,10,15,19} เทียบกับ baseline ไม่มี spatial-lag เลย (18 feature) วัดแบบเดียวกับ ablation เดิม (P50-only, 5 horizon ตัวแทน, 2 โมเดล) รวม 90 model fit
+
+**ผลลัพธ์ — ขัดสมมติฐานที่ตั้งไว้บางส่วน**: MAE ดีขึ้น**หน่วยเดียว**ตาม k ที่ลดลง ไม่มี "จุดกลับตัว" ตามที่คาด — **k=1 (แค่จังหวัดใกล้สุดจังหวัดเดียว) ให้ MAE ดีที่สุดทั้ง 2 โมเดล**:
+- LightGBM: k=1 MAE=2.611 ดีกว่า k=3 (2.649) อยู่ **+1.43%**
+- XGBoost: k=1 MAE=2.691 ดีกว่า k=3 (2.748) อยู่ **+2.07%**
+- ทุกค่า k ยังดีกว่า baseline ไม่มี spatial-lag เลยทั้งหมด (−1.9% ถึง −5.3%) ยืนยัน spatial-lag ยังคุ้มค่าเสมอ ไม่ว่า k เท่าไร แต่ค่า k ที่เลือกมีผลจริง
+
+**คำอธิบายที่เป็นไปได้**: สอดคล้องกับ task B (entry 92, correlation กับระยะทาง r=−0.644 — ยิ่งไกลยิ่งสัมพันธ์กันน้อยลง) จังหวัดที่ 2-3 ที่ใกล้เป็นอันดับรองมักไกลกว่าจังหวัดที่ใกล้สุดมาก (ภูมิศาสตร์อีสานไม่สมมาตร) การเฉลี่ยรวมจังหวัดที่ไกลกว่าเข้าไปด้วยจึงเจือจางสัญญาณจากจังหวัดที่ใกล้สุดที่สุด ซึ่งมีข้อมูลตรงประเด็นที่สุดอยู่แล้ว
+
+**หมายเหตุ**: จำนวนแถวที่ใช้เทรน/ทดสอบต่างกันเล็กน้อยระหว่าง k (k=1 ตัดแถวที่จังหวัดใกล้สุดไม่มีข้อมูล ณ เวลานั้นออก 20,333 แถว จาก 343,417; k≥3 ไม่ตัดเลยเพราะมีตัวเลือกสำรองพอ) — ทิศทางผลยังสอดคล้องกันตลอดทั้ง grid (ไม่ใช่ noise จากขนาดข้อมูลต่างกัน) จึงเชื่อผลได้
+
+**สรุป**: แนะนำเปลี่ยนจาก k=3 เป็น **k=1** ในการ retrain ครั้งต่อไป (ยังไม่ retrain ในงานนี้ — เป็นการตัดสินใจที่ต้องรอผู้ใช้ยืนยันก่อน ตามธรรมเนียม validate-ก่อน-ลงทุนของ session)
+
+**ไฟล์ที่เพิ่ม**: `scripts/tune_spatial_lag_k.py`, `models/spatial_lag_k_tuning_20260916_235552.csv`, `models/spatial_lag_k_tuning_summary_20260916_235552.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-16 (107) — Ablation ทีละ feature เดี่ยว (ครบ 19 ตัว) — ยืนยัน multicollinearity + ยืนยัน pm25_neighbor_avg เป็น feature เดี่ยวที่ทรงพลังสุด
+
+**ที่มา**: ablation เดิม (task D, entry 90) ตัดออกทีละ**กลุ่ม** ไม่ใช่ทีละ**ตัว** ตามคำอาจารย์ที่ระบุตรงๆ ว่า "ทดสอบทีละตัวแปร" — ทำเพิ่มให้ครบทีละตัวเดี่ยว พร้อม tag กลุ่มที่สัมพันธ์กันสูง (multicollinearity) ไว้ในผลด้วย กันตีความผิด
+
+**วิธีทำ**: `scripts/ablation_individual_features.py` — baseline (19 feature) + leave-one-out ทีละตัว (19 รอบ) x 2 โมเดล x 5 horizon ตัวแทน = 200 model fit
+
+**ผลลัพธ์สำคัญที่สุด — ยืนยัน multicollinearity hypothesis ตรงเป๊ะ**: กลุ่ม `pm25_lag_rolling` (9 ตัว) ตัดออก**ทั้งกลุ่มทีเดียว** ทำให้ MAE แย่ลง **+9.1%/+8.0%** (LGB/XGB, จาก entry 90) แต่ตัดออก**ทีละตัวเดี่ยวๆ** เฉลี่ยแค่ **+0.34%/−0.19%** เท่านั้น — ต่างกันเกือบ 30 เท่า ยืนยันชัดเจนว่า feature ในกลุ่มนี้ชดเชยกันเองได้เกือบสมบูรณ์เมื่อขาดไปแค่ตัวเดียว แต่ขาดพร้อมกันทั้งกลุ่มถึงจะเห็นผลจริง — ไม่ใช่ว่า feature พวกนี้ไม่สำคัญ แค่ redundant กันสูงมาก
+
+**Feature เดี่ยวที่ทรงพลังที่สุดเมื่อตัดออก 1 ตัว**: `pm25_neighbor_avg` (spatial-lag, entry 94-95) — ตัดออกตัวเดียวทำให้ MAE แย่ลง **+4.20% (LGB) / +3.01% (XGB)** สูงกว่า feature เดี่ยวอื่นๆทั้งหมดมาก (อันดับ 2 ของ LGB คือ pm25_lag_24 แค่ +0.90%) — สอดคล้องกับที่ validate ไว้ก่อนหน้า (entry 94) ว่าเป็น feature ที่ไม่ redundant กับตัวอื่น จึงรับผลกระทบเต็มๆเวลาถูกตัดออกคนเดียว
+
+**Feature อื่นๆ (temp/humidity/wind_speed/precipitation/wind_dir/pressure)**: ผลทีละตัวเล็กมาก (−1% ถึง +0.6%) และไม่สอดคล้องทิศทางกันระหว่าง 2 โมเดลเสมอไป — สอดคล้องกับผลกลุ่มเดิม (weather +1.3-1.7%, wind_pressure +0.1-0.5%) ที่ก็เป็นผลเล็กอยู่แล้ว ไม่มี feature เดี่ยวตัวไหนในกลุ่มเหล่านี้โดดเด่นเป็นพิเศษ
+
+**สรุป**: ตอบ feedback อาจารย์ตรงตัวอักษรครบแล้ว ("ทดสอบทีละตัวแปร") ผลยืนยันทั้งสิ่งที่รู้อยู่แล้ว (multicollinearity ของกลุ่ม lag/rolling) และเน้นย้ำว่า `pm25_neighbor_avg` คือ feature เดี่ยวที่คุ้มค่าที่สุดที่เพิ่มเข้าไปในโมเดลรอบนี้
+
+**ไฟล์ที่เพิ่ม**: `scripts/ablation_individual_features.py`, `models/ablation_individual_features_20260916_231605.csv`, `models/ablation_individual_summary_20260916_231605.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-15 (106) — Validate amenity density เป็น model feature: ไม่คุ้ม (สรุปประเด็นเขตเมือง vs นอกเมือง — feedback อาจารย์ครบทุกข้อแล้ว)
+
+**ที่มา**: ต่อจาก entry 105 (พบ correlation กับ pm25_mean, r=0.32) — validate ว่าช่วย MAE ของโมเดลจริงไหม (คนละคำถามกับ correlation ในข้อมูลดิบ เพราะโมเดลอาจเรียนรู้ผลนี้ผ่าน lat/lon อยู่แล้ว)
+
+**วิธีทำ**: `scripts/validate_amenity_density_feature.py` — เทียบ baseline (19 feature) vs +`amenity_density_3km` (20 feature) วิธีเดียวกับ elevation/spatial-lag validation (P50-only, 5 horizon ตัวแทน)
+
+**ผลลัพธ์**: **delta เล็กน้อยมาก แทบเป็น noise** — LightGBM +0.12% (แย่ลงเล็กน้อย), XGBoost −0.27% (ดีขึ้นเล็กน้อย) ไม่ตรงทิศทางกันด้วยซ้ำ — เทียบกับ spatial-lag feature ที่ validate ได้ −4.1%/−4.3% (entry 94) ต่างกันชัดเจนมาก **ไม่คุ้มที่จะ sync เข้า pipeline เต็ม + retrain**
+
+**คำอธิบายที่เป็นไปได้**: แม้ amenity density จะสัมพันธ์กับ pm25_mean ในข้อมูลดิบ (r=0.32) แต่โมเดลน่าจะเรียนรู้ผลนี้ทางอ้อมผ่าน `lat`/`lon` (ซึ่งบอกตำแหน่ง/ตัวตนจังหวัดอยู่แล้ว) และ `pm25_lag/rolling` (ซึ่งสะท้อนระดับฝุ่นพื้นฐานของแต่ละจังหวัดอยู่แล้ว) ทำให้ feature ใหม่นี้ซ้ำซ้อนกับสิ่งที่มีอยู่แล้ว ไม่ได้เพิ่มข้อมูลใหม่ที่โมเดลยังไม่รู้
+
+**สรุปประเด็นเขตเมือง vs นอกเมืองทั้งหมด (entry 104-106)**: ตรวจสอบครบ 3 ขั้น (คุณภาพข้อมูล → correlation กับ pattern → ประโยชน์ต่อโมเดล) พบว่า:
+1. Raw building count ใช้ไม่ได้ (OSM bulk-import artifact) — แก้ด้วย amenity/shop density
+2. เขตเมืองสัมพันธ์กับระดับฝุ่นเฉลี่ยที่สูงกว่าจริง (r=0.32) แต่ไม่สัมพันธ์กับความผันผวน
+3. ไม่ช่วย MAE ของโมเดล (ซ้ำซ้อนกับ feature ที่มีอยู่แล้ว)
+
+**ณ จุดนี้ ตอบ feedback อาจารย์ครบทุกข้อแล้ว** (spatial correlation ระหว่างจุดวัด, เขตเมือง vs นอกเมือง, ภูมิประเทศ, ทดสอบ spatial pattern, ปัจจัยอุตุนิยมวิทยาทั้งหมด, ablation study, backtesting ฤดูฝุ่นสูง) — จุดเดียวที่ยังเปิดอยู่คือ coverage ช่วงฝุ่นวิกฤตที่แก้ได้แค่บางส่วน (entry 101-102)
+
+**ไฟล์ที่เพิ่ม**: `scripts/validate_amenity_density_feature.py`, `models/amenity_density_feature_validation_20260915_171609.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-15 (105) — วิเคราะห์ amenity density vs PM2.5 pattern (เขตเมือง vs นอกเมือง)
+
+**ที่มา**: ต่อจาก entry 104 (แก้ปัญหาคุณภาพข้อมูล building count แล้ว) — วิเคราะห์ความสัมพันธ์ระหว่าง `amenity_density_3km` กับ pattern PM2.5 รายจังหวัด ตอบคำถามอาจารย์เรื่องเขตเมือง vs นอกเมืองโดยตรง
+
+**วิธีทำ**: `scripts/analyze_amenity_density_vs_pm25_pattern.py` (pattern เดียวกับ elevation analysis, entry 98) — เทียบ correlation ระหว่าง `amenity_density_3km` กับ 3 metric: pm25_mean (ระดับฝุ่นเฉลี่ย), pm25_std (ความผันผวนโดยรวม), mean|hour-to-hour diff| (ความไม่ต่อเนื่องเชิงเวลา) — ไม่ฟันธงทิศทางล่วงหน้าเพราะมีสมมติฐานขัดกันได้ 2 ทาง (ตึกกั้นลมทำให้สะสม vs แหล่งกำเนิดฝุ่นหลัก/เผาไร่อยู่นอกเมืองมากกว่า)
+
+**ผลลัพธ์**:
+- **pm25_mean**: r = **+0.321** — เขตเมืองหนาแน่นกว่ามีระดับฝุ่นเฉลี่ยสูงกว่าพอสมควร (สมเหตุสมผล: กิจกรรม/จราจร/ก่อสร้างในเมืองเป็นแหล่งกำเนิดฝุ่นเพิ่มเติม) — ขอนแก่น/นครราชสีมา (เมืองใหญ่สุด) ไม่ได้สูงสุดเป๊ะ แต่แนวโน้มรวมเป็นบวกชัดเจน
+- **pm25_std** (ความผันผวน): r = −0.106 — ไม่มีความสัมพันธ์ชัดเจน
+- **mean_abs_hourly_diff** (ความไม่ต่อเนื่อง): r = +0.012 — แทบไม่มีความสัมพันธ์เลย
+
+**สรุป**: เขตเมืองสัมพันธ์กับ**ระดับฝุ่นเฉลี่ยที่สูงกว่า**จริง (r=0.32) แต่**ไม่สัมพันธ์กับความผันผวน/ความไม่ต่อเนื่อง**ของฝุ่น (สมมติฐานเดิมของอาจารย์เรื่อง "ตึกกั้นลมทำให้ไม่ต่อเนื่อง" ไม่ชัดเจนในข้อมูลนี้) — ผลนี้ต่างจาก elevation (entry 98-99) ที่ไม่พบความสัมพันธ์เลยแม้แต่กับค่าเฉลี่ย เขตเมืองจึงมีผลจริงบางส่วน ไปต่อขั้น validate เป็น model feature
+
+**ไฟล์ที่เพิ่ม**: `scripts/analyze_amenity_density_vs_pm25_pattern.py`, `models/amenity_density_vs_pm25_pattern_20260915_171503.csv`, `figures/amenity_density_vs_pm25_pattern_20260915_171503.png`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-15 (104) — เขตเมือง vs นอกเมือง: เจอ OSM bulk-import artifact ใน building count, แก้ด้วย amenity/shop density
+
+**ที่มา**: ประเด็นสุดท้ายที่เหลือจาก feedback อาจารย์เรื่อง spatial correlation — "เขตเมือง vs เขตนอกเมือง" ตรวจสอบความเป็นไปได้แล้วพบว่าใช้ OpenStreetMap Overpass API (ฟรี ไม่ต้อง key) ได้จริง
+
+**ความพยายามแรก (ล้มเหลว — เก็บไว้เป็นบทเรียน)**: `scripts/fetch_province_building_density.py` นับจำนวนอาคารในรัศมี 3กม. รอบสถานีแต่ละจังหวัด ได้ผลขัดสามัญสำนึกชัดเจน — **มหาสารคาม 12,939 อาคาร สูงกว่านครราชสีมา (1,322) เกือบ 10 เท่า และขอนแก่น (951) เกือบ 13 เท่า** ทั้งที่ทั้งสองเป็นเมืองใหญ่กว่าจริง ตรวจสอบด้วย `scripts/diagnose_building_count_anomaly.py` (เทียบ tag breakdown ที่รัศมี 1กม.) พบสาเหตุชัดเจน: **อาคารในมหาสารคาม 2,125/2,125 หลัง (100%) มี tag `building=roof` เหมือนกันหมด และมีแค่ 1 หลัง (0.05%) ที่มี tag รายละเอียด (ชื่อ/ที่อยู่)** — เป็นลายเซ็นของ bulk import อัตโนมัติ (เช่น ดึง outline หลังคาจากภาพถ่ายดาวเทียม) ไม่ใช่การ map โดยชุมชนจริง เทียบกับจังหวัดอ้างอิง (โคราช/ขอนแก่น) ที่มี tag หลากหลาย (house/retail/hospital/school) และมี tag รายละเอียด 21-37%
+
+**ทางแก้**: เปลี่ยนมานับ **amenity + shop POI** (ร้านค้า ร้านอาหาร โรงพยาบาล ฯลฯ) แทน building footprint — เพราะต้องมีคน tag ธุรกิจ/สถานที่จริงทีละจุด ไม่ใช่สิ่งที่ import อัตโนมัติได้ง่าย ตรวจสอบก่อนด้วย `scripts/diagnose_amenity_density.py` บน 5 จังหวัดตัวอย่าง — ได้ลำดับสมเหตุสมผล (ขอนแก่น 1,434 > โคราช 852 ตรงกับขนาดเมืองจริง, มหาสารคามลดลงเหลือ 67) แล้วดึงเต็ม 20 จังหวัดด้วย `scripts/fetch_province_amenity_density.py` (field `amenity_density_3km` ใน registry) — **อันดับที่ได้สมเหตุสมผลตรงกับภูมิศาสตร์จริง**: ขอนแก่น/นครราชสีมา/อุดรธานี/อุบลราชธานี (4 เมืองใหญ่ของอีสาน) ขึ้นนำ 4 อันดับแรกพอดี, จังหวัดเล็ก (บุรีรัมย์/อำนาจเจริญ/บึงกาฬ) อยู่ท้ายตาราง
+
+**บทเรียนสำคัญ**: ข้อมูล crowdsourced (OSM) มีความไม่สม่ำเสมอของคุณภาพ/ความสมบูรณ์ในการ mapping สูงมากระหว่างพื้นที่ ต้องตรวจสอบ sanity ก่อนใช้เสมอ ไม่ใช่เชื่อตัวเลขดิบทันที — ขั้นตอนต่อไป (correlation กับ pattern PM2.5 + validate เป็น model feature) จะใช้ `amenity_density_3km` เท่านั้น ไม่ใช้ `building_count_3km` ที่มีปัญหา
+
+**ไฟล์ที่เพิ่ม**: `scripts/fetch_province_building_density.py` (ความพยายามแรก เก็บไว้), `scripts/diagnose_building_count_anomaly.py`, `scripts/diagnose_amenity_density.py`, `scripts/fetch_province_amenity_density.py`, `data/province_station_registry.json` (เพิ่ม `building_count_3km` + `amenity_density_3km`), `CHANGELOG.md` (entry นี้)
+
+## 2026-09-15 (103) — Backtest ฤดูฝุ่นซ้ำบนโมเดลล่าสุด (task A ยังไม่เคยทำกับโมเดลใหม่มาก่อน)
+
+**ที่มา**: ผู้ใช้ถามว่า task A (backtest ช่วงฝุ่นสูง) ทำกับโมเดลล่าสุดหรือยัง — ตรวจแล้วพบว่า `analyze_burning_season_backtest.py` เดิม (CHANGELOG 89) รันบนโมเดลเก่าที่ deploy อยู่ตอนนั้น (`_20260913_014901`) เท่านั้น ยังไม่เคยเช็คโมเดลล่าสุด (`_20260914_211416`, 19 feature) เลย
+
+**วิธีทำ**: `scripts/analyze_burning_season_backtest_latest.py` (ใหม่) — ตรรกะเดียวกับสคริปต์เดิมเป๊ะ เปลี่ยนแค่ `MODEL_TAG`/`DATA_PATH` ให้ตรงกับโมเดลใหม่
+
+**ผลลัพธ์เทียบโมเดลเก่า vs ใหม่**:
+
+| | LGB เก่า | LGB ใหม่ | XGB เก่า | XGB ใหม่ |
+|---|---|---|---|---|
+| MAE ปกติ | 1.96 | **1.86** | 2.00 | **1.90** |
+| MAE ฤดูฝุ่น | 3.66 | **3.45** | 3.79 | **3.61** |
+| MAE t+24 ฤดูฝุ่น | 6.57 | **6.03** | 6.90 | **6.44** |
+| Coverage >p90 | 85.5% | 85.0% | 81.9% | 81.4% |
+
+**สรุป**: โมเดลใหม่**แม่นขึ้นทั้งช่วงปกติและฤดูฝุ่น** (MAE ลดลงสม่ำเสมอ ~5% ตรงกับที่วัดไว้ก่อนหน้านี้) แต่**สัดส่วนที่ MAE แย่ลงช่วงฤดูฝุ่นยังใกล้เคียงเดิม** (+85-90%) และ**coverage ที่ >p90 แทบไม่เปลี่ยน** (85.0%/81.4% ใกล้เคียงเดิมเป๊ะ) — ยืนยันว่าปัญหา coverage ตกช่วงฝุ่นสูง**ไม่ใช่ปัญหาเฉพาะโมเดลเก่า** เป็นข้อจำกัดเชิงโครงสร้างที่ติดมากับทั้ง feature set เดิมและใหม่ (สอดคล้องกับที่ entry 101-102 พบว่าต้องแก้ด้วย calibration technique ต่างหาก ไม่ใช่แค่เปลี่ยน feature) — งานแก้ coverage (per-severity calibration) ที่ทำไปแล้วยังคงมีความเกี่ยวข้องตรงประเด็นไม่ว่าโมเดลไหนจะถูก deploy สุดท้าย
+
+**ไฟล์ที่เพิ่ม**: `scripts/analyze_burning_season_backtest_latest.py`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-15 (102) — ลอง config เพิ่มเติมสำหรับ group-conditional calibration: XGBoost ดีขึ้นต่อเนื่อง, LightGBM นิ่งไม่ตอบสนอง
+
+**ที่มา**: ต่อจาก entry 101 (2-group/top-10% ให้ผลผสม) — ลองตามที่ผู้ใช้ขอ ("ลองทุกทางเลย"): เปรียบเทียบ 3 config พร้อมกัน (2 กลุ่ม top 10% เดิม, 2 กลุ่ม top 5%, 3 กลุ่ม top 5%/5-15%/ที่เหลือ) กับ single q_hat baseline
+
+**วิธีทำ**: `scripts/recalibrate_conformal_configs.py` (ใหม่) — predict P05/P50/P95 ต่อ horizon ครั้งเดียว ใช้ซ้ำกับทุก config (ประหยัดเวลา) จัดกลุ่มด้วย predicted P50 เหมือนเดิม เทียบ coverage ต่อ severity bin ของ actual ในตารางเดียวกันทั้ง 4 วิธี
+
+**ผลลัพธ์ (coverage ที่ severity bin >p90, เป้าหมาย 90%)**:
+
+| Config | LightGBM | XGBoost |
+|---|---|---|
+| single_qhat (เดิม) | 85.0% | 81.4% |
+| 2 กลุ่ม top 10% | 84.5% | 83.7% |
+| 2 กลุ่ม top 5% | 85.1% | 84.7% |
+| **3 กลุ่ม top5/5-15/rest** | 85.1% | **84.9%** |
+
+**ข้อสรุปชัดเจน**:
+- **XGBoost ตอบสนองดีขึ้นต่อเนื่องตามที่กลุ่ม "high" เข้มข้นขึ้น** (81.4% → 84.9%, รวม **+3.5pp**) — 3 กลุ่มให้ผลดีที่สุด แต่ยังไม่ถึงเป้า 90%
+- **LightGBM แทบไม่ตอบสนองเลยไม่ว่าจะปรับ config ไหน** (85.0-85.1% คงที่ทุกแบบ) — ไม่ใช่ปัญหาเรื่อง threshold/จำนวนกลุ่ม แต่เป็นข้อจำกัดเชิงโครงสร้างของโมเดลนี้เอง (น่าจะเป็นเพราะ predicted P50 ของ LightGBM สัมพันธ์กับ actual ที่ severity สูงได้แม่นน้อยกว่า XGBoost ทำให้แถวที่ actual สูงจริงถูกจัดเข้ากลุ่ม "normal" ผิดกลุ่มบ่อยกว่า — ยังไม่ได้ตรวจสอบยืนยันสมมติฐานนี้เพิ่มเติม)
+
+**สรุปโดยรวม**: group-conditional conformal calibration **ช่วยได้บางส่วนสำหรับ XGBoost เท่านั้น** ไม่ใช่ทางแก้ที่สมบูรณ์ทั้ง 2 โมเดล — เป็นข้อจำกัดที่มาจากพื้นฐานของวิธี Mondrian calibration เอง (grouping ต้องอิง predicted ไม่ใช่ actual) ไม่ใช่การ implement ผิด ยืนยันด้วยการลองครบทุก config ที่เสนอไว้แล้ว รายงานผลนี้ให้อาจารย์ตรงไปตรงมาได้ว่าได้ลองวิธีแก้แล้วจริงจัง เห็นข้อจำกัดชัดเจน ไม่ใช่ไม่ได้ลอง
+
+**ไฟล์ที่เพิ่ม**: `scripts/recalibrate_conformal_configs.py`, `models/recalibrate_configs_20260915_161144.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-15 (101) — ลอง group-conditional conformal calibration แก้ coverage ช่วงฝุ่นสูง: ผลผสม ไม่ใช่ทางแก้ที่สมบูรณ์
+
+**ที่มา**: ต่อจาก task A (entry 89) ที่พบ coverage ตกช่วงฝุ่นสูงสุด (>p90 ของค่าจริง) — ลอง Mondrian/group-conditional conformal calibration: แบ่ง calibration split เป็น 2 กลุ่มตาม **predicted P50** ("high"=top 10%, "normal"=ที่เหลือ, จัดกลุ่มด้วยค่าที่รู้ล่วงหน้าเท่านั้นเพื่อไม่ผิดหลัก conformal prediction) คำนวณ q_hat แยกต่อกลุ่ม แทนค่าเดียวรวมทุกอย่าง — ใช้กับโมเดลใหม่ล่าสุด (`_20260914_211416`, 19 feature) ไม่ใช่โมเดลที่ deploy อยู่ตอนนี้ (เหตุผล: ไม่อยากเสียเวลาแก้โมเดลที่จะถูกแทนที่)
+
+**วิธีทำ**: `scripts/recalibrate_conformal_per_severity.py` (ใหม่) — ไม่ retrain quantile model ใหม่ ใช้โมเดลที่เทรนแล้ว แค่เปลี่ยนวิธีคำนวณ q_hat ตอน calibration เท่านั้น เทียบ coverage แยกตาม severity bin ของ**ค่าจริง** (<=p50, p50-p75, p75-p90, >p90 — เหมือน task A) ระหว่าง single q_hat (เดิม) vs group-conditional (ใหม่)
+
+**ผลลัพธ์ (coverage ที่ severity bin >p90)**:
+- **XGBoost: 81.4% → 83.7% (+2.3pp) — ดีขึ้นจริงแต่ยังไม่ถึงเป้า 90%**
+- **LightGBM: 85.0% → 84.5% (-0.5pp) — แทบไม่เปลี่ยน/แย่ลงเล็กน้อย**
+
+ขนาดกลุ่ม calibration "high" (~4,800 แถวเฉลี่ยต่อ horizon) ไม่ใช่ปัญหา (ใหญ่พอสำหรับคำนวณ quantile ได้นิ่ง)
+
+**สาเหตุที่ผลไม่ชัดเจน**: จัดกลุ่มด้วย **predicted P50** (ต้องทำแบบนี้ตามหลัก conformal prediction — ใช้ actual ไม่ได้เพราะยังไม่รู้ตอน predict จริง) แต่ประเมินผลแยกตาม **severity bin ของ actual** — แถวที่ actual สูง (>p90 จริง) แต่โมเดลทายพลาดว่าไม่สูง (predicted P50 ไม่เข้ากลุ่ม "high") จะยังได้ q_hat แคบแบบกลุ่ม "normal" ไปอยู่ดี ไม่ได้ประโยชน์จาก calibration ใหม่เลย — เป็นข้อจำกัดเชิงโครงสร้างของวิธีนี้ ไม่ใช่บั๊ก
+
+**สถานะ**: ยังไม่ใช่ทางแก้ที่สมบูรณ์ — ช่วย XGBoost บางส่วน ไม่ช่วย LightGBM เลย ต้องคุยกับผู้ใช้ต่อว่าจะปรับ threshold/จำนวนกลุ่ม ลองต่อ หรือยอมรับว่านี่คือข้อจำกัดของวิธี Mondrian calibration แบบนี้ ไม่ได้แก้ `app.py` หรือ deploy อะไรในรอบนี้
+
+**ไฟล์ที่เพิ่ม**: `scripts/recalibrate_conformal_per_severity.py`, `models/recalibrate_per_severity_20260915_160858.csv`, `CHANGELOG.md` (entry นี้)
+
 ## 2026-09-14 (100) — เพิ่ม humidity + แยกวิเคราะห์หน้าหนาวใน shap_analysis.py (feedback อาจารย์ข้อ 2, ส่วนสุดท้ายที่เหลือ)
 
 **ที่มา**: ประเด็นย่อยสุดท้ายที่ยังไม่ทำจาก feedback อาจารย์ — "ความชื้น/น้ำค้างในหน้าหนาวมีผลต่อ PM2.5 ไหม" ต่อยอดจาก task E (SHAP plausibility check ที่ทำแค่ precipitation/pressure/wind_speed)

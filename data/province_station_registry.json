@@ -15,7 +15,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": false,
       "n_candidates": 1,
-      "elevation_m": 168.0
+      "elevation_m": 168.0,
+      "building_count_3km": 951,
+      "amenity_density_3km": 1434
     },
     {
       "province_th": "เลย",
@@ -31,7 +33,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 2,
-      "elevation_m": 237.0
+      "elevation_m": 237.0,
+      "building_count_3km": 94,
+      "amenity_density_3km": 155
     },
     {
       "province_th": "หนองคาย",
@@ -47,7 +51,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 6,
-      "elevation_m": 169.0
+      "elevation_m": 169.0,
+      "building_count_3km": 286,
+      "amenity_density_3km": 358
     },
     {
       "province_th": "อุดรธานี",
@@ -63,7 +69,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 1,
-      "elevation_m": 177.0
+      "elevation_m": 177.0,
+      "building_count_3km": 1299,
+      "amenity_density_3km": 812
     },
     {
       "province_th": "นครราชสีมา",
@@ -79,7 +87,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 1,
-      "elevation_m": 182.0
+      "elevation_m": 182.0,
+      "building_count_3km": 1322,
+      "amenity_density_3km": 852
     },
     {
       "province_th": "อุบลราชธานี",
@@ -95,7 +105,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 1,
-      "elevation_m": 123.0
+      "elevation_m": 123.0,
+      "building_count_3km": 2148,
+      "amenity_density_3km": 643
     },
     {
       "province_th": "บุรีรัมย์",
@@ -111,7 +123,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 4,
-      "elevation_m": 223.0
+      "elevation_m": 223.0,
+      "building_count_3km": 57,
+      "amenity_density_3km": 40
     },
     {
       "province_th": "สุรินทร์",
@@ -127,7 +141,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 2,
-      "elevation_m": 149.0
+      "elevation_m": 149.0,
+      "building_count_3km": 94,
+      "amenity_density_3km": 129
     },
     {
       "province_th": "ศรีสะเกษ",
@@ -143,7 +159,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 5,
-      "elevation_m": 127.0
+      "elevation_m": 127.0,
+      "building_count_3km": 5047,
+      "amenity_density_3km": 220
     },
     {
       "province_th": "สกลนคร",
@@ -159,7 +177,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 4,
-      "elevation_m": 176.0
+      "elevation_m": 176.0,
+      "building_count_3km": 277,
+      "amenity_density_3km": 125
     },
     {
       "province_th": "กาฬสินธุ์",
@@ -175,7 +195,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 2,
-      "elevation_m": 143.0
+      "elevation_m": 143.0,
+      "building_count_3km": 190,
+      "amenity_density_3km": 167
     },
     {
       "province_th": "มุกดาหาร",
@@ -191,7 +213,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 4,
-      "elevation_m": 141.0
+      "elevation_m": 141.0,
+      "building_count_3km": 5887,
+      "amenity_density_3km": 202
     },
     {
       "province_th": "ยโสธร",
@@ -207,7 +231,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 1,
-      "elevation_m": 130.0
+      "elevation_m": 130.0,
+      "building_count_3km": 11,
+      "amenity_density_3km": 59
     },
     {
       "province_th": "ชัยภูมิ",
@@ -223,7 +249,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 4,
-      "elevation_m": 188.0
+      "elevation_m": 188.0,
+      "building_count_3km": 356,
+      "amenity_density_3km": 66
     },
     {
       "province_th": "อำนาจเจริญ",
@@ -239,7 +267,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 4,
-      "elevation_m": 163.0
+      "elevation_m": 163.0,
+      "building_count_3km": 763,
+      "amenity_density_3km": 43
     },
     {
       "province_th": "หนองบัวลำภู",
@@ -255,7 +285,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 3,
-      "elevation_m": 227.0
+      "elevation_m": 227.0,
+      "building_count_3km": 28,
+      "amenity_density_3km": 56
     },
     {
       "province_th": "บึงกาฬ",
@@ -271,7 +303,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 4,
-      "elevation_m": 156.0
+      "elevation_m": 156.0,
+      "building_count_3km": 1050,
+      "amenity_density_3km": 47
     },
     {
       "province_th": "นครพนม",
@@ -287,7 +321,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 3,
-      "elevation_m": 149.0
+      "elevation_m": 149.0,
+      "building_count_3km": 377,
+      "amenity_density_3km": 114
     },
     {
       "province_th": "ร้อยเอ็ด",
@@ -303,7 +339,9 @@
       "coverage_overlap_days": 913.0,
       "auto_selected": true,
       "n_candidates": 4,
-      "elevation_m": 149.0
+      "elevation_m": 149.0,
+      "building_count_3km": 70,
+      "amenity_density_3km": 186
     },
     {
       "province_th": "มหาสารคาม",
@@ -319,7 +357,9 @@
       "coverage_overlap_days": 544.9,
       "auto_selected": true,
       "n_candidates": 3,
-      "elevation_m": 149.0
+      "elevation_m": 149.0,
+      "building_count_3km": 12939,
+      "amenity_density_3km": 67
     }
   ],
   "needs_review": []

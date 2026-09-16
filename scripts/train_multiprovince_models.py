@@ -11,7 +11,9 @@ from sklearn.metrics import mean_absolute_error, r2_score
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # task F (CHANGELOG 94) — เพิ่ม pm25_neighbor_avg (spatial-lag feature, validate แล้วว่าช่วย MAE
 # -4.1% ถึง -4.3%) ชี้ไปไฟล์ augmented ใหม่แทนไฟล์เดิม (ดู scripts/augment_raw_dataset_with_spatial_lag.py)
-DATA_PATH = os.path.join(_ROOT, "data", "multiprovince_pm25_features_raw_spatial_20260914_203924.csv")
+# k tuning (CHANGELOG 108) — k=1 ดีกว่า k=3 เดิม +1.43%/+2.07% เปลี่ยนมาใช้ dataset ที่คำนวณ
+# pm25_neighbor_avg ด้วย k=1 แทน (ดู scripts/augment_raw_dataset_with_spatial_lag_k1.py)
+DATA_PATH = os.path.join(_ROOT, "data", "multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv")
 MODEL_DIR = os.path.join(_ROOT, "models")
 TIMESTAMP = dt.now().strftime("%Y%m%d_%H%M%S")
 
