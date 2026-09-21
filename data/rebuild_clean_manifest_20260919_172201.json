@@ -1,0 +1,30 @@
+{
+  "created": "20260919_172201",
+  "offsets": {
+    "khonkaen": 0,
+    "loei": 0,
+    "nongkhai": 0,
+    "udonthani": 0,
+    "nakhonratchasima": 0,
+    "ubonratchathani": 0,
+    "buriram": 0,
+    "surin": 23,
+    "sisaket": 23,
+    "sakonnakhon": 0,
+    "kalasin": 23,
+    "mukdahan": 0,
+    "yasothon": 23,
+    "chaiyaphum": 23,
+    "amnatcharoen": 23,
+    "nongbualamphu": 23,
+    "buengkan": 23,
+    "nakhonphanom": 0,
+    "roiet": 0,
+    "mahasarakham": 23
+  },
+  "raw_k3": "C:\\FinalCS\\ProjectFinalCS\\data\\multiprovince_pm25_features_raw_20260919_172201.csv",
+  "k1": "C:\\FinalCS\\ProjectFinalCS\\data\\multiprovince_pm25_features_raw_spatial_k1_20260919_174749.csv",
+  "with_fire": "C:\\FinalCS\\ProjectFinalCS\\data\\multiprovince_pm25_features_raw_spatial_k1_with_firehotspot_20260919_174756.csv",
+  "final": "C:\\FinalCS\\ProjectFinalCS\\data\\multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv",
+  "old_dataset": "C:\\FinalCS\\ProjectFinalCS\\data\\multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_135009.csv"
+}
