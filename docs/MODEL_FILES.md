@@ -21,7 +21,8 @@ python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).h
 
 ## ที่เก็บสำรอง
 
-- GitHub Release: (ยังไม่ได้อัปโหลด — ใส่ลิงก์ที่นี่หลังอัปโหลด)
+- GitHub Release (repo เป็น private): https://github.com/PJ-113/ProjectFinalCS/releases/tag/model-v3-20260919_203455 — อัปโหลดเมื่อ 2026-09-21 ขนาดตรงกับต้นฉบับ
+  ดาวน์โหลดด้วย `gh release download model-v3-20260919_203455 --repo PJ-113/ProjectFinalCS --dir models` (ต้อง login ด้วยบัญชีที่มีสิทธิ์)
 - สำรองอีกที่ (Drive/ฮาร์ดดิสก์): (ใส่ที่เก็บที่นี่)
 
 ## ถ้าไฟล์หาย
