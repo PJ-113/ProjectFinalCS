@@ -82,7 +82,7 @@ def test_1_circuit_breaker(app):
     result = app.select_model(row, horizon=1, province=_TEST_PROVINCE, r2_lookup=app.fetch_rolling_r2_lookup(_TEST_PROVINCE))
     print(f"select_model() -> {result}")
 
-    passed = ratio > app.SIGMA_CRITICAL and result == "naive_fallback"
+    passed = ratio > app.SIGMA_CRITICAL and result == app.MODEL_NAIVE
     print("RESULT:", "PASS" if passed else "FAIL")
     return passed
 
@@ -99,11 +99,11 @@ def test_2_rolling_r2(app):
     actual = [20 + 8 * np.sin(i / 4) for i in range(30)]
     xgb_pred_good = [a + np.random.uniform(-0.3, 0.3) for a in actual]
     lgb_pred_bad = [a + 8 + np.random.uniform(-1, 1) for a in actual]
-    insert_rows(app, "xgboost_pooled", horizon=5, actual_values=actual, predicted_values=xgb_pred_good, start_hour=0)
-    insert_rows(app, "lightgbm_pooled", horizon=5, actual_values=actual, predicted_values=lgb_pred_bad, start_hour=1000)
+    insert_rows(app, app.MODEL_XGB, horizon=5, actual_values=actual, predicted_values=xgb_pred_good, start_hour=0)
+    insert_rows(app, app.MODEL_LGB, horizon=5, actual_values=actual, predicted_values=lgb_pred_bad, start_hour=1000)
 
-    r2_xgb_a = app.compute_rolling_r2("xgboost_pooled", 5, _TEST_PROVINCE)
-    r2_lgb_a = app.compute_rolling_r2("lightgbm_pooled", 5, _TEST_PROVINCE)
+    r2_xgb_a = app.compute_rolling_r2(app.MODEL_XGB, 5, _TEST_PROVINCE)
+    r2_lgb_a = app.compute_rolling_r2(app.MODEL_LGB, 5, _TEST_PROVINCE)
     r2_lookup = app.fetch_rolling_r2_lookup(_TEST_PROVINCE)
     result_a = app.select_model(normal_row, horizon=5, province=_TEST_PROVINCE, r2_lookup=r2_lookup)
     print(f"[case A] r2_xgb={r2_xgb_a:.3f} r2_lgb={r2_lgb_a:.3f} -> select_model()={result_a} (expected: xgboost_pooled)")
@@ -111,17 +111,17 @@ def test_2_rolling_r2(app):
     # กรณี B: สลับกัน lightgbm_pooled ดีกว่า ที่ horizon=6
     lgb_pred_good = [a + np.random.uniform(-0.3, 0.3) for a in actual]
     xgb_pred_bad = [a + 8 + np.random.uniform(-1, 1) for a in actual]
-    insert_rows(app, "lightgbm_pooled", horizon=6, actual_values=actual, predicted_values=lgb_pred_good, start_hour=0)
-    insert_rows(app, "xgboost_pooled", horizon=6, actual_values=actual, predicted_values=xgb_pred_bad, start_hour=1000)
+    insert_rows(app, app.MODEL_LGB, horizon=6, actual_values=actual, predicted_values=lgb_pred_good, start_hour=0)
+    insert_rows(app, app.MODEL_XGB, horizon=6, actual_values=actual, predicted_values=xgb_pred_bad, start_hour=1000)
 
-    r2_xgb_b = app.compute_rolling_r2("xgboost_pooled", 6, _TEST_PROVINCE)
-    r2_lgb_b = app.compute_rolling_r2("lightgbm_pooled", 6, _TEST_PROVINCE)
+    r2_xgb_b = app.compute_rolling_r2(app.MODEL_XGB, 6, _TEST_PROVINCE)
+    r2_lgb_b = app.compute_rolling_r2(app.MODEL_LGB, 6, _TEST_PROVINCE)
     result_b = app.select_model(normal_row, horizon=6, province=_TEST_PROVINCE, r2_lookup=r2_lookup)
     print(f"[case B] r2_xgb={r2_xgb_b:.3f} r2_lgb={r2_lgb_b:.3f} -> select_model()={result_b} (expected: lightgbm_pooled)")
 
     clear_test_rows(app)
 
-    passed = (result_a == "xgboost_pooled") and (result_b == "lightgbm_pooled")
+    passed = (result_a == app.MODEL_XGB) and (result_b == app.MODEL_LGB)
     print("RESULT:", "PASS" if passed else "FAIL")
     return passed
 
@@ -139,7 +139,7 @@ def test_3_cold_start_both_none(app):
     results = {app.select_model(normal_row, horizon=horizon, province=_TEST_PROVINCE, r2_lookup=r2_lookup) for _ in range(60)}
     print(f"outcomes seen across 60 draws: {results}")
 
-    passed = results == {"xgboost_pooled", "lightgbm_pooled"}
+    passed = results == {app.MODEL_XGB, app.MODEL_LGB}
     print("RESULT:", "PASS" if passed else "FAIL")
     return passed
 
@@ -158,7 +158,7 @@ def test_4_single_none_explores(app):
     # lightgbm_pooled บ้าง (ไม่ fallback ไป xgboost_pooled 100%)
     actual = [20 + 5 * np.sin(i / 3) for i in range(30)]
     xgb_pred = [a + np.random.uniform(-0.3, 0.3) for a in actual]
-    insert_rows(app, "xgboost_pooled", horizon=11, actual_values=actual, predicted_values=xgb_pred, start_hour=0)
+    insert_rows(app, app.MODEL_XGB, horizon=11, actual_values=actual, predicted_values=xgb_pred, start_hour=0)
     r2_lookup_a = app.fetch_rolling_r2_lookup(_TEST_PROVINCE)
     results_a = {app.select_model(normal_row, horizon=11, province=_TEST_PROVINCE, r2_lookup=r2_lookup_a) for _ in range(80)}
     print(f"[A: only xgboost_pooled has data] outcomes across 80 draws: {results_a}")
@@ -167,14 +167,36 @@ def test_4_single_none_explores(app):
 
     # ฝั่ง B: สลับกัน มีแค่ lightgbm_pooled ข้อมูลพอ -> ต้อง explore ไป xgboost_pooled บ้าง
     lgb_pred = [a + np.random.uniform(-0.3, 0.3) for a in actual]
-    insert_rows(app, "lightgbm_pooled", horizon=12, actual_values=actual, predicted_values=lgb_pred, start_hour=0)
+    insert_rows(app, app.MODEL_LGB, horizon=12, actual_values=actual, predicted_values=lgb_pred, start_hour=0)
     r2_lookup_b = app.fetch_rolling_r2_lookup(_TEST_PROVINCE)
     results_b = {app.select_model(normal_row, horizon=12, province=_TEST_PROVINCE, r2_lookup=r2_lookup_b) for _ in range(80)}
     print(f"[B: only lightgbm_pooled has data] outcomes across 80 draws: {results_b}")
 
     clear_test_rows(app)
 
-    passed = (results_a == {"xgboost_pooled", "lightgbm_pooled"}) and (results_b == {"xgboost_pooled", "lightgbm_pooled"})
+    passed = (results_a == {app.MODEL_XGB, app.MODEL_LGB}) and (results_b == {app.MODEL_XGB, app.MODEL_LGB})
+    print("RESULT:", "PASS" if passed else "FAIL")
+    return passed
+
+
+def test_5_force_naive(app):
+    """CHANGELOG 141: force_naive (ไม่มีจังหวัดข้างเคียงที่ข้อมูลสด) ต้องได้ naive_fallback ทุก horizon แม้ feature
+    ที่เหลือครบและ rolling R2 ของโมเดลจะดี — และ NaN เพียง 2 จาก 21 feature ไม่ trigger circuit breaker เอง"""
+    print("\n" + "=" * 90)
+    print("TEST 5: force_naive -> naive_fallback ทุก horizon (ไม่อ่าน rolling R2)")
+    print("=" * 90)
+    normal_row = make_feature_row(app, missing_count=0)
+    lookup = {(app.MODEL_LGB, h): 0.95 for h in range(1, 25)}
+    lookup.update({(app.MODEL_XGB, h): 0.90 for h in range(1, 25)})
+    all_naive = all(app.select_model(normal_row, h, _TEST_PROVINCE, lookup, force_naive=True) == app.MODEL_NAIVE
+                    for h in range(1, 25))
+    not_forced = all(app.select_model(normal_row, h, _TEST_PROVINCE, lookup) == app.MODEL_LGB for h in range(1, 25))
+    two_missing = normal_row.copy()
+    nb_cols = [c for c in ("pm25_neighbor_avg", "nb_trend_12h") if c in app.FEATURE_COLS]
+    two_missing[nb_cols] = np.nan
+    ratio = app.compute_missing_ratio(two_missing)
+    print(f"force_naive ทุก horizon -> naive: {all_naive}; ไม่ force -> เลือกตาม R2: {not_forced}; missing_ratio(2 NaN)={ratio:.3f}")
+    passed = all_naive and not_forced and ratio < app.SIGMA_CRITICAL
     print("RESULT:", "PASS" if passed else "FAIL")
     return passed
 
@@ -186,6 +208,7 @@ if __name__ == "__main__":
         r2 = test_2_rolling_r2(app)
         r3 = test_3_cold_start_both_none(app)
         r4 = test_4_single_none_explores(app)
+        r5 = test_5_force_naive(app)
     finally:
         clear_test_rows(app)  # กันแถวทดสอบตกค้างแม้ assertion จะพังกลางคัน
 
@@ -196,3 +219,4 @@ if __name__ == "__main__":
     print(f"Test 2 (rolling R2 route):       {'PASS' if r2 else 'FAIL'}")
     print(f"Test 3 (cold start, both None):  {'PASS' if r3 else 'FAIL'}")
     print(f"Test 4 (cold start, single None):{'PASS' if r4 else 'FAIL'}")
+    print(f"Test 5 (force_naive):            {'PASS' if r5 else 'FAIL'}")

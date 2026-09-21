@@ -1,5 +1,767 @@
 # Changelog
 
+## 2026-09-20 (155) — Backtest "พยากรณ์วันต่อวัน" ช่วงฝุ่นสูงตาม feedback อาจารย์ (โมเดล v3, ชุดทดสอบ, 1 ก.พ.-30 เม.ย. 2026)
+
+**ที่มา**: อาจารย์แนะนำให้เลือกช่วงที่ฝุ่นสูงจริง (เช่น 1-2 เม.ย.) ใช้ข้อมูลวันก่อนหน้าพยากรณ์วันถัดไป เทียบค่าจริง และวัด Accuracy; backtest เดิม (CHANGELOG 149) ใช้ทั้งฤดูฝุ่นรวมทุก horizon ไม่ได้ทำเป็นกรณีรายวัน
+
+**วิธีทำ**: `scripts/backtest_dayahead_dust_episodes.py` — ออกพยากรณ์ 00:00 น. เวลาไทย (17:00 UTC) ของวัน D+1 ด้วยข้อมูลถึงเวลานั้น พยากรณ์ 24 ชม. = ทั้งวัน D+1; ชุดทดสอบเดิม 17 จังหวัด วันเป้าหมาย 1 ก.พ.-30 เม.ย. 2026 (1,372 จังหวัด-วัน ครบ 24 horizon); กฎตั้งไว้ในหัวสคริปต์ก่อนรัน: ชุด A ทุกวัน / B ค่าจริงเฉลี่ยรายวัน >37.5 / C >75 / วันตัวอย่างอาจารย์ 2 เม.ย. / วันเด่น 3 วันจากค่าเฉลี่ยจริง 17 จังหวัดสูงสุด (13, 5, 17 เม.ย.); เทียบ baseline persistence และ yesterday (ค่าเฉลี่ย 24 ชม.ที่ผ่านมา); Accuracy = 100-MAPE ตัดค่าจริง<5
+
+**ผลลัพธ์** (LightGBM; XGBoost ใกล้เคียง): ชุด A (1,372): MAE รายชม. 3.50 (persistence 4.27), Accuracy 88.2% (persistence 85.4%), coverage 87.6%; MAE ค่าเฉลี่ยรายวัน 3.28 (persistence 4.09, yesterday 6.12). ชุด B (442 วันวิกฤต): MAE 4.76 (persistence 5.50), Accuracy 91.6% (90.1%), coverage 88.6%, bias รายวัน -0.52. ชุด C (45 วัน >75): MAE 10.48 (11.30), Accuracy 91.2%, coverage 80.6% (XGB 72.0%), bias -3.54 (พยากรณ์ต่ำกว่าจริง). วันตัวอย่าง 2 เม.ย. (15 จังหวัด): MAE 4.39 (5.84), Accuracy 92.5%, coverage 96.1%. การแจ้งเตือนค่าเฉลี่ยรายวัน >37.5 (ชุด A): กฎ point recall 0.93 precision 0.87 false alarm 0.07 (พลาด 33 จาก 442, แจ้งผิด 63) เทียบ persistence recall 0.90 (พลาด 43, แจ้งผิด 62) และ yesterday recall 0.83 (พลาด 76, แจ้งผิด 82); กฎ upper (ค่าเฉลี่ยขอบบน P95) recall 1.00 แต่ precision 0.63 false alarm 0.28 (แจ้งผิด 256)
+
+**ข้อควรระวัง**: (1) ชุด B/C เลือกจากค่าจริงสูง จึงมี selection effect (พยากรณ์ต่ำกว่าจริง) และ precision/false alarm นิยามไม่ได้ (ไม่มีวันไม่เกินเกณฑ์) ใช้ recall ได้อย่างเดียว; ชุด A คือภาพรวมที่เชื่อถือได้ (2) ฤดูฝุ่นมีฤดูเดียว (2026) (3) กฎ upper ในสคริปต์เป็นค่าเฉลี่ยขอบบนรายชั่วโมง ไม่ใช่กฎของแอปที่ตัดสินรายชั่วโมง จึงอนุรักษ์เกินจริง (4) ในกราฟ โมเดลมักพยากรณ์ต่อเนื่องจากแนวโน้มปัจจุบัน พลาดจุดเปลี่ยน (เช่น loei ที่ค่าจริงลด แต่พยากรณ์ขึ้น) (5) MAPE ทำให้ Accuracy ช่วงค่าสูงดูสูง (ดู CHANGELOG 139) ควรอ่านคู่กับ MAE
+
+**ไฟล์ที่เพิ่ม**: `scripts/backtest_dayahead_dust_episodes.py`, `models/dayahead_backtest_{daily,summary,baselines}_20260920_2343*.csv` (และรอบแรก 234230 ที่กราฟมีเลย์เอาต์ซ้อน), `figures/dayahead_episode_{2026-04-02,2026-04-13,2026-04-05,2026-04-17}_20260920_234307.png`, `figures/dayahead_scatter_20260920_234307.png`
+
+## 2026-09-20 (154) — ตรวจสถานะสถานีเลย (OpenAQ): เซนเซอร์ PM หยุดส่งตั้งแต่ 15 ก.ย. ไม่มีสถานีสำรอง
+
+**ที่มา**: เลยตอบ HTTP 503 (ไม่มีข้อมูลเลย) ตั้งแต่ CHANGELOG 150 ผู้ใช้ถามสาเหตุ
+
+**วิธีทำ**: `scripts/check_loei_station_status.py` (อ่านอย่างเดียว ไม่พิมพ์คีย์): ตรวจ location 228541, sensor pm25 1317087, และสถานี pm25 อื่นในรัศมี 25 กม.; ตรวจเพิ่มด้วย `/locations/{id}/latest`
+
+**ผลลัพธ์**: location ยังส่งข้อมูลอยู่ (datetimeLast อายุ ~0.8 ชม.) แต่เป็นของ **sensor NO2 (1317092)** เท่านั้น; **sensor pm25 1317087 และ pm10 1317088 หยุดพร้อมกันที่ 2026-09-15 09:00 UTC** (ค่าสุดท้าย 6.8 / 15.0) ทั้ง `/measurements` และ `/hours` ไม่มีแถวใหม่ (ไม่ใช่ปัญหาป้ายเวลา); sensor ชุดใหม่ที่ location เดียวกัน (16312563-65) ข้อมูลล่าสุด 2026-05-21 และ `/sensors/16312565` ตอบ 500 จึงใช้แทนไม่ได้; location อื่นในรัศมี 25 กม. (Provincial Health Office, Loei) ข้อมูลสุดท้าย 2021 — ไม่มีสถานีสำรอง
+
+**สรุป**: สาเหตุที่แท้จริงของการหยุด (เครื่องวัดฝุ่นขัดข้อง/ซ่อม หรือระบบส่งข้อมูลต้นทาง) ยังไม่ทราบ; เลยจะพยากรณ์ไม่ได้จนกว่า sensor 1317087 กลับมา (ระบบตอบ 503 ตามที่ออกแบบ ไม่เดาค่า); ควรตรวจซ้ำเป็นระยะและถ้า OpenAQ เปลี่ยน sensor id ของ pm25 ต้องอัปเดต registry (`province_registry.py` เลือก id ต่ำสุดเสมอ)
+
+**ไฟล์ที่เพิ่ม**: `scripts/check_loei_station_status.py`
+
+## 2026-09-20 (153) — ทดลอง feature จุดความร้อนแบบละเอียด (ไฟข้ามพรมแดน/ต้นลม/FRP): `fire_upwind_250km` ผ่านเกณฑ์ CV และ test แต่ยังไม่ deploy
+
+**ที่มา**: จุดอ่อนหลักคือ MAE ช่วงฝุ่นวิกฤต (>p90) CHANGELOG 135 เคยทดสอบ FRP/ต้นลมแล้วไม่ช่วย แต่ใช้ข้อมูลที่ป้ายเวลาผิด เลือกบน calibration split ที่ไม่มีฤดูฝุ่น และไม่มีไฟข้ามพรมแดน (ข้อมูลเดิมกรอบอีสานเท่านั้น) จึงทดสอบซ้ำแบบตั้งเกณฑ์ก่อนรัน
+
+**วิธีทำ**: `scripts/fetch_firms_hotspots_wide.py` ดึง FIRMS SP กรอบ lon 97-108.5/lat 9.5-22 ช่วง 2024-01-02..2026-07-02 (1,625,483 จุด; `data/firms_hotspots_wide_20260920_181614.csv`) -> `scripts/validate_fire_wide_features_cv.py`: CV แบ่งตามเวลา 4 fold เดิม (CHANGELOG 146) LGB+XGB horizon 1/12/24 เทียบ base 20 feature กับ +C1 (นับ 250 กม.), +C2 (`fire_upwind_250km` นับเฉพาะ sector ต้นลม 90 องศาที่ทิศลม ณ เวลา t), +C3 (ผลรวม FRP 100 กม.), +C4 (รวม 3 ตัว), placebo (ไฟจากอีก 364 วัน) เกณฑ์ตั้งไว้ในหัวสคริปต์ก่อนรัน (>p90 ฤดูฝุ่นดีขึ้น >=2% ทั้ง fold A,C ทั้ง 2 โมเดล, macro ไม่แย่เกิน +0.2%, ชนะ placebo >=1 จุด) -> `scripts/confirm_fire_upwind_on_test.py` ยืนยันบน test ครั้งเดียวด้วย C2 ตัวเดียว
+
+**ข้อผิดพลาดระหว่างทำ**: รอบแรกหน้าต่างเวลา 24 ชม. ผิดหน่วย (pandas ในเครื่องใช้ us แต่กำหนดเป็น ns) ฟีเจอร์ผิด 1,000 เท่า (correlation กับ feature เดิมแค่ 0.10) จับได้จาก sanity check จึงหยุดรอบนั้นทิ้งก่อนได้ผล แก้แล้ว (corr 0.997) และเพิ่ม assert หยุดอัตโนมัติถ้า corr < 0.9
+
+**ผลลัพธ์ CV** (delta% เทียบ base20; LGB / XGB; >p90 ฤดูฝุ่น = เฉลี่ย fold A,C): C1 -2.16/-2.17 (แต่ >p90 fold B +2.6/+3.0); **C2 -2.59/-2.58, macro -0.95/-0.98, MAE ฤดูฝุ่น -1.02/-1.01, MAE รวมดีขึ้นทุก fold ทั้ง 2 โมเดล**; C3 +1.05/+0.42 (ไม่ผ่าน ยืนยันผล CHANGELOG 135); C4 -2.37/-3.44 (แต่ >p90 fold B +4.0/+3.6); placebo +0.53/-0.25 macro +1.20/+1.35 (feature ไร้สัญญาณทำให้ MAE รวมแย่ลง = เกณฑ์กัน noise ทำงาน). ผ่านเกณฑ์: C1, C2, C4; ไม่ผ่าน: C3. การเลือก C2 ตัวเดียวมายืนยันบน test เป็นการตัดสินใจหลังเห็นผล CV (ระบุในสคริปต์)
+**ผล test** (base20 -> +upwind, 5 horizon, LGB / XGB): MAE รวม 2.673->2.655 (-0.65%) / 2.673->2.649 (-0.90%); ฤดูฝุ่น -0.61% / -0.93%; **>p90 5.611->5.538 (-1.31%) / 5.620->5.522 (-1.74%)**; ที่ t+24 >p90 10.39->10.14 (LGB) — ผ่านเกณฑ์ (ไม่แย่ลงทั้งสองโมเดล)
+
+**สรุป**: ได้ประโยชน์จริงแต่เล็กน้อย (>p90 ลด ~1.3-2.6%) **ไม่ได้แก้จุดอ่อนช่วงวิกฤต**; ยังไม่ deploy เพราะต้อง (1) retrain โมเดลด้วย feature นี้ (2) แก้ `app.py` ดึง FIRMS NRT กรอบกว้างและคำนวณต้นลมจากลมปัจจุบัน (3) ตรวจ parity live vs dataset; ข้อจำกัด: NRT เทียบ SP ตรงๆ ไม่ได้ (เหมือนเดิม), ทิศลมตอนเทรนมาจากข้อมูลอากาศย้อนหลังส่วนตอนสดมาจากลมปัจจุบัน (ยังไม่ได้ตรวจความต่าง); ตัดสินใจ retrain ร่วมกับรอบหลังฤดูฝุ่น 2026/27 หรือทำก่อนรอผู้ใช้เลือก
+
+**ไฟที่เพิ่ม**: `scripts/fetch_firms_hotspots_wide.py`, `scripts/validate_fire_wide_features_cv.py`, `scripts/confirm_fire_upwind_on_test.py`, `data/firms_hotspots_wide_20260920_181614.csv`, `data/firms_hotspots_wide_fetch_log_*.csv`, `data/fire_wide_candidate_features_20260920_182955.csv`, `models/validate_fire_wide_features_cv_20260920_182955.csv`, `models/confirm_fire_upwind_on_test_20260920_185519.csv`, `models/_log_*_20260920*.txt`
+
+## 2026-09-20 (152) — คำนวณซ้ำ urban/rural, elevation และ correlation ความชื้นดิบ บนข้อมูลสะอาด/โมเดล v3
+
+**ที่มา**: เอกสารอาจารย์ฉบับแก้ไข (CHANGELOG 149) ระบุว่า 3 ข้อนี้ยังไม่ได้คำนวณซ้ำหลังแก้ป้ายเวลา ไม่ต้อง retrain เพราะเป็นการวิเคราะห์/ทดสอบ feature บนข้อมูลและโมเดลที่มีอยู่
+
+**วิธีทำ**: ทำสำเนา `analyze_elevation_vs_pm25_pattern_clean.py`, `analyze_amenity_density_vs_pm25_pattern_clean.py` (ชี้ dataset สะอาด `..._nbtrend_20260919_174805.csv`); เพิ่ม `analyze_humidity_raw_correlation_clean.py`; รัน `validate_elevation_feature.py`/`validate_amenity_density_feature.py` เดิม (ใช้ `DATA_PATH`/`FEATURE_COLS` ของ train script จึงเป็นข้อมูลสะอาด 20 feature อัตโนมัติ; ข้อความ "19 feature" ในสคริปต์เป็นคอมเมนต์เก่า ตัวเลขจริง 20 vs 21)
+
+**ผลลัพธ์**: urban/rural: r(POI, pm25 เฉลี่ย)=+0.40 (เดิม +0.32), std −0.07, diff −0.03; เพิ่มเป็น feature MAE LGB −0.04% / XGB −0.03%. elevation: r(std)=−0.10, r(diff)=−0.33 (เดิม −0.12/−0.32); feature MAE LGB −0.20% / XGB +0.04% → ข้อสรุปเดิมไม่เปลี่ยน. ความชื้น: **พบว่าตัวเลข −0.79 ถึง −0.95 ในเอกสารเดิมคือ correlation กับ SHAP ไม่ใช่ correlation ดิบ (ระบุผิด)**; correlation ดิบจริง มัธยฐาน −0.42, นอกหน้าหนาว −0.50, หน้าหนาว −0.06
+
+**สรุป**: แก้เอกสาร `docs/advisor_feedback_answers_v3_corrected_19_9.md` ส่วน 1.2–1.3, 2.2 และแถวข้อจำกัด; ไฟล์ผล `models/{elevation_vs_pm25_pattern,amenity_density_vs_pm25_pattern,humidity_raw_correlation_clean}_20260920_*.csv`, log `models/_log_validate_*_20260920.txt`, กราฟใน `figures/`
+
+## 2026-09-19 (151) — `evaluate_live_v2_vs_persistence.py` กรองแถว v3 แทน v2
+
+**ที่มา**: หลัง deploy v3 (CHANGELOG 150) สคริปต์ประเมินสดยังกรอง `model_used LIKE '%%_v2'` ซึ่งเป็นแถวของโมเดลที่ปนเปื้อน
+
+**วิธีทำ**: เปลี่ยนตัวกรองเป็น `'%%_v3'` (คงชื่อไฟล์เดิมเพื่อไม่ให้เอกสารอ้างอิงเสีย); unit test เดิมผ่านครบ (ใช้ข้อมูลสังเคราะห์ ไม่แตะ DB)
+
+**ผลลัพธ์**: ยังไม่ได้รันกับข้อมูลจริง (ต้องรอ scheduler สะสมแถว v3 ที่ครบ horizon)
+
+**สรุป**: ไฟล์ที่แก้: `scripts/evaluate_live_v2_vs_persistence.py`, `CHANGELOG.md`
+
+## 2026-09-19 (150) — Deploy โมเดล v3 (`_20260919_203455`, 20 feature) เข้า `app.py` พร้อม offset ป้ายเวลา OpenAQ + ตัวป้องกัน (P7)
+
+**ที่มา**: ต่อจาก CHANGELOG 144-149 — สลับ `app.py` จากโมเดล v2 (เทรนบนข้อมูลป้ายเวลาผิด และรั่วข้อมูลอนาคตใน feature เพื่อนบ้าน) เป็น v3 บนข้อมูลที่แก้แล้ว
+
+**สิ่งที่เปลี่ยน (`app.py`)**:
+- โมเดล/conformal ชี้ `_20260919_203455`; ชื่อโมเดล `lightgbm_pooled_v3`/`xgboost_pooled_v3` (`MODEL_LGB/MODEL_XGB`); `/api/comparison` รับชื่อ v3, v2 และรุ่นเก่าสุด
+- **offset ป้ายเวลา**: `USE_TIMESTAMP_OFFSET = True`; `fetch_recent_pm25_openaq(sensor_id, hours_back, offset_hours)` ขอ label ย้อนหลังเพิ่ม offset แล้วบวก offset เข้า `datetime_utc`; `get_recent_series` ส่ง offset จาก registry field `openaq_timestamp_offset_hours` (ใช้กับทั้งจังหวัดเป้าหมายและเพื่อนบ้าน)
+- **guard**: ไม่ตัดปลายช่วง request ที่ `now - offset` เจตนาให้จับกรณี OpenAQ แก้ป้ายเวลาแล้ว — ถ้าหลังบวก offset reading ล่าสุดล้ำอนาคตเกิน `OFFSET_FUTURE_TOLERANCE_H` (1 ชม.) จะทิ้ง offset + log เตือน (ไม่งั้นข้อมูลเก่า 23 ชม.จะถูกเลื่อนให้ดูสดโดยเงียบ)
+- neighbor/fire ทำงานเฉพาะเมื่อโมเดลที่โหลดใช้ feature นั้น (`USES_NEIGHBOR`/`USES_FIRE` จาก `FEATURE_COLS`); `force_naive` เฉพาะเมื่อใช้ neighbor; `data_quality` รายงาน `not_used` เมื่อไม่ใช้
+- Frontend: ป้ายชื่อ/สี/ตัวเลือกของ v3 และ v2 (ระบุ "ข้อมูลป้ายเวลาผิด"); `npm run build` แล้ว; `CLAUDE.md` อัปเดต (v3, หัวข้อ OpenAQ timestamp offset, rollback ต้องปิด offset คู่กับโมเดลก่อน v3)
+
+**ผลทดสอบ**: `scripts/test_live_features_v2.py` ผ่านทุกเคส (เพิ่ม T13: offset เลื่อนถูก/ขอ label ย้อนหลังเพิ่ม/guard ทิ้ง offset เมื่อ OpenAQ แก้แล้ว/offset=0 คงเดิม/registry→offset ตามสวิตช์ และ T12จ: โมเดลไม่ใช้ neighbor/fire ไม่ดึงข้อมูล ไม่ force_naive); `test_dynamic_routing.py` 5/5; `verify_app_feature_parity.py` (ฟังก์ชันจริงใน app, dataset สะอาด, ข้อมูลบวก offset): `pm25_neighbor_avg` 99.3%, `nb_trend_12h` 98.8%, fire 100% และเคสที่ต้องใช้นโยบายสำรองลดจาก 11 เหลือ 1 จาก 425 จุด (9 จังหวัดสดตรงเวลาแล้ว); `verify_forecast_all_provinces.py` (ข้อมูลสดจริง): **19/20 จังหวัดตอบ 200, `target_stale` = 0 (เดิม 9 จังหวัดอายุ ~25 ชม.), อายุข้อมูลทุกจังหวัด 1.6 ชม., ทุกจังหวัดใช้เพื่อนบ้านอันดับ 1 (`k1_exact`)**, log ครบ 24 แถว/จังหวัด (`_v3`), ไม่มีคีย์รั่วใน output; เลย = 503 (สถานีไม่มีข้อมูลเลยตั้งแต่ 15 ก.ย. — ขัดข้องจริง)
+
+**ข้อควรระวัง**: (1) ห้ามใช้โมเดลก่อน v3 คู่กับ offset เปิด (และ v3 คู่กับ offset ปิด) (2) ผู้ใช้ต้อง restart `python app.py` (3) แถว `_v2` ใน `prediction_log` (240 แถวจากการทดสอบ CHANGELOG 141) เป็นข้อมูลของโมเดลปนเปื้อน ไม่ควรใช้ประเมิน (4) rolling R² ของ v3 เริ่มจากศูนย์ routing จะสุ่ม LGB/XGB จนมีคู่ >=5 ต่อ horizon (5) ข้อจำกัดเดิมยังอยู่: ยังไม่ทดสอบสดช่วงฝุ่นสูง, NRT vs SP ของ FIRMS ไม่มีหลักฐานตรง, ข้อมูลเทรนสิ้นสุด 2 ก.ค. 2026
+
+**ไฟล์ที่เพิ่ม/แก้**: `app.py`, `frontend/src/views/{ForecastView,CompareView}.vue` (+ `frontend/dist/`), `CLAUDE.md`, `scripts/test_live_features_v2.py`, `scripts/test_dynamic_routing.py`, `scripts/verify_app_feature_parity.py`, `scripts/verify_forecast_all_provinces.py`, `docs/advisor_feedback_answers_v3_corrected_19_9.md`, `CHANGELOG.md`
+
+## 2026-09-19 (149) — ตัด `pm25_neighbor_avg` (20 feature) + เทรนเต็ม v3 + ชุดทดสอบครบบนโมเดลสุดท้าย (`_20260919_203455`)
+
+**ที่มา**: CHANGELOG 148 พบ `pm25_neighbor_avg` แทบไร้ประโยชน์ (ตัดแล้ว MAE -0.04%/-0.11%, SHAP ขัดสมมติฐาน 3/6 จุด) ผู้ใช้ให้ตัดเลยเพื่อไม่ต้องเทรนซ้ำทีหลัง
+
+**วิธีทำ**: `scripts/validate_drop_neighbor_avg_cv.py` — CV บล็อกเวลา 4 fold เดียวกับ CHANGELOG 146 เกณฑ์ non-inferiority ตั้งไว้ก่อนรัน (macro MAE ไม่แย่กว่า +0.2%, ฤดูฝุ่น +0.5%, >p90 ฤดูฝุ่น +1.0% ทั้ง 2 โมเดล); ผ่านแล้วตัดออกจาก `FEATURE_COLS` (`assert len == 20`) และเทรนเต็ม 24 horizon x 3 quantile x 2 โมเดล; สคริปต์ชุดทดสอบ `*_clean.py` ปรับ tag/กลุ่ม ablation/สมมติฐาน SHAP
+
+**ผลลัพธ์**: CV: 20 vs 21 feature macro **-0.51% / -0.38%**, ฤดูฝุ่น -0.84% / -0.61%, >p90 ฤดูฝุ่น -1.16% / -1.31% → ผ่าน (ตัดออกได้และดีขึ้นเล็กน้อย); MAE 20 feature 2.763/2.768 (macro 4 fold) เทียบ 18 feature 2.801/2.805 (-1.4%/-1.3%)
+โมเดลสุดท้าย (test, LGB / XGB): MAE เฉลี่ย 24 horizon **2.780 / 2.778**, R² 0.939 / 0.938, coverage q_hat เดียว 88.8% / 88.0%; ablation baseline 2.673 / 2.673 (5 horizon); ฤดูฝุ่น: MAE ปกติ 1.903 / ฤดูฝุ่น 3.506 (+84.3%; XGB 1.893 / 3.511, +85.5%), t+24 ปกติ 3.290 / ฤดูฝุ่น 6.197, >p90 MAE 5.80 / 5.83, coverage ฤดูฝุ่น 87.6% / 85.9%, >p90 85.3% / 81.7% → แบ่งกลุ่มตามความรุนแรง (3grp_top5_15) >p90 **88.6% / 87.6%**, รวม 89.2% / 88.7%; ensemble simple avg 2.7711 (-0.26% vs best single); Accuracy 87.78% / 87.77% (t+1 98.74/98.75, t+24 78.40/78.28; ปกติ 87.81/87.83, ฤดูฝุ่น 88.00/87.99); correlation ระยะทาง-ความสัมพันธ์ PM2.5 **-0.737** (เดิม -0.644); LOPO corr(ระยะทาง, MAE) +0.214 p=0.41 (LGB) / +0.256 p=0.32 (XGB) ไม่มีนัยสำคัญ, `pm25_std` r=+0.852 / +0.885 p<0.0001; zero-shot จริง (LGB/XGB MAE ; coverage): มหาสารคาม 2.65/2.63 ; 87.4/87.8%, ร้อยเอ็ด 3.23/3.21 ; 83.4/82.4%, นครพนม 4.68/4.71 ; 80.2/78.0%
+Ablation กลุ่ม (LGB/XGB): lag/rolling +8.9/+9.2%, weather +3.0/+2.9%, wind_pressure +1.0/+1.1%, spatial (nb_trend) +0.8/+1.0%, lat_lon +0.5/+0.5%, fire -0.3/-0.2%; เดี่ยว: wind_speed +1.19/+1.48%, temp +1.07/+1.11%, humidity +0.96/+0.92%, nb_trend +0.77/+0.99%, pm25_lag_24 +0.73/+0.51%, ... fire -0.35/-0.16%; SHAP ตรงสมมติฐาน 30/36 (ความชื้นขัด 6/6 เหมือนเดิม), top feature t+24: lag_6, fire, nb_trend, wind_speed/humidity
+
+**เอกสารอาจารย์**: เขียนฉบับแก้ไข `docs/advisor_feedback_answers_v3_corrected_19_9.md` (ประกาศแก้ไข + ตัวเลขใหม่ทั้งหมด) และใส่ประกาศแก้ไขบนหัวเอกสารเดิม 3 ฉบับ (`advisor_feedback_response18_9.md`, `19_9.md`, `advisor_feedback_answers_latest_model_19_9.md`)
+
+**ไฟล์ที่เพิ่ม/แก้**: `scripts/validate_drop_neighbor_avg_cv.py`, `scripts/train_multiprovince_models.py` (FEATURE_COLS 20), `scripts/*_clean.py`, `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260919_203455.pkl` + `conformal_calibration_*_20260919_203455.csv` + `multiprovince_eval_summary_20260919_203455.csv`, `models/validate_drop_neighbor_avg_cv_*.csv`, ผลชุดทดสอบใน `models/*_20260919_20*`/`21*`/`22*`, `CHANGELOG.md`
+
+## 2026-09-19 (148) — โมเดล v3 (`_20260919_185025`, ข้อมูลสะอาด) เทรนเต็ม + ชุดทดสอบครบทุกด้านบนข้อมูลที่ถูกเวลา (P5-P6)
+
+**ที่มา**: ต่อจาก CHANGELOG 145-147 — retrain เต็มด้วยชุด 21 feature + hyperparameter เดิมบน dataset ที่แก้ป้ายเวลา แล้วรันชุดทดสอบเดียวกับที่เคยรายงานอาจารย์ทั้งหมดใหม่ (สคริปต์ `*_clean.py` copy จาก `*_nbtrend.py` เปลี่ยนแค่ tag; รายงานตามจริงแม้ตัวเลขแย่กว่าเดิม)
+
+**ผลลัพธ์ (test set, เฉลี่ยทุก horizon; LGB / XGB)**:
+- MAE(P50) **2.784 / 2.782**, R² 0.938 (v2 ที่รั่ว 2.655/2.655 → สูงกว่า ~4.9%); coverage หลัง conformal (q_hat เดียว) 88.6% / 87.6%
+- Backtest ฤดูฝุ่น (LGB): MAE ปกติ 1.904 / ฤดูฝุ่น 3.513 (+84.5%; XGB +85.7%), t+24 ปกติ 3.286 / ฤดูฝุ่น 6.202; >p90 MAE 5.80 / 5.82; coverage >p90 84.7% / 80.5%, ฤดูฝุ่น 87.4% / 85.4%
+- Calibration แบ่งกลุ่มตามความรุนแรง (3grp_top5_15): coverage >p90 **87.9% / 86.3%** (single q_hat 84.7 / 80.6), รวม 89.0 / 88.3 — ยังต่ำกว่า 90% เล็กน้อย
+- Ensemble vs routing: simple average ชนะโมเดลเดี่ยว -0.24% (MAE 2.7755 vs 2.7822); Dynamic Routing ข้อสรุปเดิมไม่ขัดแย้ง
+- Accuracy (=100-MAPE): 87.74% / 87.73% รวม; t+1 98.74%, t+24 78.32%; ปกติ 87.80% / ฤดูฝุ่น 87.96%
+- **Correlation เชิงพื้นที่** (`analyze_spatial_correlation_clean.py`): corr(ระยะทาง, correlation PM2.5 ระหว่างคู่จังหวัด) = **-0.737** (เดิม -0.644 บนข้อมูลเลื่อนเวลา — แข็งแรงขึ้นเมื่อป้ายเวลาถูก)
+- LOPO 17 จังหวัด (ข้อมูลสะอาด): corr(ระยะทาง, MAE) = +0.282, p=0.27 (เดิม +0.28-0.30, p 0.24-0.29 — สรุปเดิมไม่เปลี่ยน: ไม่มีนัยสำคัญ); ปัจจัยที่อธิบายได้จริง `pm25_std` r=+0.862 (LGB) / +0.890 (XGB) p<0.0001 (เดิม 0.85-0.87)
+- Zero-shot จังหวัดจริง (test, LGB / XGB, MAE ; coverage): มหาสารคาม 2.65 / 2.63 ; 87.3% / 87.6% (เดิม 2.92/2.87 ; 81.7/83.6 — ดีขึ้น), ร้อยเอ็ด 3.24 / 3.22 ; 83.2% / 82.1% (เดิม 3.00/3.00 ; 86.5/85.5 — **แย่ลง**), นครพนม 4.72 / 4.73 ; 80.6% / 78.6% (เดิม 4.78/4.79 ; 72.7/72.3 — coverage ดีขึ้นมาก)
+- **Ablation กลุ่ม** (baseline MAE 5 horizon LGB 2.674 / XGB 2.676; ตัดแล้ว MAE เปลี่ยน): lag/rolling +6.8/+6.8%, weather **+3.2/+3.1%** (เดิม +0.8), wind_pressure **+1.1/+1.1%** (เดิม +0.2), spatial_lag (neighbor_avg+nb_trend) **+0.7/+0.9%** (เดิม +7.2/+7.7 — ส่วนใหญ่เป็นการรั่ว), lat_lon +0.3/+0.3%, fire_hotspot **-0.2/-0.2%** (ตัดแล้วดีขึ้นเล็กน้อย)
+- **Ablation เดี่ยว 21 ตัว**: อันดับสูงสุด wind_speed +1.4%, temp +1.2%, humidity +1.1%, nb_trend_12h +0.8/+0.7%, pm25_lag_24 +0.7%; **pm25_neighbor_avg -0.04/-0.11%** (ไม่ช่วย), fire -0.24/-0.25%; multicollinearity กลุ่ม lag/rolling ทีละตัว +0.25/+0.22% vs ทั้งกลุ่ม +9.1/+8.0% (สคริปต์เทียบค่าที่ hardcode เดิม ใช้ +6.8/+6.8% จาก ablation กลุ่มใหม่)
+- **SHAP** (ทุกๆ 3 แถว test, 7 ตัวแปร x 6 จุด = 42 จุดตรวจ): ตรงสมมติฐาน **33/42** — ฝน/ความกดอากาศ/ลม/nb_trend/fire ตรง 6/6; ความชื้น ขัดสมมติฐาน 6/6 (เหมือนเดิม: เป็นตัวแทนฤดูกาล); `pm25_neighbor_avg` ตรง 3/6 (ขัดที่ t+12 LGB, t+24 ทั้งสองโมเดล — สอดคล้องกับที่ ablation บอกว่า feature นี้แทบไม่มีบทบาท); top feature: t+1 nb_trend_12h/lag_1, t+12 lag_12/nb_trend_12h, t+24 lag_6/fire/nb_trend/humidity/wind_speed (LGB กับ XGB ตรงกัน 5/5 ทุก horizon)
+
+**ข้อสังเกตสำคัญ**: (ก) หลังแก้ป้ายเวลา ความสำคัญของ weather เพิ่มจาก +0.8% เป็น +3.2% และ wind/pressure จาก +0.2% เป็น +1.1% (สมเหตุสมผลทางกายภาพ: เดิมความสัมพันธ์อากาศ-ฝุ่นของ 9 จังหวัดถูกทำลายด้วยการเลื่อน 23 ชม.) ส่วน spatial-lag ลดจาก +7% เหลือ <1% (ข) `nb_trend_12h` เป็น feature ที่ SHAP สูงสุดที่ t+1 แต่ ablation ตัดแล้ว MAE แย่ลงแค่ +0.8% (อาจซ้ำซ้อนกับ lag/weather); `pm25_neighbor_avg` แทบไร้ประโยชน์ และ fire ไม่ช่วย MAE รวม (ช่วยเฉพาะ >p90) (ค) ข้อเสนอ: ชุด 21 ผ่านเกณฑ์ CV แต่ทางเลือก 19 feature (ตัด `pm25_neighbor_avg`) น่าจะเท่ากันโดยง่ายกว่า — ยังไม่ได้ทดสอบ
+
+**ไฟล์ที่เพิ่ม**: `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260919_185025.pkl` + `conformal_calibration_*_20260919_185025.csv` + `multiprovince_eval_summary_20260919_185025.csv`; `scripts/*_clean.py` (8 ไฟล์ + `analyze_spatial_correlation_clean.py`, `analyze_zeroshot_lopo_confounders_clean.py`); `models/zeroshot_lopo_distance_summary_20260919_191542.csv`, `models/spatial_correlation_pairs_clean_20260919_191540.csv`, `figures/spatial_correlation_*_20260919_191540.png`, ผล ablation/SHAP/accuracy/ensemble ใน `models/*_20260919_19*`
+
+## 2026-09-19 (147) — จูน hyperparameter ซ้ำบนข้อมูลสะอาด (P4) + ยืนยันบน test (P5): MAE จริงของ v3 ≈ 2.67; feature ใหม่ทั้งชุดแทบไม่ช่วย MAE รวม
+
+**ที่มา**: ต่อจาก CHANGELOG 145-146 (ข้อมูลสะอาด + ตัดสินชุด feature 21 ตัว ไม่มีเวลาเชิงวงกลม)
+
+**วิธีทำ/ผลลัพธ์**:
+- **P4** `tune_model_hyperparams_pooled.py` (ไม่แก้สคริปต์; `train_mod.DATA_PATH` ชี้ dataset สะอาดแล้ว) random search 20 config/โมเดล เลือกบน calibration: config เดิม (LGB cfg06: lr 0.05, ใบ 63, min_child 50, λ1, 400 ต้น; XGB cfg02: lr 0.03, ลึก 8, min_child_weight 20, λ10, 800 ต้น) ยังอยู่ในกลุ่มบนสุด และผลต่างระหว่าง config ชั้นนำอยู่ในระดับ noise → **ไม่เปลี่ยนค่า** (LGB -0.42% MAE/-0.55% ฤดูฝุ่น; XGB -3.60%/-1.23%; XGB cfg18 -3.66% ต่างระดับ noise)
+- **P5** `scripts/confirm_v3_on_test.py` (แตะ test ครั้งเดียว, P50, 5 horizon) เกณฑ์ตั้งไว้ก่อนรัน: 21-tuned ต้องไม่แย่กว่า 18-tuned ที่ MAE รวมทั้ง 2 โมเดล → **ผ่าน**:
+  LGB: 18-default 2.687 → 18-tuned 2.676 → **21-tuned 2.674** (-0.07%; ปกติ -0.84%, ฤดูฝุ่น **+0.28%**, >p90 -1.47%)
+  XGB: 18-default 2.757 → 18-tuned 2.679 → **21-tuned 2.676** (-0.10%; ปกติ -0.86%, ฤดูฝุ่น **+0.23%**, >p90 -2.07%)
+
+**สรุป/ความซื่อสัตย์**: (ก) **MAE จริงของโมเดลบนข้อมูลถูกเวลา ≈ 2.67** สูงกว่า 2.54 ของโมเดลรั่ว (v2) ราว 5% (เทียบตรงๆ ไม่ได้เต็มที่: แถวข้อมูลต่างกันเล็กน้อย) (ข) feature ใหม่ทั้ง 3 ตัว (neighbor k=1, nb_trend_12h, fire) ให้ MAE รวมแทบไม่ต่างจาก 18 feature (-0.07%/-0.10%) ช่วยช่วงปกติ ~-0.85% และฝุ่นวิกฤต ~-1.5 ถึง -2% แต่แย่ลงเล็กน้อยในฤดูฝุ่น (+0.25%) (ค) ประโยชน์จริงที่ใหญ่ที่สุดของงานกลุ่มนี้คือการจูน XGBoost (default → จูน -2.9%) ส่วน LightGBM ได้ ~0.4% (ง) ทางเลือกที่เรียบง่ายกว่า (18 feature ไม่พึ่ง neighbor/FIRMS) มี MAE ต่างจาก 21 feature ไม่ถึง 0.1% — ผู้ใช้ตัดสินใจได้หลังเห็นผล battery
+
+**ไฟล์ที่เพิ่ม**: `scripts/confirm_v3_on_test.py`, `models/tune_model_hyperparams_pooled_20260919_182751.csv`, `models/confirm_v3_on_test_*.csv`, `CHANGELOG.md`
+
+## 2026-09-19 (146) — ประเมิน feature ใหม่บนข้อมูลสะอาด (P3): ประโยชน์จริงของชุด 21 feature ≈ -0.9% ไม่ใช่ -4% ถึง -8%; ตัดสินชุด v3 = 21 ตัว ไม่ใช้เวลาเชิงวงกลม
+
+**ที่มา**: ผลของ feature จังหวัดข้างเคียง/nb_trend/fire ทั้งหมดก่อนหน้านี้วัดบนข้อมูลที่ป้ายเวลาผิด (CHANGELOG 144) จึงวัดใหม่บน dataset สะอาด (CHANGELOG 145) โดยไม่เชื่อผลเดิม
+
+**วิธีทำ**:
+1. `scripts/validate_features_clean.py` — เลือกบน calibration split (P50, horizon [1,12,24], LGB+XGB, hyperparameter ชุดเดิมเป็นค่าตั้งต้น, baseline 18 feature ไม่มี neighbor/fire/nb_trend) เทียบ +nb_k1/k2/k3/k5, +fire, +nb_k1+trend, ชุด 21, +time_cyclical
+2. `scripts/validate_features_timeblocked_cv.py` — เพราะ calibration (ก.ย.-ม.ค.) แทบไม่มีเดือนฤดูฝุ่น จึงทำ rolling-origin CV 4 fold (A ฤดูฝุ่น 2025, B ก.ย. 2025-ม.ค. 2026, C ฤดูฝุ่น 2026, D พ.ค.-มิ.ย. 2026; train = ทุกแถวถึง val_start-24h) **เกณฑ์ตัดสินเขียนไว้ในสคริปต์ก่อนรัน**: ใช้ feature ต่อเมื่อ macro MAE ดีขึ้น >=0.5% ทั้ง 2 โมเดล และ MAE fold ฤดูฝุ่นไม่แย่ลง >0.5% และ >p90 ฤดูฝุ่นไม่แย่ลง >1%
+
+**ผลลัพธ์ (calibration, MAE รวม LGB/XGB เทียบ baseline 18)**: +fire -2.7/-3.1%; +nb_k1 เดี่ยว -0.4/-0.3% (k=2,3,5 ≈ 0 ถึง +0.3%); +nb_k1+trend -1.9/-1.9%; ชุด 21 -4.3/-4.6% แต่ >p90 +1.1/+0.6%; +time_cyclical -2.9/-3.3% แต่ฤดูฝุ่น +2.0/+2.4% (calibration มองไม่เห็นฤดูฝุ่น)
+**ผล CV บล็อกเวลา (macro 4 fold, MAE เฉลี่ย 3 horizon, LGB/XGB)**: 18 = 2.801/2.805; +fire = 2.798/2.795 (-0.1/-0.4%; ดีขึ้นเฉพาะ fold B และ >p90); ชุด 21 = **2.777/2.779** (-0.9/-0.9% เทียบ 18; >p90 macro -1.7/-2.0%); 21+time = 2.825/2.831 (แย่ลง +1.7/+1.9% macro และ +3.5/+3.6% ในฤดูฝุ่น)
+**ตัดสินตามเกณฑ์ที่ตั้งไว้ก่อน**: (1) neighbor ชุด k=1+nb_trend ผ่าน (macro -0.75/-0.59%, ฤดูฝุ่น -0.55/-0.33%, >p90 ฤดูฝุ่น -0.36/-1.31%); (2) เวลาเชิงวงกลม ไม่ผ่าน → **ชุด v3 = 21 feature เดิม ไม่มี time_cyclical**
+
+**สรุป/ความซื่อสัตย์**: (ก) ประโยชน์จริงของ feature ใหม่ทั้งชุดเมื่อเทียบ baseline อยู่ที่ราว **1% ของ MAE รวม** (ราว 2% ที่ฝุ่นวิกฤต) ไม่ใช่ 4-8% ที่เคยรายงาน (ข) fire ที่ดูเด่นบน calibration (-2.7%) เกือบไม่ช่วย MAE รวมเมื่อดูทุกช่วงเวลา ดีเฉพาะฝุ่นวิกฤตและช่วงปลายฝน-หนาว (ค) neighbor เดี่ยวๆ ไม่ช่วย แต่ nb_trend ช่วยจริง (ค่าเฉลี่ยรวม -1.5% บน calibration) (ง) ผล calibration split มองดีเกินจริงเมื่อ feature ทำงานดีเฉพาะช่วงที่ calibration ครอบคลุม — ควรใช้ CV บล็อกเวลาตัดสินเรื่องที่เกี่ยวกับฤดูกาลเสมอ (จ) `train_multiprovince_models.py` ชี้ dataset สะอาด (`..._nbtrend_20260919_174805.csv`) แล้ว
+
+**ไฟล์ที่เพิ่ม/แก้**: `scripts/validate_features_clean.py`, `scripts/validate_features_timeblocked_cv.py`, `scripts/train_multiprovince_models.py` (DATA_PATH), `models/validate_features_clean_*.csv`, `models/validate_features_timeblocked_cv_*.csv`, `CHANGELOG.md`
+
+## 2026-09-19 (145) — แก้ป้ายเวลา OpenAQ 9 สถานี: registry มี offset ต่อสถานี + สร้าง dataset ใหม่ที่ถูกเวลา (P0-P2 ของแผน retrain สะอาด)
+
+**ที่มา**: CHANGELOG 144 พบป้ายเวลาของ `/measurements` เลื่อน +23 ชม. ใน 9 สถานี ทำให้ feature จังหวัดข้างเคียงรั่วข้อมูลอนาคต ผู้ใช้เลือกแก้ข้อมูลที่ต้นทางแล้ว retrain/ประเมินทั้งหมด
+
+**วิธีทำ/ผลลัพธ์**:
+- **P0** `scripts/annotate_registry_timestamp_offset.py`: วัด offset ต่อสถานีด้วย `/hours` vs `/measurements` 2 ช่วง (ล่าสุด, มี.ค. 2025) ต้องตรงกัน → เขียน field `openaq_timestamp_offset_hours` ใน `data/province_station_registry.json` (9 จังหวัด = 23, ที่เหลือ 0; ทุกสถานี diff = 0.0000 ทั้ง 2 ช่วง); สำรองไฟล์เดิม `data/province_station_registry_backup_20260919_171902.json`; field ใหม่ไม่กระทบสคริปต์เดิม
+- **P1** แก้ `build_raw_dataset_multiprovince.py:fetch_pm25(sensor_id, offset_hours)` (ดึง label เลื่อนลง offset แล้วบวกกลับ; offset=0 พฤติกรรมเดิม) และ `compute_fire_hotspot_feature.py` (path input/output override ได้) + `scripts/rebuild_dataset_clean.py` เรียก 4 ขั้น build → k=1 → fire → nb_trend ต่อกัน (26 นาที): dataset ใหม่ 343,279 แถว (เดิม 342,508; ต่างเล็กน้อยจากขอบช่วงเวลา/ข้อมูลที่ขาดหายของ OpenAQ) `data/multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv` + manifest `data/rebuild_clean_manifest_20260919_172201.json`
+- **P2** `scripts/verify_clean_dataset_alignment.py`: (ข) pm25 ของ 9 จังหวัดตรงกับ `/hours` 100% ทุกช่วง; (ค) 20 จังหวัดครบ ไม่มี NaN; (ก) cross-correlation คู่ "เคยเลื่อน vs ปกติ" peak lag จาก −21..−26 ชม. → **−3..+2 ชม.** และ r ที่ lag 0 เท่ากับ peak r (เช่น surin–buriram 0.88→0.96 ปี 2024) ✅
+  **ความซื่อสัตย์เรื่องเกณฑ์**: ตอนแรกตั้งเกณฑ์ |peak lag| <= 1 ชม. ก่อนเห็นข้อมูล — ไม่ผ่านตามตัวอักษร (7 จาก 23 ช่อง) แต่คู่ควบคุมปกติ-ปกติ (ไม่เคยมีปัญหาป้ายเวลา) ใน dataset เดียวกันมี peak lag ตามธรรมชาติถึง ±6 ชม. (มัธยฐาน 3, ≤1 ชม. เพียง 27%) เพราะฝุ่นเคลื่อนข้ามจังหวัดใช้เวลา จึงเปลี่ยนเกณฑ์เป็น "ไม่เกินค่าสูงสุดของคู่ควบคุม (6 ชม.)" และตัดคู่ที่ peak r < 0.7 (บึงกาฬ–หนองคาย ปี 2024/2026, r 0.66/0.57 หา peak ไม่เสถียร) ออกจากเกณฑ์ — **ปรับเกณฑ์หลังเห็นข้อมูล** แต่ปรับเทียบกับคู่ควบคุมที่วัดจาก dataset เดียวกัน ไม่ใช่ปรับให้ผ่าน
+
+**ไม่ได้แก้**: `app.py` (ยังไม่ใช้ offset — จะทำใน P7 พร้อมโมเดล v3; ถ้าใช้ offset กับโมเดล v2 ที่เทรนบนข้อมูลผิดป้ายเวลาจะยิ่งไม่สอดคล้อง), โมเดล v2, dataset เดิม (คงไว้ตามธรรมเนียมไม่ลบ)
+
+**ไฟล์ที่เพิ่ม/แก้**: `scripts/annotate_registry_timestamp_offset.py`, `scripts/rebuild_dataset_clean.py`, `scripts/verify_clean_dataset_alignment.py`, `scripts/build_raw_dataset_multiprovince.py` (แก้), `scripts/compute_fire_hotspot_feature.py` (แก้), `data/province_station_registry.json` (เพิ่ม field), dataset/manifest/backup ข้างต้น, `CHANGELOG.md`
+
+## 2026-09-19 (144) — พบป้ายเวลา OpenAQ /measurements เลื่อน +23 ชม. ใน 9 สถานี: ข้อมูลเทรนปนเปื้อนและ feature จังหวัดข้างเคียงรั่วข้อมูลอนาคต
+
+**ที่มา**: ผู้ใช้ให้ลองหา sensor สำรองที่สดกว่าให้ 9 จังหวัดที่ดูเหมือน "ข้อมูลเก่า 25 ชม." (CHANGELOG 141/140) — พบว่ามี sensor ที่สดกว่าอยู่แล้วที่สถานีเดิม (`datetimeLast` ของ location สด 0.9 ชม.) เพียงแต่ endpoint `/measurements` ที่แอปและตอนเทรนใช้ให้ข้อมูลตามหลัง 25 ชม.
+
+**วิธีทำ/ผลลัพธ์**:
+1. `/hours` และ `/latest` ของ 9 สถานีที่ช้าสดเท่าสถานีปกติ; ที่เวลาเดียวกัน `/hours(t)` ไม่ตรง `/measurements(t)` (ต่างเฉลี่ย 2.5-3.1 µg/m³) แต่ **ตรงเป๊ะ 100% เมื่อเลื่อน 23 ชม.** (`hours(t) == measurements(t-23h)`); สถานีปกติเลื่อน 0
+2. `scripts/check_openaq_timestamp_shift.py` (ครบ 20 จังหวัด × 4 ช่วง: ปัจจุบัน, มี.ค. 2024/2025/2026): **9 จังหวัดเลื่อน +23 ชม. คงที่ทุกช่วง** = surin, sisaket, kalasin, yasothon, chaiyaphum, amnatcharoen, nongbualamphu, buengkan, mahasarakham; อีก 11 จังหวัดเลื่อน 0
+3. ยืนยันว่า `/hours` คือเวลาที่ถูก: สุรินทร์เทียบบุรีรัมย์ (ปกติ ~43 กม.) สหสัมพันธ์สูงสุดที่ lag 0 (r=0.979) เมื่อใช้ `/hours` แต่สูงสุดที่ lag -23 ชม. เมื่อใช้ `/measurements`; และใน dataset เทรน (สร้างจาก `/measurements`) คู่สถานีเลื่อน-ปกติ 8 คู่มี peak lag -21 ถึง -26 ชม. ทุกปี 2024-2026 (r 0.9+) → **ข้อมูลเทรนของ 9 จังหวัดมีป้ายเวลาผิด 23 ชม. ตลอดประวัติ** ("ข้อมูลเก่า 25 ชม." ที่รายงานก่อนหน้าคือป้ายเวลาผิด ไม่ใช่สถานีขัดข้อง; เลยขัดข้องจริงตั้งแต่ 15 ก.ย.)
+4. `scripts/analyze_timestamp_shift_leakage.py`: เทรน/ทดสอบเฉพาะ 9 จังหวัดที่ป้ายเวลาของตัวเองถูก (P50, hyperparameter จูนแล้ว, 5 horizon); 7 ใน 9 จังหวัดมีเพื่อนบ้านอันดับ 1 เป็นสถานีเลื่อน (buriram→surin, khonkaen→mahasarakham, loei→nongbualamphu, mukdahan→amnatcharoen, nakhonratchasima→chaiyaphum, ubonratchathani→sisaket, udonthani→nongbualamphu) → `pm25_neighbor_avg`/`nb_trend_12h` ในแถวเทรนมีข้อมูลอนาคต 23 ชม.รั่วเข้ามา; ตรวจสูตรแล้ว (จังหวัดไม่เสี่ยง feature ที่คำนวณใหม่ตรงของเดิม 99.8%)
+
+| MAE เทียบ "ไม่มี neighbor" (C), กลุ่มเสี่ยงรั่ว, LGB t+1 / t+12 / t+24 | ผล |
+|---|---|
+| A: feature เดิม (มีรั่ว) | -0.8% / -13.2% / **-28.3%** |
+| B: แก้ป้ายเวลา (ไม่รั่ว) | +0.4% / -1.2% / **-1.4%** |
+| D: เทรนแบบ A แต่ใช้ feature ไม่รั่ว (= สถานการณ์ live ของโมเดลที่ deploy) | **+2.9% / +3.8% / +8.8%** (แย่กว่าไม่มี neighbor เลย) |
+
+รวมทั้ง 9 จังหวัด: A -0.4/-9.6/-20.2%, B +0.2/-1.6/-1.3%, D +2.2/+2.8/+7.2% (XGB ใกล้เคียงกัน: D +2.2/+3.4/+6.6%); กลุ่มไม่เสี่ยง (nongkhai, sakonnakhon): A ไม่ช่วย (+0.1 ถึง +2.7%), B ช่วยจริง -0.9 ถึง -2.5%
+
+**สรุป**: (ก) ประโยชน์จริงของ feature จังหวัดข้างเคียงประมาณ -1% ถึง -2.5% ไม่ใช่ -4% ถึง -28% ตามที่รายงาน (CHANGELOG 94-110, 133-137, เอกสารอาจารย์ `advisor_feedback_response18_9/19_9/answers_latest_model_19_9`) — ผลส่วนใหญ่เป็นการรั่วของข้อมูลอนาคต (ยิ่ง horizon ไกลยิ่งมาก); (ข) โมเดล `_20260919_135655` ที่ deploy เป็น v2 (CHANGELOG 141) พึ่ง feature ที่รั่วนี้ ตอนใช้งานจริงซึ่งไม่มีข้อมูลอนาคตให้ จึงแย่กว่าโมเดลที่ไม่มี neighbor เลย 2-9% ในจังหวัดที่เพื่อนบ้านเป็นสถานีเลื่อน (ผลจากการทดลองที่เทรนเฉพาะ 9 จังหวัดปกติ ซึ่งบ่งชี้ทิศทาง ไม่ใช่ตัวเลขของโมเดลที่ deploy ตรงๆ); (ค) ผลเชิงพื้นที่ที่คำนวณจากข้อมูลนี้ (correlation ระยะทาง -0.644, LOPO/zero-shot, ablation กลุ่ม spatial-lag +7%) ต้องตรวจซ้ำ; (ง) วิธีแก้ที่ถูก = เลื่อนซีรีส์ 9 สถานี +23 ชม. (หรือดึงจาก `/hours`) แล้วสร้าง feature ทั้งหมดใหม่ เทรนใหม่ และประเมินใหม่ — ยังไม่ได้ทำ; live inference ของ 9 จังหวัดต้องใช้ `/hours` ไม่ใช่ `/measurements` ดิบ
+
+**ไม่ได้แก้**: `app.py`, โมเดล, dataset (รอผู้ใช้ตัดสินใจ)
+
+**ไฟล์ที่เพิ่ม**: `scripts/check_openaq_timestamp_shift.py`, `scripts/analyze_timestamp_shift_leakage.py`, `models/check_openaq_timestamp_shift_*.csv`, `models/analyze_timestamp_shift_leakage_*.csv`, `models/probe_alternative_sensors_*.csv`, `CHANGELOG.md`
+
+## 2026-09-19 (143) — ปิดช่องว่างของกลไกสำรอง: ทดสอบ get_forecast ตลอดเส้นทาง + วัด coverage ตอนใช้นโยบายสำรอง
+
+**ที่มา**: ผู้ใช้ถามว่ากลไกสำรอง (CHANGELOG 141) ok หรือยัง — ตรวจแล้วพบ 2 ช่องว่าง: (ก) เส้นทาง "ไม่มีเพื่อนบ้านสดเลย" ยังไม่เคยรันทั้งฟังก์ชัน `get_forecast()` (รอบข้อมูลสดทุกจังหวัดมีเพื่อนบ้านสดอย่างน้อยหนึ่งจังหวัด ทดสอบได้แค่ระดับฟังก์ชันย่อย) (ข) E4 (CHANGELOG 140) วัดแค่ MAE ของนโยบายสำรอง ไม่เคยวัด coverage ของช่วงความเชื่อมั่น ทั้งที่ตอนรันสด ~10 จาก 19 จังหวัดใช้นโยบายเฉลี่ย 3 อันดับอยู่
+
+**วิธีทำ**: (ก) เพิ่ม T12 ใน `scripts/test_live_features_v2.py` — เรียก `get_forecast()` จริงด้วยข้อมูลสังเคราะห์ (ปิดเครือข่าย/DB/NLG โดย monkeypatch) 4 สถานการณ์: ปกติ / ไม่มีเพื่อนบ้านสด / ข้อมูลเป้าหมายเก่า 10 ชม. / ไม่มีข้อมูลเลย (ข) `scripts/check_fallback_interval_coverage.py` วัด coverage ของช่วง P05/P95 + q_hat ต่อ horizon (ไฟล์ conformal ที่ deploy จริง) บน test set, 5 horizon, เปรียบเทียบ baseline กับนโยบายสำรองแต่ละแบบ
+
+**ผลลัพธ์**:
+- (ก) ผ่านทั้ง 4: ไม่มีเพื่อนบ้านสด → `naive_fallback` ครบ 24 horizon ตลอด get_forecast ค่า = ค่าปัจจุบัน ไม่มี NaN ช่วงความเชื่อมั่นกว้าง 0 `fallback_triggered_horizons` = 1..24 และยังบันทึก log ด้วยชื่อ naive; ข้อมูลเก่า → ตอบพร้อม `target_stale` แต่ไม่ log/ไม่ทำ NLG; ไม่มีข้อมูล → `DataUnavailableError`; ปกติ → โมเดล v2 พร้อม flag `fire_source="unavailable"`, fire=0
+- (ข) coverage เฉลี่ย 5 horizon (เป้า 90%; LGB / XGB): baseline 88.6 / 87.9; **avg 3 nearest (นโยบายที่ใช้) 87.8 / 87.2** (ลดลงเพียง 0.7-0.8 จุด; ฤดูฝุ่น 86.3 / 84.9; >p90 83.5 / 80.6 เทียบ baseline 83.9 / 81.1); mean of others 86.6 / 86.3; stale 24h hold 86.1 / 85.8 (แย่สุด) ความกว้างช่วงแทบเท่าเดิม → นโยบาย avg 3 nearest เป็นตัวเลือกที่ดีที่สุดทั้งด้าน MAE และ coverage
+
+**สรุป**: กลไกสำรองพอใช้ — ช่วงความเชื่อมั่นเสียหายน้อยมากเมื่อใช้นโยบายสำรอง จึงไม่ต้องปรับ q_hat/ขยายช่วงเพิ่ม; ข้อจำกัดที่ยังเหลือ: (1) เมื่อ force_naive ช่วงกว้าง 0 และการแจ้งเตือนความเสี่ยงเทียบค่าพยากรณ์ตรงๆ ไม่มี margin (พฤติกรรมเดิมของ naive_fallback) ความไวของการเตือนจึงต่ำลง (2) เกณฑ์ "สด" 3 ชม. วัดแล้ว (E4) แต่เกณฑ์ stale 6 ชม. ของจังหวัดเป้าหมายตั้งจากดุลยพินิจ ไม่ได้วัด (3) trend เมื่อเพื่อนบ้านมีประวัติสั้น เป็นค่าประมาณ (4) ยังไม่ทดสอบ concurrency ระหว่าง scheduler กับ request ผู้ใช้พร้อมกัน
+
+**ไฟล์ที่เพิ่ม/แก้**: `scripts/test_live_features_v2.py` (เพิ่ม T12), `scripts/check_fallback_interval_coverage.py`, `models/check_fallback_interval_coverage_*.csv`, `CHANGELOG.md`
+
+## 2026-09-19 (142) — สคริปต์ตรวจโมเดล v2 บนข้อมูลสดเทียบ persistence (`evaluate_live_v2_vs_persistence.py`)
+
+**ที่มา**: หลัง deploy v2 (CHANGELOG 141) พบว่า `prediction_log` ไม่มีแถวของรุ่นเก่าเลย (มีแต่ v2 240 แถวจากการทดสอบ G4, ไม่มีแถวใดมีค่าจริง) หน้า `/compare` จึงเทียบ "รุ่นเก่า vs ใหม่" ไม่ได้ (คำแนะนำก่อนหน้านี้ที่ให้ดูหน้า compare เทียบรุ่นเก่าไม่ถูกต้อง) — ทางที่ทำได้จริงคือเทียบกับ persistence (พยากรณ์ = ค่าปัจจุบัน) ซึ่งคำนวณได้เสมอจาก `latest_pm25` ใน `notification_log` (recorded_at_utc = predicted_at_utc) บนแถวชุดเดียวกัน
+
+**วิธีทำ**: `scripts/evaluate_live_v2_vs_persistence.py` (อ่านฐานข้อมูลอย่างเดียว ไม่แก้ app.py/ตาราง): จับคู่แถว v2 ที่มีค่าจริงกับ persistence → MAE/bias/coverage/ความกว้างช่วง แยกตามช่วง horizon, ตามโมเดล และตามจังหวัด; เกณฑ์ตัดสินตั้งก่อนดูผลที่ horizon 12-24 ชม. (t+1 ค่าแทบไม่เปลี่ยน ใช้ตัดสินไม่ได้): คู่ <300 = "ข้อมูลยังไม่พอ", v2 ดีกว่า persistence >=10% = PASS, 0-10% = WARN, แย่กว่า = FAIL (สงสัย pipeline ข้อมูลสด ให้ดู `data_quality`) — ตรรกะ `evaluate()` แยกเป็นฟังก์ชันบริสุทธิ์และมี `scripts/test_evaluate_live_v2_vs_persistence.py` (8 เคส ค่าคำนวณด้วยมือ) ผ่านครบ
+
+**ผลลัพธ์**: รันกับ DB จริงได้ (หลังเรียก `backfill_actuals` เติมค่าจริงให้ 10 จังหวัด): ได้ค่าจริง 9 จาก 240 แถว (ทั้งหมดเป็น t+1, MAE v2 0.133 vs persistence 0.178, coverage 100%) — ยัง "ข้อมูลยังไม่พอ" ต้องรอให้ scheduler ทำงานต่อ ~1-2 วัน (ผลย้อนหลังคาดว่า v2 ดีกว่า persistence ~16% ที่ horizon ไกล: MAE 2.54 เทียบ 3.03)
+
+**ข้อจำกัด**: ตอบว่า "ระบบสดไม่เพี้ยน" ไม่ได้ตอบว่า "ดีกว่ารุ่นเก่า" (ดู CHANGELOG 137); ช่วงฝุ่นต่ำทุกวิธี MAE ต่ำหมด ยังไม่ทดสอบตอนฝุ่นสูง
+
+**ไฟล์ที่เพิ่ม**: `scripts/evaluate_live_v2_vs_persistence.py`, `scripts/test_evaluate_live_v2_vs_persistence.py`, `CHANGELOG.md`
+
+## 2026-09-19 (141) — Deploy โมเดล `_20260919_135655` (21 feature) เข้า `app.py` พร้อมกลไกสำรองจังหวัดข้างเคียง/จุดความร้อน
+
+**ที่มา**: ผู้ใช้ตัดสินใจใช้โมเดลใหม่ทันที (ไม่รันคู่ขนาน) หลัง CHANGELOG 140 สรุป go-with-fallback — `app.py` เดิมใช้โมเดล `_20260913_014901` (23 feature ไม่มี neighbor/fire) และเปลี่ยน path อย่างเดียวจะ KeyError ทุกจังหวัดที่ `build_feature_row()`
+
+**สิ่งที่เปลี่ยน (`app.py`)**:
+- โมเดล/conformal ชี้ `_20260919_135655`; ชื่อโมเดลใหม่ `lightgbm_pooled_v2` / `xgboost_pooled_v2` (ค่าคงที่ `MODEL_LGB/MODEL_XGB/MODEL_NAIVE`) กัน `compute_rolling_r2()` ปนผลรุ่นเก่า แถวเก่าใน `prediction_log` คงชื่อเดิม; ไม่เปลี่ยน schema DB
+- แชร์ข้อมูล OpenAQ ผ่าน cache (`get_recent_series`: เป้าหมาย TTL 5 นาที strict, เพื่อนบ้าน TTL 30 นาที ล้มเหลวได้) — จำนวน request ต่อรอบ scheduler เท่าเดิม
+- `compute_neighbor_features()`: เพื่อนบ้านอันดับ 1 สด (<=3 ชม.) → สูตรเทรนเป๊ะ; ไม่สด → เฉลี่ย 3 อันดับสดที่ใกล้สุด (E4: +2.4/+2.5% MAE); ไม่มีสดเลย → `force_naive` ทุก horizon (NaN แย่กว่า persistence +32%/+65%; NaN 2/21=0.095 < SIGMA_CRITICAL จึงต้องมี flag แยกใน `select_model(..., force_naive)`)
+- `get_fire_hotspots()`/`count_fire_hotspots()`: FIRMS NRT 1 request/ชม. ทั้ง bbox แชร์ทุกจังหวัด; ล้มเหลว/ไม่มี `FIRMS_KEY` → cache ≤6 ชม. หรือ 0 (ไม่ล่ม, ไม่ log URL/คีย์)
+- `get_forecast()`: ตอบ `data_quality`; ถ้า reading ของจังหวัดเป้าหมายเก่ากว่า 6 ชม. (`target_stale`) จะตอบได้แต่ **ไม่ log `prediction_log`/`notification_log` และไม่ทำ NLG รายวัน** (target_time จะตกอยู่ในอดีต ถูก backfill ทันที ปน R² routing; `daily_nlg_log` UNIQUE ต่อวัน); ไม่มีข้อมูลเลยใน 72 ชม. → `DataUnavailableError` → HTTP 503 `data_unavailable:true` (เดิม 500)
+- scheduler พิมพ์สรุปต่อรอบ (ok/stale/naive/failed); endpoint `/api/comparison` รับชื่อ v2 และชื่อเก่า
+- Frontend: ป้ายชื่อ/สี/ตัวเลือกกรองของ v2 (คงชื่อเก่าให้ข้อมูลย้อนหลัง), แบนเนอร์เมื่อ `target_stale`, ข้อความ 503 แสดงตามจริง; `npm run build` แล้ว
+- `CLAUDE.md` อัปเดต (21 feature, ชื่อ v2, ห่วงโซ่ augment script ของ feature ใหม่, นโยบาย fallback, FIRMS_KEY, วิธี rollback)
+
+**ผลทดสอบ (ด่านตรวจตามแผน)**:
+- G1 `scripts/test_live_features_v2.py` (ใหม่): 11 เคสผ่าน (k1_exact/เพื่อนบ้านค้าง/ไม่มีสด/เส้นแบ่งความสด 3 ชม./ประวัติสั้น/นับจุดไฟตามขอบเวลา+รัศมี/FIRMS ไม่รั่วคีย์/cache+strict/force_naive/21 feature+โมเดลจริงทำนายได้)
+- G2 `scripts/verify_app_feature_parity.py` (ใหม่, ฟังก์ชันจริงใน app.py vs dataset เทรน, 425 จุด/17 จังหวัด): `pm25_neighbor_avg` 96.5%, `nb_trend_12h` 96.7%, fire 100%; เคส k1_exact 99.0%; policy สำรอง (11 จุด, 2.6%) ต่างโดยเจตนา สูงสุด 7.65 µg/m³ — ผ่านเกณฑ์ (>=95% ภาพรวม, >=99% k1_exact, fire 100%)
+- G3 `test_dynamic_routing.py` อัปเดตชื่อ + เพิ่ม Test 5 (force_naive): 5/5 ผ่าน; `test_best_time_window.py` ผ่าน. **`test_daily_nlg.py` และ `test_notification_history.py` ล้มเหลวอยู่ก่อนแล้ว (ตรวจแล้วที่ HEAD: `maybe_generate_daily_nlg` มี 4 พารามิเตอร์แต่ test เรียก 2; `EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL` ไม่มีใน app.py ตั้งแต่ CHANGELOG 78) ไม่เกี่ยวกับงานนี้ ไม่ได้แก้**
+- G4 `scripts/verify_forecast_all_provinces.py` (ใหม่, ข้อมูลสดจริง 2026-09-19, Flask test client, ปิด NLG ระหว่างทดสอบ): 19/20 จังหวัดตอบ 200 ไม่มี NaN/ติดลบ/lo>hi; เลยไม่มีข้อมูล OpenAQ เลย 72 ชม. (สถานีขัดข้อง) → 503; 9 จังหวัด `target_stale` (reading เก่า ~25 ชม.) ตอบได้แต่ไม่ถูก log; 10 จังหวัดปกติถูก log 24 แถว/จังหวัด (รวม 240 แถว `_v2`, ตรวจแล้วไม่มี NULL ใน pm25_lo/hi); ตรวจ output แล้วไม่มีคีย์รั่ว; รวม 45.7 วิ ทั้ง 20 จังหวัด (**แถว 240 แถวนี้เป็น log จริงของระบบ ไม่ใช่แถวทดสอบ**)
+- G5 `npm run build` ผ่าน
+
+**ข้อจำกัด/ความเสี่ยงที่ยอมรับ**: (1) ข้อมูล OpenAQ ตอนนี้ขาด/ค้างหลายจังหวัด (9 จังหวัด ~25 ชม., เลย 4+ วัน) — จังหวัดเหล่านี้ยังพยากรณ์ไม่ได้จริงไม่ว่าโมเดลไหน (แค่ตอนนี้บอกผู้ใช้ชัดเจนและไม่ปน log); (2) NRT vs SP (FIRMS) ไม่มีหลักฐานตรง; (3) ยังไม่เคยทดสอบสดช่วงฝุ่นสูง; (4) coverage ~88-89% และ q_hat ยังเป็นค่าเดียวต่อ horizon (calibrate ตอนข้อมูลครบ) ช่วงพยากรณ์จึงแคบเกินเมื่อใช้ policy สำรอง, ยังไม่ใช้ flat_3grp; (5) ข้อมูลเทรนสิ้นสุด 2 ก.ค. 2026; (6) `scripts/backtest_recent_multiprovince.py` ยังผูก 23 feature ของรุ่นเก่า; (7) rolling R² ของ v2 เริ่มจากศูนย์ — routing จะสุ่มระหว่าง LGB/XGB (cold-start) จนกว่าจะมีคู่ prediction/actual >=5 ต่อ horizon
+
+**การย้อนกลับ**: คืน path/ชื่อโมเดลตาม CLAUDE.md หรือ `git revert`; ไฟล์โมเดลเก่าและข้อมูลใน DB ไม่ถูกลบ (แถว v2 ลบได้ด้วย `DELETE ... WHERE model_used LIKE '%_v2'`) — ไม่ต้อง pg_dump เพราะไม่มีการลบ/ทับข้อมูล; ผู้ใช้ต้อง restart `python app.py` เอง (DEBUG reload จะ restart scheduler ตามที่ CLAUDE.md ระบุ)
+
+**ไฟล์ที่เพิ่ม/แก้**: `app.py`, `frontend/src/notifications.js`, `frontend/src/views/{ForecastView,CompareView}.vue` (+ `frontend/dist/` จาก build), `CLAUDE.md`, `scripts/test_dynamic_routing.py` (แก้), `scripts/test_live_features_v2.py`, `scripts/verify_app_feature_parity.py`, `scripts/verify_forecast_all_provinces.py`, `models/verify_app_feature_parity_*.csv`, `CHANGELOG.md`
+
+## 2026-09-19 (140) — ประเมินความเป็นไปได้ในการ deploy โมเดล `_20260919_135655` เข้า `app.py` (ทดลองเท่านั้น ไม่แก้ app.py/DB): สรุป go-with-fallback
+
+**ที่มา**: ผู้ใช้ถามว่าโมเดลล่าสุดใช้กับแอปจริงได้ไหม — โมเดลต้องการ 3 feature ที่ `app.py` ยังสร้างไม่ได้ (`pm25_neighbor_avg`, `nb_trend_12h`, `fire_hotspot_count_100km_24h`) จึงทดลอง 5 ชุดก่อนตัดสินใจ (ไม่แตะ `app.py`, ไม่เขียน `prediction_log`, ไม่เปลี่ยน path โมเดล; เรียก API จริงแบบอ่านอย่างเดียว)
+
+**ผลลัพธ์**:
+- **E2 parity** (`check_live_feature_parity.py`, 425 จุด/17 จังหวัด, ช่วง มิ.ย. 2026): สูตร live (ใช้ข้อมูล <=t เหมือน build_feature_row) ตรงกับ dataset เทรน `pm25_neighbor_avg` 98.4%, `nb_trend_12h` 97.6%, fire 100% — ส่วนที่ไม่ตรง (2%) เกิดเฉพาะเมื่อเพื่อนบ้านไม่มี reading จริง ณ เวลา t (dataset interpolate โดยเห็นอนาคต แต่ live เห็นแค่อดีต) ต่างกันสูงสุด 1.0 µg/m³ → **ผ่าน**
+- **E1 FIRMS NRT vs SP** (`check_firms_nrt_vs_sp.py`): **เทียบตรงไม่ได้** — SP มีข้อมูลถึง ~30 มิ.ย. 2026, NRT มีตั้งแต่ ~ก.ค. ไม่มีช่วงที่ทั้งสองแหล่งทับกันเลย (SP/NRT เป็นคนละช่วงเวลา) ใช้ผล E4 แทน: จำนวนจุดคลาดเคลื่อน x0.5-x1.2 กระทบ MAE <0.4% → **ผ่านโดยตัวแทน แต่ยังไม่มีหลักฐานตรง**
+- **E3 ความพร้อมข้อมูล live** (`check_live_data_availability.py`, 2026-09-19 08:53 UTC): 8/20 จังหวัดมี reading ล่าสุดเก่า ~25 ชม. (เช่น surin, kalasin หยุดที่ 2026-09-18 08:00 UTC), เลยไม่มีข้อมูลเลย 72 ชม. (last reading 15 ก.ย.); เพื่อนบ้านอันดับ 1 มีค่าจริง ณ เวลา t เพียง 58% (มัธยฐานความต่างเวลาคู่ = 23 ชม.) → **ไม่ผ่านเกณฑ์ 70% ถ้าใช้เพื่อนบ้านอันดับ 1 อย่างเดียว** (ปัญหาของ pipeline ปัจจุบันด้วย: `app.py` พยากรณ์จังหวัดเหล่านี้จากข้อมูลเก่า ~1 วันอยู่แล้ว ไม่เกี่ยวกับโมเดลใหม่)
+- **E4 ความไว** (`check_model_sensitivity_live_degradation.py`, MAE บน test, LGB/XGB): เพื่อนบ้านเก่า 1-3 ชม. +0.0-0.4%; เก่า 6 ชม. +1.2/+1.4%; 12 ชม. +6.2/+6.3%; 24 ชม. +9.2/+9.3%; **NaN +32%/+65% (แย่กว่า naive persistence 3.03 → ห้ามส่ง NaN)**; ใช้ค่าเฉลี่ยทั้งภูมิภาค +7.8/+7.3%; ใช้เพื่อนบ้านอันดับ 2 +7.3/+7.4%; **ใช้เฉลี่ย 3 อันดับที่สดสุด +2.4/+2.5% (นโยบายสำรองที่ดีที่สุด)**; fire x0.5-x1.2 ±0.4%; fire=0 +1.8/+1.8% (>p90 +5-7%)
+- **E5 dry-run** (`dryrun_deploy_latest_model.py`, 6 จังหวัด, ไม่เขียน DB): 21 feature ครบไม่มี NaN, พยากรณ์สมเหตุสมผลและใกล้เคียงโมเดลเดิมของ app, 1.2-2.6 วิ/จังหวัด; OpenAQ 20 จังหวัดรอบเดียว 13.8 วิ (จำนวน request เท่ากับที่ scheduled_forecast_job ใช้อยู่ ไม่เพิ่ม), เพิ่มเฉพาะ FIRMS 1 request/ชม. ครอบทั้ง bbox; จังหวัดที่ reading เก่า (surin 25 ชม.) มี feature นอกช่วง p1-p99 (`pm25_lag_24`)
+
+**สรุป**: **deploy ได้แบบ go-with-fallback** — สูตร feature ตรงกับตอนเทรน, ภาระ API ต่ำ, โมเดลทนเพื่อนบ้านเก่า ≤3 ชม. และทนต่อ fire คลาดเคลื่อน แต่ต้องมีเงื่อนไข: (1) fetch ทั้ง 20 จังหวัดรอบเดียวแล้วแชร์ (cache) ให้ทุกจังหวัดและทุก request `/api/forecast` (2) นโยบายเพื่อนบ้าน: อันดับ 1 สด (<=3 ชม.) → ใช้ตามสูตรเทรน, ไม่สด → เฉลี่ยเพื่อนบ้านสดใกล้สุดสูงสุด 3 อันดับ (trend จากค่าเฉลี่ยเดียวกัน), ไม่มีสดเลย → `naive_fallback` **ห้ามส่ง NaN** (3) FIRMS ดึงรายชั่วโมง + cache, ล้มเหลว → fire=0 พร้อม flag (4) เพิ่ม guard เมื่อจังหวัดเป้าหมายเองมี reading เก่า >~6 ชม. (ปัญหาเดิมที่พบ) (5) ใช้ชื่อ model_used แยกเมื่อใช้ fallback เพื่อไม่ให้ rolling R² ปนกัน และพิจารณาขยายช่วงพยากรณ์ (q_hat ถูก calibrate ตอนข้อมูลสมบูรณ์) (6) sync สูตร feature ใน 4 จุดตาม CLAUDE.md + ใช้สคริปต์ parity นี้เป็น regression check
+
+**ข้อจำกัด**: dry-run ทำช่วง ก.ย. ฝุ่นต่ำ (PM2.5 6-15) ยังไม่เคยทดสอบสด ช่วงฤดูฝุ่น/ไฟสูง; E1 ไม่มีหลักฐานตรงเรื่อง NRT vs SP; ข้อมูลเทรนสิ้นสุด 2 ก.ค. 2026; ควรรัน shadow (คู่ขนานกับรุ่นเดิม) 1-2 สัปดาห์ก่อนสลับ
+
+**ไฟล์ที่เพิ่ม**: `scripts/{check_model_sensitivity_live_degradation,check_live_data_availability,check_firms_nrt_vs_sp,check_live_feature_parity,dryrun_deploy_latest_model}.py`, `models/check_*_20260919_*.csv`, `models/dryrun_deploy_latest_model_*.csv`, `CHANGELOG.md` — **ไม่มีการแก้ `app.py`**
+
+## 2026-09-19 (139) — ตอบ feedback อาจารย์ด้วยโมเดลล่าสุด: รัน ablation กลุ่ม/เดี่ยว, Accuracy/MAPE, SHAP ซ้ำบน `_20260919_135655`
+
+**ที่มา**: ผู้ใช้ให้นำโมเดลล่าสุดไปตอบคำถามใน `advisor_feedback_response14_9.md` — ตัวเลขที่ขึ้นกับโมเดล (ablation, Accuracy, SHAP) ต้องรันใหม่
+
+**วิธีทำ**: copy สคริปต์เดิมเป็น `*_nbtrend.py` (ablation ใช้ TUNED_PARAMS; กลุ่ม feature ปรับใหม่: ตัด time_cyclical, เพิ่ม spatial_lag/fire_hotspot; SHAP เพิ่มสมมติฐานทิศทาง 3 ตัวใหม่ + ใช้ทุก 3 แถวของ test)
+
+**ผลลัพธ์**:
+- Ablation กลุ่ม (baseline LGB 2.538 / XGB 2.542): lag_rolling +10.7/+11.2%, spatial_lag +7.2/+7.7%, lat_lon +2.7/+2.8%, weather +0.8/+0.8%, wind_pressure +0.2/+0.2%, fire_hotspot -0.0/-0.2%
+- Ablation เดี่ยว 21 ตัว: nb_neighbor_avg +2.32/+2.35%, nb_trend_12h +2.00/+2.60% (pm25_neighbor_avg ลดจาก +4.96% เพราะ nb_trend แบ่งข้อมูลกัน); multicollinearity: เดี่ยวเฉลี่ย +0.24/+0.17% vs ทั้งกลุ่ม +10.7/+11.2% (สคริปต์เดี่ยวพิมพ์เทียบค่า 9.1/8.0 ที่ hardcode จากรุ่นเก่า — ใช้ตัวเลขจาก ablation กลุ่มใหม่แทน)
+- Accuracy (=100-MAPE): รวม LGB 88.32% / XGB 88.35%; t+1 98.74/98.75%; t+24 80.20/80.16%
+- SHAP: ทิศทางตรงสมมติฐาน 36/42 จุด (ฝน, ความกดอากาศ, ลม, neighbor_avg, nb_trend, fire_hotspot ตรงครบ 6/6; ความชื้นขัดสมมติฐาน 6/6 ตรงกับ entry ก่อนหน้า); top feature t+24 = lag_6, neighbor_avg, nb_trend_12h
+- **บั๊กที่พบและแก้**: SHAP รอบแรก corr ของ nb_trend_12h เป็น nan (NaN 0.4% ของแถว) ตัดสินผิดว่าขัดสมมติฐาน — แก้ให้ mask NaN คำนวณใหม่ได้ +0.67 ถึง +0.83
+
+**ไฟล์ที่เพิ่ม**: `scripts/{ablation_feature_groups,ablation_individual_features,compute_accuracy_mape,shap_analysis}_nbtrend.py`, `models/ablation_*_nbtrend_*/ablation_individual_*_20260919_150104.csv`, `models/shap_*_2026091*`, `docs/advisor_feedback_answers_latest_model_19_9.md`, `docs/advisor_feedback_response19_9.md`
+
+## 2026-09-19 (138) — ทดลองแก้ coverage ที่หัว P05/P95 (weight เฉพาะ P95 + hyperparameter แยกหัว): ไม่ใช่การปรับปรุงจริง แค่ทำช่วงกว้างขึ้น
+
+**ที่มา**: ไอเดียค้างจาก entry 134/137 เพื่อแก้ coverage <90% (โดยเฉพาะ >p90) ของโมเดล `_20260919_135655`
+
+**วิธีทำ**: `scripts/tune_quantile_heads_pooled.py` — เทรนบน train, แบ่ง calib เป็น 2 ท่อนตามเวลาต่อจังหวัด (calibA หา q_hat, calibB วัด; ไม่แตะ test), horizon [1,12,24] ทดสอบ (1) weight เฉพาะหัว P95 (w=2/3/5 แถว target>37.5) (2) hyperparameter แยกหัว P05/P95 แบบ regularize มากขึ้น 6 config/โมเดล แล้ว `scripts/check_quantile_heads_equal_width.py` เทียบที่ความกว้างช่วงเท่ากัน + Winkler score
+
+**ผลลัพธ์**:
+- weight เฉพาะ P95: แทบไม่ช่วย (LGB cov 86.3→86.6-87.0, >p90 ไม่เปลี่ยน ~84.5; XGB >p90 83.2→82.8-83.2) แต่ช่วงกว้างขึ้น 3-15% → ไม่ใช้
+- regularized heads: coverage สูงขึ้น (LGB reg3 86.3→89.1, >p90 84.5→88.0; XGB reg2 85.3→89.0, >p90 83.2→87.6) แต่ช่วงกว้างขึ้น 15-20% (9.8→11.3)
+- **เทียบที่ความกว้างเท่ากัน**: base ที่ขยายช่วงเท่ากันได้ coverage รวม 91.1% (สูงกว่า reg 89.1%) และ Winkler ดีกว่า (LGB 15.13 vs 15.49; XGB 15.22 vs 15.48); ได้ประโยชน์เฉพาะ >p90 เล็กน้อย (LGB 88.0 vs 87.4, XGB 87.6 vs 86.7)
+
+**สรุป**: ไม่มีวิธีใดปรับปรุงคุณภาพช่วงพยากรณ์จริง — ที่ coverage สูงขึ้นมาจากช่วงกว้างขึ้นเท่านั้น (เหมือนปรับ q_hat) ไม่ควร retrain หัว P05/P95 ด้วย config ใหม่ ข้อสรุป: coverage ~88-89% (>p90 ~86%) เป็นข้อจำกัดที่ยอมรับ; ถ้าต้องการ coverage สูงขึ้นให้ใช้ flat_3grp (entry 121/137) หรือขยาย q_hat ตรงๆ โดยรู้ว่าแลกกับช่วงที่กว้างขึ้น
+**หมายเหตุ**: coverage บน calibB (ช่วงเวลาหลัง calibA) ต่ำกว่าบน test (base 86.3% vs 88.6%) จาก distribution shift ตามเวลา ตัวเลขนี้ใช้เทียบ variant กันเองเท่านั้น
+
+**ไฟล์ที่เพิ่ม**: `scripts/tune_quantile_heads_pooled.py`, `scripts/check_quantile_heads_equal_width.py`, `models/tune_quantile_heads_pooled_*.csv`, `models/check_quantile_heads_equal_width_*.csv`
+
+## 2026-09-19 (137) — Battery ทดสอบเต็มบนโมเดลใหม่ `_20260919_135655`: MAE ดีขึ้นทุกด้าน แต่ coverage ยังต่ำกว่า 90% และนครพนมแย่ลงด้าน coverage
+
+**ที่มา**: ทดสอบโมเดลใหม่ (21 feature + hyperparameter จูนแล้ว, entry 136) ด้วยชุดเดียวกับที่ทดสอบโมเดลเดิมทุกตัว
+
+**วิธีทำ**: สร้าง `scripts/{analyze_burning_season_backtest,recalibrate_conformal_configs,eval_ensemble_vs_routing,eval_zeroshot_real_provinces}_nbtrend.py` โดย copy จากชุด `_firehotspot.py` แก้แค่ `MODEL_TAG="20260919_135655"` (และชื่อ module ที่ import) — ทุกตัวดึง `DATA_PATH`/`FEATURE_COLS` สดจาก `train_multiprovince_models.py`
+
+**ผลลัพธ์ (test set, เฉลี่ยทุก horizon)**:
+- MAE(P50): LGB 2.655 (เดิม 2.716, -2.2%), XGB 2.655 (เดิม 2.810, -5.5%) — ทั้งสองโมเดลเท่ากันแล้ว
+- ฤดูฝุ่น vs ปกติ (LGB): MAE 3.389 vs 1.764; >p90 MAE = 5.83 (LGB) / 5.92 (XGB); coverage ฤดูฝุ่น 87.2% (LGB) / 85.9% (XGB)
+- Coverage หลัง single q_hat: LGB 88.6%, XGB 88.0% (ต่ำกว่าเดิมเล็กน้อย เดิม 89.2%/88.4% เพราะโมเดลแม่นขึ้น/ช่วง quantile แคบลง); >p90: LGB 84.1%, XGB 81.4% (XGB ดีขึ้นจากเดิม 79.5%)
+- Calibration variants (coverage เฉลี่ยข้าม horizon): flat_3grp (`3grp_top5_15`) ยังดีสุด — ALL LGB 88.9% / XGB 88.6%; >p90 LGB **86.7%** / XGB **85.8%** (single q_hat: 84.0/81.4) — **ยังต่ำกว่าเป้า 90%**
+- Ensemble vs routing: simple_avg 2.6468, weighted_avg(w=0.4) 2.6472, oracle_routing 2.6496, lgb_only 2.6548, xgb_only 2.6553 — ensemble ดีกว่า best-single เพียง -0.30% (ช่องว่างระหว่างสองโมเดลหายไปแล้ว) ข้อสรุปเดิม (คง Dynamic Routing) ยังไม่ขัดแย้ง
+- Zero-shot จริง (test_period_only, MAE / coverage): mahasarakham LGB 2.92/81.7%, XGB 2.87/83.6%; roiet LGB 3.00/86.5%, XGB 3.00/85.5%; **nakhonphanom LGB 4.78/72.7%, XGB 4.79/72.3%** — MAE ดีขึ้นชัด (LGB 5.02→4.78, XGB 5.33→4.79) แต่ **coverage ของนครพนมแย่ลง** (เดิม 75.9%/74.1%) — จุดถอยหลังที่ต้องบันทึกไว้
+
+**สรุป**: โมเดล `_20260919_135655` ดีกว่า `_20260918_160708` ด้าน MAE ทุกมุม ไม่มี regression ด้าน MAE; ข้อที่ยังเปิดคือ coverage <90% (โดยเฉพาะ >p90 และฤดูฝุ่น) และ coverage นครพนม — ควรใช้ flat_3grp calibration กับโมเดลนี้ต่อ (ยังไม่ได้ save q_hat ของ flat_3grp เป็นไฟล์ deploy — ไม่ใช่ scope ตอนนี้)
+
+**ไฟล์ที่เพิ่ม**: `scripts/*_nbtrend.py` (4 ไฟล์), `models/recalibrate_configs_k1_20260919_142029.csv`, `models/ensemble_vs_routing_*_20260919_142052.csv`, `models/zeroshot_real_provinces_*_20260919_142115.csv`, `CHANGELOG.md`
+
+## 2026-09-19 (136) — เพิ่ม nb_trend_12h + hyperparameter จูนแล้ว, ยืนยันบน test และ retrain เต็ม: โมเดลใหม่ `_20260919_135655`
+
+**ที่มา**: entry 135 พบ `nb_trend` เป็น candidate เดียวที่ช่วยชัดเจน; entry 133 พบว่า hyperparameter ที่จูนแล้วช่วยได้ — รวมทั้งสองแล้วยืนยันบน test set ครั้งเดียว ก่อน retrain เต็ม
+
+**วิธีทำ**:
+1. `scripts/validate_neighbor_trend_variants.py` เทียบหน้าต่าง trend 1/3/6/12h + combo (บน calib): 12h ดีสุดเล็กน้อย (MAE LGB -2.51%, XGB -2.88%); หน้าต่างอื่น -1.9% ถึง -2.6% ใกล้เคียงกัน (ส่วนต่างอยู่ในระดับ noise); trend+precip_sum_72h ไม่ดีกว่า trend 12h เดี่ยว
+2. `scripts/compute_neighbor_trend_feature.py`: `nb_trend_12h = pm25_neighbor_avg(t) - pm25_neighbor_avg(t-12h)` แบบ time-indexed ต่อจังหวัด ตรวจซ้ำกับ pivot (allclose) NaN 0.39% → dataset ใหม่ `data/multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_135009.csv`
+3. `scripts/confirm_improvements_on_test.py` (แตะ test ครั้งเดียว, P50, 5 horizon):
+   - LGB: ref 2.604 → tuned 2.588 (-0.62%) → tuned+nb **2.538 (-2.57%)** (>p90 -3.96%)
+   - XGB: ref 2.696 → tuned 2.608 (-3.25%) → tuned+nb **2.542 (-5.71%)** (>p90 -9.14%, ฤดูฝุ่น -6.14%)
+   - ยิ่ง horizon ไกลยิ่งดี: t+24 LGB -4.1%, XGB -7.6%; t+1 -0.8%/-1.4%
+   - ผลตรงกับที่เลือกบน calib (LGB -2.5%, XGB -2.9%) → ไม่ overfit จากการลองหลาย candidate
+4. แก้ `scripts/train_multiprovince_models.py`: `DATA_PATH` ชี้ dataset ใหม่, `FEATURE_COLS` 21 ตัว (+`nb_trend_12h`), เพิ่ม `TUNED_PARAMS_LGB/XGB` (`N_ESTIMATORS=300` เดิมยังเก็บไว้เพราะสคริปต์ validate อื่นอ้างถึง) แล้ว retrain เต็ม 24 horizon x 3 quantile x 2 โมเดล
+
+**ผลลัพธ์**: `models/{lgb,xgb}_pm25_multiprovince_residual_bagged_quantile_20260919_135655.pkl` (+ `conformal_calibration_*`, `multiprovince_eval_summary_20260919_135655.csv`); MAE(P50) เฉลี่ย 24h: LGB 2.655, XGB 2.655 (R² 0.941/0.940); coverage 83.5%→88.6% (LGB), 81.7%→88.0% (XGB)
+
+**ข้อจำกัด**: hyperparameter จูนที่ P50 เท่านั้น (P05/P95 ใช้ค่าเดียวกัน); **live inference ยังไม่รองรับ** — `nb_trend_12h` ต้องมี pm25 ของจังหวัดเพื่อนบ้านย้อนหลัง 12 ชม. (เหมือน spatial-lag/FIRMS ที่ยังไม่ sync ใน `app.py` ตามที่ผู้ใช้ระบุว่าไม่ใช่ scope)
+
+**ไฟล์ที่เพิ่ม/แก้**: `scripts/compute_neighbor_trend_feature.py`, `scripts/validate_neighbor_trend_variants.py`, `scripts/confirm_improvements_on_test.py`, `scripts/train_multiprovince_models.py` (แก้), `data/..._nbtrend_20260919_135009.csv`, โมเดล/ผลลัพธ์ข้างต้น, `models/validate_neighbor_trend_variants_*.csv`, `models/confirm_improvements_on_test_*.csv`
+
+## 2026-09-19 (135) — ทดสอบ feature ใหม่ 12 ตัว: มีแค่ nb_trend ที่ผ่าน; fire hotspot ที่ปรับปรุงแล้ว/boundary layer height ไม่ช่วย
+
+**ที่มา**: แผนทดลองทั้งหมด Phase B+C — ปรับ 2 feature ที่แรงสุด (fire hotspot, spatial-lag) และทดสอบ weather ใหม่
+
+**วิธีทำ**: `scripts/diagnose_boundary_layer_height.py` (พบ archive: boundary_layer_height ปี 2024 มีแค่ ~50%, 2025+ ครบ; `cape` ไม่มีใน archive; shortwave_radiation/cloud_cover ครบ; forecast API มีครบ) → `scripts/fetch_extra_weather_isaan.py` (`data/extra_weather_isaan_20260919_125102.csv`, ดึงรายปีเพราะช่วงเต็มครั้งเดียวคืน body ว่าง) → `scripts/validate_feature_refinements.py`: baseline (20 feature + hyperparameter จูนแล้ว) เทียบ +1 candidate, เลือกบน **calib split** (ไม่แตะ test), 3 horizon [1,12,24]; sanity: FRP รายเดือนสูงสุด เม.ย. (725) / มี.ค. (427) และเกือบ 0 ช่วงฝน; log1p(count) ไม่ทดสอบเพราะ tree invariant ต่อ monotonic transform; ไม่แยกจุดไฟข้ามพรมแดนเพราะไม่มี boundary data
+
+**ผลลัพธ์ (MAE รวม delta% LGB/XGB)**: nb_trend_3h -2.15/-2.46 (ผ่าน); precip_sum_72h -0.57/-0.73 (ผ่านเกณฑ์แต่ไม่เพิ่มเมื่อรวมกับ trend); blh -0.45/-0.64 แต่ฤดูฝุ่น **+2.9/+2.0** และ >p90 **+1.8/+2.6** (แย่ในจุดที่สำคัญ → ตัด); fire frp_sum/upwind_count/upwind_frp +0.02 ถึง +0.28 (ไม่ช่วย); nb_upwind_avg, nb_max_150km, dry_hours, shortwave, cloud_cover ไม่ช่วย
+
+**สรุป**: การปรับ fire hotspot เพิ่ม (FRP/ทิศลม) ไม่ให้ผล — count เดิมจับสัญญาณได้พอแล้ว; เก็บเฉพาะ nb_trend (entry 136)
+
+**ไฟล์ที่เพิ่ม**: `scripts/diagnose_boundary_layer_height.py`, `scripts/fetch_extra_weather_isaan.py`, `scripts/validate_feature_refinements.py`, `data/extra_weather_isaan_20260919_125102.csv`, `data/multiprovince_pm25_features_refined_candidates_20260919_132947.csv`, `models/validate_feature_refinements_*.csv`
+
+## 2026-09-19 (134) — Sample weighting แถวฝุ่นสูงบนโมเดล pooled: ไม่คุ้ม (trade-off กับ MAE รวม)
+
+**ที่มา**: โมเดลเก่า (ขอนแก่น) เคยได้ผลจาก sample weight; pooled ไม่เคยลอง เป้าคือจุดอ่อน >p90
+
+**วิธีทำ**: `scripts/tune_sample_weight_pooled.py` — weight ตามค่าจริงของ target (>37.5) binary w∈{1,2,3,5} และ continuous (1+y/37.5), ใช้ hyperparameter จาก entry 133, เลือกบน calib, 5 horizon
+
+**ผลลัพธ์ (delta% เทียบ w1; MAE รวม / ฤดูฝุ่น / >p90)**: LGB w2 +2.22/-0.16/-6.87, w3 +4.56/+1.44/-9.21, w5 +8.26/+4.85/-11.99, cont +1.91/-0.34/-3.68; XGB w2 +1.97/+0.55/-4.83, w5 +7.70/+5.60/-9.74, cont +1.71/-0.19/-2.30 — bias >p90 ลดลง (-2.08 → -0.91 ที่ w5) แต่ bias แถวปกติเพิ่มเล็กน้อย
+
+**สรุป**: ไม่ผ่านเกณฑ์ (MAE รวมแย่ลง >1.7% ทุก weight) — ไม่ใช้กับ P50; **ยังไม่ได้ทดสอบ**: ใช้ weight เฉพาะหัว P95 เพื่อแก้ coverage >p90 (ไอเดียต่อ)
+
+**ไฟล์ที่เพิ่ม**: `scripts/tune_sample_weight_pooled.py`, `models/tune_sample_weight_pooled_*.csv`
+
+## 2026-09-19 (133) — Hyperparameter tuning LGB/XGB บนโมเดล pooled (ไม่เคยจูนมาก่อน): XGB ดีขึ้นมาก LGB ดีขึ้นเล็กน้อย
+
+**ที่มา**: `fit_lgb_quantile/fit_xgb_quantile` ใช้แค่ default + n_estimators=300 + bagging 0.8 ตลอดสายการทดลอง — เป็นช่องว่างที่ยังไม่เคยแตะ
+
+**วิธีทำ**: `scripts/tune_model_hyperparams_pooled.py` — random search 20 config/โมเดล (seed 2026) เทรนบน train **วัดบน calib split** (ไม่แตะ test) ที่ 3 horizon แล้วยืนยัน top-3 ที่ 5 horizon
+
+**ผลลัพธ์ (calib, delta% เทียบ default; MAE / ฤดูฝุ่น / >p90)**: LGB cfg06 (lr 0.05, num_leaves 63, min_child_samples 50, reg_lambda 1, 400 trees) -0.84 / -1.46 / -0.72; XGB cfg02 (lr 0.03, max_depth 8, min_child_weight 20, reg_lambda 10, 800 trees) -3.88 / -3.09 / -3.11 — default learning_rate 0.3 ของ XGBoost ก้าวร้าวเกินไป
+
+**สรุป**: ใช้ cfg06/cfg02 เป็นฐานของทุกการทดลองถัดไป (entry 134-136)
+
+**ไฟล์ที่เพิ่ม**: `scripts/tune_model_hyperparams_pooled.py`, `models/tune_model_hyperparams_pooled_20260919_124907.csv`
+
+## 2026-09-18 (132) — Individual ablation ครบ 20 feature บนโมเดล +fire_hotspot: อันดับความสำคัญไม่เปลี่ยน fire hotspot อยู่กลางตาราง
+
+**ที่มา**: ปิดชุดทดสอบครบ 4 อย่างที่ผู้ใช้ขอให้ทำกับโมเดลใหม่เหมือนที่เคยทำกับโมเดลเก่า (entry 129-132: calibration, ensemble, zero-shot จริง, individual ablation)
+
+**วิธีทำ**: รัน `scripts/ablation_individual_features.py` ซ้ำโดยไม่ต้องแก้โค้ด (ดึง `FEATURE_COLS`/`DATA_PATH` สดจาก `train_multiprovince_models.py` ที่ตอนนี้มี 20 feature แล้ว) — baseline + leave-one-out ทีละตัวครบ 20 ตัว x 2 โมเดล x 5 horizon = 210 fit
+
+**ผลลัพธ์**:
+- **`pm25_neighbor_avg` ยังคงเป็น feature เดี่ยวที่ทรงพลังสุดชัดเจนเหมือนเดิม** (+4.96%/+4.40%) ไม่มีอะไรเปลี่ยนแปลง
+- **`fire_hotspot_count_100km_24h` มีความสำคัญระดับกลางตาราง** ไม่ใช่ top feature: LGB +0.27% (อันดับ 9 จาก 20), XGB **-0.14%** (ตัดออกกลับดีขึ้นเล็กน้อย) — ตรงกับที่ entry 125 พบว่า XGB ภาพรวมแย่ลงเล็กน้อยเมื่อมี feature นี้ (แม้จะช่วยที่ severity สูงสุดชัดเจนก็ตาม — ยืนยันอีกครั้งว่า "สำคัญภาพรวม" กับ "สำคัญเฉพาะจุดวิกฤต" เป็นคนละเรื่องกัน)
+- **Multicollinearity check ของกลุ่ม pm25_lag_rolling แทบไม่เปลี่ยนจาก entry 116** (+0.18%/+0.38% เทียบเดิม +0.19%/+0.40%) — ยืนยันว่า fire_hotspot ไม่ได้ไปแย่ง/ทับซ้อนสัญญาณกับกลุ่มนี้เลย เป็น feature อิสระจริงๆ
+
+**สรุป**: ผลตรงกับภาพที่ได้จากทุก entry ก่อนหน้า ไม่มีอะไรขัดแย้งหรือน่าแปลกใจใหม่ — fire_hotspot เป็น feature ที่มีประโยชน์เฉพาะจุด (severity สูงสุด, จังหวัด zero-shot ที่มี hotspot สูง) ไม่ใช่ feature ที่ "แรง" แบบ spatial-lag ในภาพรวม — **ครบทั้ง 4 การทดสอบที่ผู้ใช้ขอแล้ว (entry 129-132) โมเดล +fire_hotspot ผ่านการตรวจสอบเทียบเท่าโมเดล k=1 เดิมทุกด้านแล้ว**
+
+**ไฟล์ที่เพิ่ม**: `models/ablation_individual_features_20260918_162527.csv`, `models/ablation_individual_summary_20260918_162527.csv`, `CHANGELOG.md` (entry นี้) — ไม่มีไฟล์ script ใหม่ (reuse `scripts/ablation_individual_features.py` เดิมตรงๆ)
+
+## 2026-09-18 (131) — เช็คโมเดล +fire_hotspot กับจังหวัด zero-shot จริง: นครพนมดีขึ้นจริงทั้ง MAE และ coverage ตรงตามสมมติฐาน
+
+**ที่มา**: entry 119 เช็คโมเดล k=1 เดิมกับ 3 จังหวัด zero-shot จริง พบว่านครพนม (ไกลสุด, hotspot สูงสุดจาก entry 124) แย่สุดทั้ง MAE (5.14-5.34) และ coverage (72.7-74.1%) — เช็คว่าโมเดล +fire_hotspot ช่วยจังหวัดนี้ได้จริงในทางปฏิบัติไหม (ไม่ใช่แค่ใน test set ของจังหวัดเทรน)
+
+**วิธีทำ**: `scripts/eval_zeroshot_real_provinces_firehotspot.py` — copy จาก `eval_zeroshot_real_provinces.py` เปลี่ยนแค่ `MODEL_TAG = "20260918_160708"` ตรรกะเดียวกันทุกจุด (dataset มี fire_hotspot_count คำนวณให้ครบทั้ง 20 จังหวัดอยู่แล้วจาก entry 124 ไม่ต้องทำอะไรเพิ่ม)
+
+**ผลลัพธ์ (test_period_only, เทียบ entry 119)**:
+
+| จังหวัด | LGB MAE เดิม→ใหม่ | LGB coverage เดิม→ใหม่ | XGB MAE เดิม→ใหม่ | XGB coverage เดิม→ใหม่ |
+|---|---|---|---|---|
+| mahasarakham | 2.98→2.99 | 80.8%→**82.0%** | 2.92→2.93 | 83.0%→**84.0%** |
+| roiet | 3.10→3.11 | 87.1%→86.9% | 3.13→3.11 | 85.9%→**86.3%** |
+| **nakhonphanom** | **5.14→5.02** (-2.3%) | **74.1%→75.9%** (+1.8pp) | 5.34→5.33 | **72.7%→74.1%** (+1.4pp) |
+
+**สรุป**: **ยืนยันสมมติฐานที่ตั้งไว้ตั้งแต่ entry 120 ในทางปฏิบัติจริง** — นครพนม (จังหวัดที่มีปัญหาหนักสุดและมี fire hotspot เฉลี่ยสูงสุดในกลุ่ม 49.56 จาก entry 124) ดีขึ้นทั้ง MAE และ coverage จริง ไม่ใช่แค่ทฤษฎี — coverage ของทั้ง 3 จังหวัด zero-shot จริงดีขึ้นหรือทรงตัวทุกจังหวัด ไม่มีจังหวัดไหนแย่ลงเลย (ต่างจากผลบนจังหวัดเทรนที่ entry 128 พบว่า XGB >p90 แย่ลง) — เป็นหลักฐานที่หนักแน่นที่สุดในสายการทดลอง fire-hotspot ทั้งหมดว่า feature นี้ตอบโจทย์ตรงจุดที่ตั้งใจจะแก้จริง
+
+**ไฟล์ที่เพิ่ม**: `scripts/eval_zeroshot_real_provinces_firehotspot.py`, `models/zeroshot_real_provinces_per_horizon_20260918_162436.csv`, `models/zeroshot_real_provinces_summary_20260918_162436.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (130) — Ensemble vs Routing ซ้ำบนโมเดล +fire_hotspot: ข้อสรุปเดิมยังคงอยู่
+
+**ที่มา**: ทดสอบชุดเดียวกับที่เคยทำบนโมเดล k=1 (entry 112) ซ้ำกับโมเดล +fire_hotspot ตามที่ผู้ใช้ขอให้ทดสอบครบทุกด้าน
+
+**วิธีทำ**: `scripts/eval_ensemble_vs_routing_firehotspot.py` — copy จาก `eval_ensemble_vs_routing_k1.py` เปลี่ยนแค่ module ที่ import ให้ไปใช้ `analyze_burning_season_backtest_firehotspot` (MODEL_TAG=`20260918_160708`) แทน `_k1`
+
+**ผลลัพธ์**: `lgb_only` MAE=2.7159 ยังชนะ `xgb_only`=2.8104 สม่ำเสมอเหมือนเดิม `weighted_avg(w=0.7)`=2.7124 ดีกว่า `lgb_only` เล็กน้อย (-0.13%, ใกล้เคียงกับผลเดิมบนโมเดล k=1 ที่ -0.11%) `simple_avg` ยังแย่กว่า (+0.36%) — coverage รวมของ ensemble (89.2-89.3%) ใกล้เคียง `lgb_only` เดี่ยว (89.2%)
+
+**สรุป**: ข้อสรุปเดิมจาก entry 109/112 ยังใช้ได้กับโมเดล +fire_hotspot เช่นกัน — ไม่แนะนำเปลี่ยนจาก Dynamic Routing ไปเป็น ensemble แบบง่าย ผลไม่เปลี่ยนไปจากเดิมอย่างมีนัยสำคัญเมื่อเพิ่ม feature ใหม่
+
+**ไฟล์ที่เพิ่ม**: `scripts/eval_ensemble_vs_routing_firehotspot.py`, `models/ensemble_vs_routing_mae_by_horizon_20260918_162403.csv`, `models/ensemble_vs_routing_coverage_20260918_162403.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (129) — รวม fire-hotspot feature + flat_3grp calibration: coverage >p90 ดีที่สุดของทั้งวัน แก้จุดที่ entry 128 พบว่า XGB แย่ลงได้แล้ว
+
+**ที่มา**: entry 128 พบว่าโมเดล +fire_hotspot ที่ใช้ single q_hat เดิม coverage ที่ >p90 ของ XGB แย่ลง (80.8%→79.5%) แม้ MAE จะดีขึ้น — ตั้งสมมติฐานไว้ท้าย entry นั้นว่าถ้ารวมกับ `flat_3grp` calibration (ดีที่สุดจาก entry 115) น่าจะช่วยได้ งานนี้ทดสอบสมมติฐานนั้น
+
+**วิธีทำ**: `scripts/recalibrate_conformal_configs_firehotspot.py` — copy จาก `recalibrate_conformal_configs_k1.py` เปลี่ยนแค่ `MODEL_TAG = "20260918_160708"` ตรรกะเดียวกันทุกจุด (เทียบ 4 config: single_qhat, 2grp_top10, 2grp_top5, 3grp_top5_15)
+
+**ผลลัพธ์ — ดีที่สุดของทั้งวัน ทั้ง 2 มุม**:
+
+| Coverage >p90 | k=1 เดิม + single (111) | k=1 เดิม + 3grp (115) | +fire_hotspot + single (128) | **+fire_hotspot + 3grp (งานนี้)** |
+|---|---|---|---|---|
+| LGB | 84.9% | 86.2% | 85.3% | **87.1%** ← สูงสุด |
+| XGB | 80.8% | 85.3% | 79.5% (แย่ลง) | **85.1%** ← กลับมาดีเท่าเดิม |
+
+**สรุป**: ยืนยันสมมติฐาน — feature ใหม่ (ช่วย MAE) กับ calibration ที่ดีที่สุด (ช่วย coverage) เป็นคนละกลไกที่**เสริมกันได้จริง ไม่ใช่แทนกัน** — ใช้ร่วมกันให้ผลดีกว่าใช้อย่างใดอย่างหนึ่งเดี่ยวๆ ทั้งคู่ LGB 87.1% เป็น coverage สูงสุดที่เคยทำได้ในทั้งโปรเจกต์ ยังห่างเป้า 90% อยู่ ~3-5pp แต่ใกล้ที่สุดเท่าที่เคยมี — **นี่คือ config ที่แนะนำถ้าจะใช้จริง**: โมเดล +fire_hotspot (`_20260918_160708`) ร่วมกับ `flat_3grp` calibration ไม่ใช่ single q_hat เดิม
+
+**ไฟล์ที่เพิ่ม**: `scripts/recalibrate_conformal_configs_firehotspot.py`, `models/recalibrate_configs_k1_20260918_162323.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (128) — Backtest ฤดูฝุ่นบนโมเดล +fire_hotspot เต็มรูปแบบ: MAE ที่ >p90 ดีขึ้นจริง แต่ coverage ยังผสม (LGB ดีขึ้นนิดหน่อย, XGB แย่ลง)
+
+**ที่มา**: ปิดวงจร validate (122-126) → retrain เต็ม (127) → re-verify ตามธรรมเนียมโปรเจกต์ (เทียบ k=1: 108→110→111) — scaled-down validation วัดแค่ P50 ดิบไม่มี conformal ต้องเช็คโมเดลเต็มที่มี conformal calibration ครบว่า >p90 ดีขึ้นจริงหรือไม่
+
+**วิธีทำ**: `scripts/analyze_burning_season_backtest_firehotspot.py` — copy จาก `analyze_burning_season_backtest_k1.py` เปลี่ยนแค่ `MODEL_TAG = "20260918_160708"` ตรรกะเดียวกันทุกจุด
+
+**ผลลัพธ์เทียบกับโมเดล k=1 เดิม (ไม่มี fire hotspot, entry 111)**:
+
+| | LGB เดิม | LGB ใหม่ | เปลี่ยน | XGB เดิม | XGB ใหม่ | เปลี่ยน |
+|---|---|---|---|---|---|---|
+| MAE ที่ >p90 | 6.129 | **6.043** | **-1.4%** ✓ | 6.579 | **6.484** | **-1.4%** ✓ |
+| **Coverage ที่ >p90** | 84.9% | **85.3%** | **+0.4pp** ✓ | 80.8% | **79.5%** | **-1.3pp** ✗ |
+| MAE ฤดูฝุ่นรวม | 3.484 | 3.470 | -0.4% | 3.621 | 3.618 | -0.1% |
+| MAE ช่วงปกติ | 1.795 | 1.801 | +0.4% | 1.817 | 1.831 | +0.8% |
+
+**ข้อสังเกตสำคัญ — MAE ดีขึ้นไม่ได้แปลว่า coverage ดีขึ้นเสมอไป**: MAE ที่ severity สูงสุดดีขึ้นจริงทั้ง 2 โมเดล (-1.4% ทั้งคู่ ตรงกับที่ entry 125-126 คาดไว้) **แต่ coverage (ซึ่งเป็น metric เป้าหมายจริงที่ตามหามาทั้งวัน) กลับดีขึ้นแค่ LGB (+0.4pp) ส่วน XGB แย่ลงด้วยซ้ำ (-1.3pp)** — สาเหตุ: coverage ขึ้นกับ conformal `q_hat` (ค่าเดียว คำนวณจาก calib split ของโมเดลนี้เอง) ซึ่งเป็นคนละกลไกจาก point-prediction MAE โดยตรง — จุดพยากรณ์แม่นขึ้นไม่ได้การันตีว่าช่วงความเชื่อมั่นจะกว้างพอขึ้นตามไปด้วย (สอดคล้องกับที่ entry 110/111 เคยสรุปไว้แล้วว่า "conformal calibration เป็นขั้นตอนแยกจาก feature engineering โดยสิ้นเชิง")
+
+**สรุป**: fire-hotspot feature ช่วย**ความแม่นยำ (MAE)** ที่ severity สูงสุดได้จริงและสม่ำเสมอ (ตรงกับที่ตั้งสมมติฐานไว้ตั้งแต่ entry 122) แต่**ไม่ได้แก้ปัญหา coverage gap ได้ทั้งหมด** — ปัญหา coverage ยังต้องอาศัย calibration technique แยกต่างหาก (เช่น `flat_3grp` จาก entry 115) ควบคู่กันไป ไม่ใช่แค่ feature ใหม่ตัวเดียว ถ้าจะได้ผลดีที่สุดในอนาคตควรลองรวม 2 อย่างเข้าด้วยกัน (โมเดล +fire_hotspot ผ่าน `flat_3grp` calibration แทน single q_hat) — ยังไม่ได้ทำในงานนี้
+
+**ไฟล์ที่เพิ่ม**: `scripts/analyze_burning_season_backtest_firehotspot.py`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (127) — Retrain เต็มรูปแบบพร้อม fire_hotspot_count_100km_24h (20 feature): ตรงกับที่ scaled-down validation ทำนายไว้เป๊ะ
+
+**ที่มา**: entry 122-126 validate แบบย่อ (P50-only, 5 horizon ตัวแทน) แล้วพบว่า `fire_hotspot_count_100km_24h` ช่วย MAE ชัดเจนเฉพาะช่วงฤดูฝุ่น/severity สูงสุด (>p90: -1.85%/-0.60%) แม้ MAE รวมก้ำกึ่ง — ผู้ใช้ตัดสินใจว่ายังไม่ต้องกังวลเรื่อง deploy blocker ตอนนี้ (ยัง 2 dependency ที่ยังไม่ deploy อยู่แล้วคือ spatial-lag) ขอให้ทำโมเดลให้ดีที่สุดก่อน จึง retrain เต็มรูปแบบ
+
+**วิธีทำ**: แก้ `scripts/train_multiprovince_models.py` 2 จุด — (1) `DATA_PATH` ชี้ไปไฟล์ `multiprovince_pm25_features_raw_spatial_k1_with_firehotspot_20260918_155102.csv` (มี feature ใหม่ผสานแล้วจาก entry 124) (2) `FEATURE_COLS` เพิ่ม `"fire_hotspot_count_100km_24h"` ต่อท้าย (19→20 ตัว, assert อัปเดตตาม) แล้วรันเต็มรูปแบบ (24 horizon × 3 quantile × 2 โมเดล = 144 fit, residual + bagging + conformal calibration เหมือนเดิมทุกจุด) — **ยังไม่แก้ `app.py`/`build_raw_dataset_multiprovince.py`/`backtest_recent_multiprovince.py`** ตามที่ผู้ใช้ระบุว่ายังไม่ต้องสนเรื่อง deploy/sync 4 จุดตอนนี้
+
+**ผลลัพธ์ — ตรงกับที่ scaled-down validation ทำนายไว้เกือบเป๊ะ**:
+
+| | LGB เดิม (`_001147`, ไม่มี fire hotspot) | LGB ใหม่ (`_160708`, +fire hotspot) | เปลี่ยน | XGB เดิม | XGB ใหม่ | เปลี่ยน |
+|---|---|---|---|---|---|---|
+| MAE(P50) เฉลี่ย 24h | 2.7204 | 2.7159 | **-0.17%** | 2.8055 | 2.8104 | **+0.17%** |
+| R² เฉลี่ย 24h | 0.9388 | 0.9396 | +0.08pp | 0.9323 | 0.9336 | +0.13pp |
+| Coverage หลัง conformal | 88.77% | 89.15% | +0.38pp | 88.28% | 88.41% | +0.12pp |
+
+ทิศทาง delta MAE (LGB ดีขึ้นเล็กน้อย, XGB แย่ลงเล็กน้อย) ตรงกับที่ entry 125 ทำนายไว้จากการ validate แบบย่อทุกประการ (LGB -0.27%, XGB +0.14%) — ยืนยันว่า scaled-down validation methodology ของโปรเจกต์นี้เชื่อถือได้จริง ไม่ใช่แค่ noise จากการวัดแบบย่อ **โบนัสที่ validation แบบย่อไม่เคยวัด**: coverage หลัง conformal ดีขึ้นเล็กน้อยทั้ง 2 โมเดล (validation P50-only ไม่มี conformal calibration ให้วัดตรงนี้)
+
+**สรุป**: โมเดลนี้เป็น candidate ใหม่ล่าสุด บันทึกไว้เป็น artifact สำหรับทดสอบ/เอกสาร **ยังไม่ deploy เข้า `app.py`** เหมือนเดิม (สถานะเดียวกับ spatial-lag k=1 candidate ตอนแรก entry 110) รอ backtest ฤดูฝุ่นแบบเต็ม (entry 128) ยืนยันว่า >p90 ดีขึ้นจริงในโมเดลที่มี conformal calibration ครบ ไม่ใช่แค่ P50 ดิบ
+
+**ไฟล์ที่แก้**: `scripts/train_multiprovince_models.py` (`DATA_PATH`/`FEATURE_COLS`)
+**ไฟล์ที่เพิ่ม**: `models/lgb_pm25_multiprovince_residual_bagged_quantile_20260918_160708.pkl`, `models/xgb_pm25_multiprovince_residual_bagged_quantile_20260918_160708.pkl`, `models/conformal_calibration_{lgb,xgb}_20260918_160708.csv`, `models/multiprovince_eval_summary_20260918_160708.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (126) — Tune radius/window ของ fire-hotspot feature: config เดิม (100km/24h) ดีที่สุดอยู่แล้ว ไม่มี config ไหนดีกว่า
+
+**ที่มา**: entry 125 validate ด้วยค่าเดาเริ่มต้น (radius=100km, window=24h) เท่านั้น ยังไม่เคยเทียบกับค่าอื่น — ก่อนตัดสินใจสุดท้ายว่าคุ้ม/ไม่คุ้มที่จะลงทุนเต็มรูปแบบ ควรมั่นใจก่อนว่าค่าที่ใช้ validate เป็นค่าที่ดีที่สุดเท่าที่เป็นไปได้แล้วจริงๆ (เทียบ entry 108 ที่ทำแบบเดียวกันกับ spatial-lag k)
+
+**วิธีทำ**: `scripts/tune_fire_hotspot_hyperparams.py` — กวาด `RADIUS_GRID=[50,100,150]` x `WINDOW_GRID=[24,48]` = 6 config เทียบ baseline วิธีเดียวกับ `tune_spatial_lag_k.py` (คำนวณ feature ทุก config จาก hotspot event เดียวกันที่ดึงไว้แล้ว entry 123 ไม่ต้อง fetch ใหม่, P50-only, 5 horizon ตัวแทน) วัด MAE ทั้ง 3 มุม (รวม/ฤดูฝุ่น/`>p90`) เหมือน entry 125
+
+**ผลลัพธ์ — config เดิม (100km/24h) ที่ใช้ตอน validate เป็น config ที่ดีที่สุดในกริดอยู่แล้ว**:
+
+| Config | LGB mae_gt_p90 delta | XGB mae_gt_p90 delta | ทั้งคู่ improve? |
+|---|---|---|---|
+| **100km/24h (เดิม)** | **-1.85%** | **-0.60%** | ✓ ทั้งคู่ |
+| 150km/24h | -1.48% | -0.72% | ✓ ทั้งคู่ (อันดับ 2) |
+| 100km/48h | -0.09% | -1.80% | LGB แทบไม่ขยับ |
+| 50km/24h | -0.41% | +1.24% (แย่ลง) | ✗ |
+| 150km/48h | -0.64% | +0.88% (แย่ลง) | ✗ |
+| 50km/48h | +1.36% (แย่ลง) | -0.47% | ✗ |
+
+**Pattern ชัดเจน**: window **24h ดีกว่า 48h เกือบทุกกรณี** (สัญญาณล่าสุดสำคัญกว่าการสะสมยาว) และ radius **100-150km ดีกว่า 50km** (50km แคบเกินไป พลาด hotspot ที่ยังมีผลจริง) — มีแค่ 2 config (100km/24h, 150km/24h) ที่ทั้ง 2 โมเดลดีขึ้นพร้อมกันทั้ง `mae_burning` และ `mae_gt_p90` และ 100km/24h ดีกว่า 150km/24h ทุกจุดที่วัด (ยกเว้น XGB `mae_gt_p90` ที่ใกล้เคียงกันมาก)
+
+**สรุป**: ไม่มี config ไหนในกริดที่ทดสอบดีกว่าค่าเดิมที่ใช้ validate ไปแล้ว (entry 125) — **ค่าเดาเริ่มต้นถูกต้องอยู่แล้ว** ไม่ต้องปรับอะไรเพิ่ม แต่ก็ไม่ได้ทำให้ภาพรวมเปลี่ยนไปจาก entry 125: MAE รวมยังก้ำกึ่ง (ไม่ผ่านเกณฑ์ชัดเจนแบบ spatial-lag) มีแค่ `mae_burning`/`mae_gt_p90` ที่ดีขึ้นสม่ำเสมอ **นี่คือจุดตัดสินใจแบบ judgment call จริงๆ ไม่ใช่คำตอบชัดเจนแบบ feature อื่นที่ผ่านมา** (spatial-lag ชัดว่าคุ้ม, elevation/amenity ชัดว่าไม่คุ้ม) — ต้องชั่งน้ำหนักเองว่า improvement เฉพาะจุดที่สำคัญที่สุด (ฝุ่นวิกฤต) คุ้มกับต้นทุนที่เพิ่มขึ้นจริง (ต้อง sync feature formula 4 จุด, retrain เต็ม, และที่สำคัญคือต้องเพิ่ม **FIRMS fetch เข้า live inference** ด้วยถ้าจะ deploy จริง — เป็น dependency ภายนอกตัวที่ 3 ต่อจาก OpenAQ/Open-Meteo) หรือไม่
+
+**ไฟล์ที่เพิ่ม**: `scripts/tune_fire_hotspot_hyperparams.py`, `models/fire_hotspot_hyperparam_tuning_20260918_155613.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (125) — Validate fire-hotspot feature: MAE รวมก้ำกึ่ง แต่ช่วยชัดเจนเฉพาะช่วงฝุ่นวิกฤต (>p90) ซึ่งเป็นจุดเดียวที่ไม่มี feature ไหนช่วยได้มาทั้งวัน
+
+**ที่มา**: ต่อจาก entry 122-124 (ยืนยัน API ใช้ได้ + ดึงข้อมูลจริง + คำนวณ feature `fire_hotspot_count_100km_24h` แล้ว correlation ดิบกับ pm25 = 0.504) — ขั้นตัดสินใจสุดท้ายก่อนลงทุนเต็มรูปแบบ ตามธรรมเนียม validate-ก่อน-ลงทุน (entry 94/98/104/108)
+
+**วิธีทำ**: `scripts/validate_fire_hotspot_feature.py` — วิธีเดียวกับ `validate_spatial_lag_feature.py`/`validate_elevation_feature.py` เป๊ะ (baseline 19 feature vs +1 feature ใหม่, P50-only, 5 horizon ตัวแทน) **เพิ่มเติมจากสคริปต์เดิม**: วัด MAE แยก 4 มุม (รวม/ช่วงปกติ/ฤดูฝุ่น/severity `>p90`) ไม่ใช่แค่ MAE รวม เพราะ feature นี้ตั้งใจแก้จุดอ่อนเฉพาะจุด ไม่ใช่ภาพรวม — MAE รวมอย่างเดียวอาจกลบ improvement ที่กระจุกอยู่เฉพาะจุดสำคัญได้
+
+**ผลลัพธ์ — เป็นครั้งแรกในวันนี้ที่ feature ใหม่มีผลต่าง**กัน**ระหว่างสถานการณ์ปกติกับสถานการณ์วิกฤต**:
+
+| Metric | LGB delta% | XGB delta% |
+|---|---|---|
+| MAE รวม | -0.27% | +0.14% |
+| MAE ช่วงปกติ | +0.33% (แย่ลงนิดหน่อย) | +0.90% (แย่ลงนิดหน่อย) |
+| MAE ฤดูฝุ่น (ก.พ.-เม.ย.) | -0.52% | -0.17% |
+| **MAE ที่ severity `>p90`** | **-1.85%** | **-0.60%** |
+
+**Pattern ที่สังเกตได้ชัดเจนและสมเหตุสมผล**: feature นี้**แย่ลงเล็กน้อยช่วงปกติ** (ตอนแทบไม่มี hotspot เลย ค่า feature ใกล้ 0 คงที่ ไม่มีข้อมูลใหม่ให้โมเดล กลับเป็น noise เล็กน้อย) แต่**ช่วยชัดเจนขึ้นเรื่อยๆ ตามความรุนแรง** (ฤดูฝุ่น → ดีขึ้น, `>p90` → ดีขึ้นมากสุด) — ตรงกับกลไกที่คาดไว้เป๊ะ: feature นี้มีข้อมูลจริงเฉพาะตอนที่มีการเผาเกิดขึ้น ไม่ใช่ตลอดเวลา
+
+**เทียบกับ feature อื่นที่เคย validate มา**: elevation (entry 98-99) และ amenity_density (104-106) ให้ผล**ไม่ชัดเจนทุกมุม**เหมือนกันหมด (noise-level ทั้งภาพรวมและทุกกลุ่มย่อยเท่าที่เคยวัด) — fire hotspot เป็น feature แรกที่แสดง pattern แบบ**มีทิศทางชัดเจนแต่แยกตามบริบท** ไม่ใช่ noise แบนราบ เป็นสัญญาณที่น่าเชื่อถือกว่ามาก แม้ตัวเลข MAE รวมจะยังไม่ผ่านเกณฑ์ ±0.3-0.5% ที่ใช้ตัดสินใจ elevation/amenity ก็ตาม (เพราะเกณฑ์นั้นออกแบบมาสำหรับ feature ที่ควรมีผลสม่ำเสมอตลอดเวลา ไม่เหมาะกับ feature ที่ผลกระจุกเฉพาะบริบท)
+
+**สรุป**: **ยังสรุปชัดเจนแบบ "คุ้ม/ไม่คุ้ม" ทันทีไม่ได้** — MAE รวมก้ำกึ่ง (ผ่านเกณฑ์ที่ LGB ไม่ผ่านที่ XGB) แต่สัญญาณที่ severity สูงสุดชัดเจนและสมเหตุสมผลมาก ไม่ใช่ noise — **แนะนำให้ปรับ hyperparameter ก่อนตัดสินใจสุดท้าย** (ลอง radius/window อื่น เช่น 50km/150km, 48h แทน 24h, หรือ log-transform ค่า count ที่เบ้ขวามาก [max ถึง 3,347] ให้โมเดลเรียนรู้ง่ายขึ้น) ก่อนตัดสินใจ sync feature formula 4 จุด + retrain เต็มรูปแบบ — ยังไม่ทำในงานนี้ รอผู้ใช้ตัดสินใจทิศทางต่อ
+
+**ไฟล์ที่เพิ่ม**: `scripts/validate_fire_hotspot_feature.py`, `models/fire_hotspot_feature_validation_20260918_155158.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (124) — คำนวณ fire_hotspot_count_100km_24h feature: correlation ดิบกับ pm25 สูงถึง 0.504 และยืนยันสมมติฐานหมอกควันข้ามพรมแดนของนครพนม/บึงกาฬ
+
+**ที่มา**: ต่อจาก entry 123 (ดึงข้อมูล hotspot 476,426 จุดสำเร็จ) — แปลงเป็น feature ระดับจังหวัด/ชั่วโมงก่อน validate จริง
+
+**วิธีทำ**: `scripts/compute_fire_hotspot_feature.py` — นับจำนวน hotspot ในรัศมี 100km (ไกลกว่า 3km ของ amenity_density มาก เพราะควันเผาไร่ลอยไกลกว่าสิ่งปลูกสร้าง) ย้อนหลัง 24 ชม. ต่อจังหวัด/ชั่วโมง คำนวณให้เร็วด้วย haversine แบบ vectorized กรองเฉพาะ hotspot ในรัศมีก่อน (ต่อจังหวัด) แล้วใช้ `np.searchsorted` นับในหน้าต่างเวลาแบบ binary search (แทน nested loop ตรงๆ ที่ทำไม่ไหวกับข้อมูลขนาดนี้) merge เข้ากับ `multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv` (ยังไม่แก้ pipeline หลัก แค่ไฟล์ทดสอบแยก เหมือน `augment_raw_dataset_with_spatial_lag.py` ตอน validate spatial-lag ครั้งแรก)
+
+**ผลลัพธ์**:
+- Pattern ตามเดือนชัดเจนมาก: เฉลี่ย 59-88 จุด/แถวช่วง ก.พ.-เม.ย. เทียบ <1 จุด/แถวช่วง มิ.ย.-ต.ค. (เกือบ 2 อันดับความรุนแรงต่างกัน)
+- **นครพนม (49.56) และบึงกาฬ (49.73) มีค่าเฉลี่ย hotspot สูงสุดในบรรดา 20 จังหวัด** (รองจาก loei ที่ 48.58 เท่านั้น) — ทั้งคู่เป็น**จังหวัดริมแม่น้ำโขง**ที่ entry 98/120 เคยตั้งข้อสังเกตว่ามี `pm25_std` สูงผิดปกติโดยไม่มีคำอธิบายชัดเจน — งานนี้ให้หลักฐานเชิงประจักษ์ตรงๆ เป็นครั้งแรกว่าน่าจะเกี่ยวกับกิจกรรมเผาไร่/ป่าในพื้นที่ใกล้เคียง (รวมฝั่งลาวที่ bounding box ครอบคลุมด้วย) ไม่ใช่ปัจจัยอื่น
+- **correlation(fire_hotspot_count_100km_24h, pm25) = 0.504** รวมทุกจังหวัด — แรงกว่า raw correlation ของทุก feature ที่เคย validate มาในโปรเจกต์นี้ (amenity_density r=0.32 กับ pm25_mean เท่านั้น ไม่ใช่ pm25 ตรงๆ, elevation ~0)
+
+**สรุป**: สัญญาณดิบแรงมากและเชื่อมโยงกับ finding อื่นของวันนี้ (entry 120) ได้อย่างสมเหตุสมผล — ไปต่อขั้น validate จริงด้วยโมเดล (entry 125)
+
+**ไฟล์ที่เพิ่ม**: `scripts/compute_fire_hotspot_feature.py`, `data/multiprovince_pm25_features_raw_spatial_k1_with_firehotspot_20260918_155102.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (123) — ดึงข้อมูล FIRMS hotspot เต็มช่วงเทรน (2024-01-02 ถึง 2026-07-02): 476,426 จุด ยืนยันฤดูฝุ่นชัดเจนในข้อมูลดิบ
+
+**ที่มา**: ต่อจาก entry 122 (diagnostic ยืนยัน API ใช้ได้) — ดึงข้อมูลเต็มช่วงที่ training dataset มีข้อมูล (2024-01-02 ถึง 2026-07-02, ตรงกับ `data/multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv`)
+
+**วิธีทำ**: `scripts/fetch_firms_hotspots_isaan.py` — วน request ทีละ 5 วัน (183 chunk ตาม limit ที่ยืนยันจาก entry 122) bounding box เดียวกับ diagnostic (อีสาน + กันชนลาว/กัมพูชา) ใช้ source `VIIRS_NOAA20_SP` (archive) เป็นหลัก มี fallback ไป `VIIRS_NOAA20_NRT` ถ้า SP ว่างเปล่า (สำหรับช่วงใกล้ปัจจุบันที่ archive อาจยังไม่ประมวลผลถึง)
+
+**ผลลัพธ์**: ดึงสำเร็จครบทั้ง 183 chunk **ทุก chunk ใช้ source SP ได้เลย ไม่ต้อง fallback แม้แต่ครั้งเดียว** (แปลว่า archive ประมวลผลตามทันถึงกลางปี 2026 แล้ว) รวม **476,426 แถว hotspot** — จำนวนต่อเดือนต่างกันชัดเจนมาก: ม.ค.-เม.ย. 77,645-138,257 จุด/เดือน เทียบ พ.ค.-พ.ย. หลักร้อยถึงหลักพันเท่านั้น (ธ.ค. กระโดดกลับมา 12,184 บ่งชี้ต้นฤดูเผาเริ่มแล้ว) — ยืนยัน pattern ฤดูฝุ่นชัดเจนในข้อมูลดิบตั้งแต่ก่อนแปลงเป็น feature ด้วยซ้ำ
+
+**สรุป**: ข้อมูลครบและมีคุณภาพดี พร้อมแปลงเป็น feature ต่อ (entry 124)
+
+**ไฟล์ที่เพิ่ม**: `scripts/fetch_firms_hotspots_isaan.py`, `data/firms_hotspots_isaan_20260918_153936.csv`, `data/firms_hotspots_fetch_log_20260918_153936.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (122) — ทดสอบการเข้าถึง NASA FIRMS API (fire hotspot) ก่อนดึงข้อมูลเต็ม: ใช้ได้จริง สัญญาณช่วงฤดูฝุ่นต่างจากปกติมหาศาล
+
+**ที่มา**: ผู้ใช้อยากลอง feature ใหม่ที่ยังไม่เคยทดสอบ — ทุก feature ปัจจุบัน (weather/pm25 history/geography) เป็นแค่ผลลัพธ์ทางอ้อมของฝุ่น ไม่มีตัวไหนสังเกต**สาเหตุ**ของเหตุการณ์ฝุ่นวิกฤต (การเผาไร่/ป่า) โดยตรงเลย ซึ่งเป็นจุดอ่อนที่สุดที่ยังแก้ไม่ตกทั้งวัน (>p90 coverage, entry 111-121) — เลือก NASA FIRMS (ข้อมูลจุดความร้อนจากดาวเทียม VIIRS/MODIS) เป็นตัวทดสอบ ต้องสมัคร MAP_KEY ฟรี (ผู้ใช้สมัครและใส่ `.env` เป็น `FIRMS_KEY` เอง) ตามธรรมเนียมโปรเจกต์ที่ทดสอบ API เล็กๆ ก่อนดึงเต็มเสมอ (เทียบ `diagnose_amenity_density.py` ก่อน entry 104)
+
+**วิธีทำ**: `scripts/diagnose_firms_hotspot_access.py` — bounding box ครอบคลุม 20 จังหวัดอีสาน + กันชนเข้าไปฝั่งลาว/กัมพูชาเล็กน้อย (`100.5,13.5,106.5,19.0`) เหตุผลที่ใส่กันชน: entry 120 พบว่านครพนม/บึงกาฬ (ริมโขง) มี `pm25_std` สูงผิดปกติ อยากมีข้อมูลพอทดสอบสมมติฐานหมอกควันข้ามพรมแดนในอนาคตด้วย ทดสอบ 3 อย่าง: (1) query ข้อมูล NRT ล่าสุด (2) query ข้อมูลย้อนหลังถึง ก.พ. 2024 ด้วย source แบบ archive (3) หา limit จริงของ `day_range`
+
+**ผลลัพธ์**:
+1. **API/MAP_KEY ใช้งานได้จริง** — `mapkey_status` endpoint ยืนยัน transaction_limit=5000/10min, current_transactions=0
+2. **`day_range` สูงสุดต่อ request จริงคือ 5 วัน** ไม่ใช่ 10 ตามที่ประเมินไว้ตอนวางแผน (day_range=6 ถูกปฏิเสธด้วย 400 Bad Request ยืนยันชัดเจน) — กระทบแผนการดึงข้อมูลเต็ม (ต้องใช้ ~198 request แทน ~92 request สำหรับช่วง 2024-01-02 ถึงปัจจุบัน)
+3. **ต้องใช้ source คนละตัวกันระหว่างข้อมูลล่าสุดกับย้อนหลัง**: `VIIRS_NOAA20_NRT` สำหรับข้อมูลล่าสุด, `VIIRS_NOAA20_SP` (standard-processing/archive) สำหรับข้อมูลเก่า — ทั้งคู่ใช้งานได้จริงกับ MAP_KEY เดียวกัน คอลัมน์ที่ได้ตรงกันเกือบหมด (archive มีคอลัมน์ `type` เพิ่ม)
+4. **สัญญาณต่างกันมหาศาลระหว่างฤดู** — ช่วงปกติ (16-20 ก.ย. 2026) เจอ hotspot แค่ **4 จุด** ในพื้นที่ทั้งหมดตลอด 5 วัน เทียบกับช่วงฤดูฝุ่น (15-19 ก.พ. 2024) เจอ **8,776 จุด** ในช่วงเวลาเดียวกัน (5 วัน) — ต่างกันเกือบ **2,000 เท่า** เป็นสัญญาณที่แรงกว่า weather feature ใดๆ ที่มีอยู่ตอนนี้มาก (เทียบ weather group ทั้งกลุ่มช่วยแค่ +1.3-1.7% ตอน ablation, entry 90)
+
+**สรุป**: การันตีความเป็นไปได้ทางเทคนิคครบแล้ว (API ใช้ได้, ดึงย้อนหลังได้ถึงข้อมูลเทรนเริ่มต้น) และสัญญาณดิบก็ดูมีแนวโน้มดีมาก (ความแตกต่างระหว่างฤดูสูงลิ่ว) — เดินหน้าดึงข้อมูลเต็มต่อได้ (ยังไม่ retrain ยังต้อง validate แบบย่อก่อนตามธรรมเนียม)
+
+**ไฟล์ที่เพิ่ม**: `scripts/diagnose_firms_hotspot_access.py`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (121) — ลอง calibration แบบจัดกลุ่มด้วย pm25_std (volatility) ของจังหวัด: ไม่ช่วยปัญหา >p90 เดิม และช่วย zero-shot แค่บางส่วน/ไม่คงเส้นคงวา
+
+**ที่มา**: entry 120 พบว่า `pm25_std` อธิบาย MAE ของ LOPO ได้ดีกว่าระยะทางมาก (r=0.85-0.87, significant) — ทดสอบว่าถ้าเอาตัวแปรนี้มาใช้จัดกลุ่มตอน conformal calibration (แทน predicted severity หรือระยะทาง) จะช่วยทั้งปัญหา coverage >p90 เดิม (entry 111-118) และปัญหา coverage ต่ำของจังหวัด zero-shot จริง (entry 119) ได้พร้อมกันไหม — ข้อดีของวิธีนี้คือกลุ่มใหญ่กว่าเดิมมาก (จัดกลุ่ม**จังหวัด**เป็น tertile ~5-6 จังหวัด/กลุ่ม ไม่ใช่จัดกลุ่ม**แถว**แบบเดิม) ไม่น่าเจอปัญหาความแปรปรวนจากกลุ่มเล็กแบบ entry 117-118
+
+**วิธีทำ**: `scripts/recalibrate_conformal_by_volatility_k1.py` — จัดกลุ่ม 17 จังหวัดเทรนเป็น 3 กลุ่มตาม tertile ของ `pm25_std` (`pd.qcut`, bin edges=[12.89, 14.92, 15.83, 25.56]) คำนวณ q_hat แยกต่อกลุ่ม (pool calib จากทุกจังหวัดในกลุ่มเดียวกัน) ทดสอบ 2 มุมพร้อมกัน: (A) บน test split ทางการของจังหวัดเทรน เทียบ `single_qhat`/`flat_3grp` (115)/`volatility_grp` (ใหม่) (B) บน 3 จังหวัด zero-shot จริง (entry 119) — จัดเข้ากลุ่มด้วย bin edge เดียวกับ (A) (`nakhonphanom`→กลุ่มผันผวนสูง, `roiet`→กลุ่มผันผวนสูง, `mahasarakham`→กลุ่มผันผวนต่ำ) เทียบ `single_qhat` (baseline เดิม) กับ `volatility_grp`
+
+**ผลลัพธ์ (A) — แทบไม่ช่วยปัญหา >p90 เดิมเลย, แพ้ flat_3grp ชัดเจน**:
+
+| Coverage >p90 | single_qhat | flat_3grp (115) | volatility_grp (งานนี้) |
+|---|---|---|---|
+| LGB | 84.9% | **86.2%** | 85.1% |
+| XGB | 80.8% | **85.3%** | 81.2% |
+
+**ผลลัพธ์ (B) — ช่วยจังหวัดที่แย่ที่สุด (นครพนม) ได้จริงแต่เล็กน้อย และทำให้มหาสารคามแย่ลง**:
+
+| Coverage | single_qhat | volatility_grp |
+|---|---|---|
+| mahasarakham (LGB/XGB) | 80.8%/83.0% | 78.8%/80.9% **(แย่ลง)** |
+| nakhonphanom (LGB/XGB) | 74.1%/72.7% | 75.4%/74.2% (+1.3/+1.5pp) |
+| roiet (LGB/XGB) | 87.1%/85.9% | 87.9%/87.3% (+0.8/+1.4pp) |
+
+**สาเหตุที่ผลไม่เป็นไปตามคาด**:
+1. **(A)** severity bin `>p90` วัดจาก**ค่าจริงสุดโต่งรายแถว** ไม่ใช่ระดับความผันผวนเฉลี่ยของทั้งจังหวัด — จังหวัดที่ผันผวนต่ำโดยเฉลี่ยก็ยังมีเหตุการณ์ฝุ่นพุ่งสูงเป็นครั้งคราวได้ (ไม่ถูกจับโดยการจัดกลุ่มระดับจังหวัด) การจัดกลุ่มด้วย predicted severity รายแถวแบบ `flat_3grp` เดิมจึงตรงประเด็นกับ metric นี้มากกว่าโดยธรรมชาติ
+2. **(B)** `pm25_std` อธิบาย **MAE เฉลี่ยรวม** ได้ดี (entry 120) แต่ไม่ได้แปลว่าการขยาย/บีบ margin ตาม volatility จะแก้ปัญหา coverage ได้ตรงๆ เสมอไป — มหาสารคาม (กลุ่มผันผวนต่ำ) coverage แย่ลงเมื่อไม่ได้ margin กว้างขึ้นเหมือนจังหวัดอื่นในกลุ่มเดียวกัน บ่งชี้ว่าปัญหา coverage ของ zero-shot อาจมาจาก bias เชิงระบบของการพยากรณ์ (จาก distribution shift) มากกว่าแค่ขนาดของ uncertainty interval ที่แคบไป
+
+**สรุป**: **ปฏิเสธแนวทางนี้เช่นกัน** — ทดสอบ calibration แบบต่างๆ ไปแล้ว 4 วิธี (severity-only/entry115, province-relative/117, province-within-global-severity/118, volatility-based/งานนี้) `flat_3grp` (severity-only, entry 115) **ยังคงเป็นคำตอบที่ดีที่สุดสำหรับปัญหา >p90 ของจังหวัดเทรน** ส่วนปัญหา coverage ของจังหวัด zero-shot จริง (entry 119) ยังไม่มีวิธี recalibration ใดที่แก้ได้ชัดเจน/คงเส้นคงวา — น่าจะต้องแก้ที่ต้นตอ (เช่น เพิ่มความมั่นใจของ point prediction เอง ไม่ใช่แค่ปรับ margin) ซึ่งอยู่นอกขอบเขตของการทดลอง calibration ล้วนๆ แล้ว ขอปิดสายการทดลอง calibration ไว้ที่นี่
+
+**ไฟล์ที่เพิ่ม**: `scripts/recalibrate_conformal_by_volatility_k1.py`, `models/recalibrate_volatility_k1_trained_20260918_143535.csv`, `models/recalibrate_volatility_k1_zeroshot_20260918_143535.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (120) — Confounder analysis บนผล LOPO: pm25_std (ความผันผวนของจังหวัดเอง) อธิบาย MAE ได้ดีกว่าระยะทางมาก (r=0.85-0.87 vs 0.28-0.30) — significant จริง
+
+**ที่มา**: entry 114 (LOPO, n=17) พบว่า correlation(distance, MAE) = 0.28-0.30 ทิศทางตรงสมมติฐานแต่ยังไม่ significant (p=0.24-0.29) — ตั้งคำถามว่ามีตัวแปรอื่นอธิบาย MAE ได้ดีกว่าระยะทางไหม โดยไม่ต้อง predict ใหม่เลย (ใช้ผล MAE ที่มีอยู่แล้วจาก entry 114 ล้วนๆ)
+
+**วิธีทำ**: `scripts/analyze_zeroshot_lopo_confounders.py` — ดึงตัวแปรอธิบายเพิ่มเติมต่อจังหวัด (`missing_ratio` — generalize จาก `compute_missing_ratio()` ใน `app.py` มาเป็นค่าเฉลี่ยทั้ง batch, `pm25_mean`/`pm25_std` จากข้อมูลดิบ, `elevation_m`/`amenity_density_3km` จาก registry, `n_rows`) มา correlate กับ MAE ของแต่ละจังหวัดจากผล LOPO (entry 114) โดยตรง (n=17, Pearson r + p-value)
+
+**ผลลัพธ์ — พบตัวแปรที่ significant จริงเป็นครั้งแรกในสาย zero-shot investigation ทั้งหมดของวันนี้**:
+
+| ตัวแปร | LGB r | LGB p | XGB r | XGB p |
+|---|---|---|---|---|
+| **pm25_std** | **+0.852** | **<0.0001** ✓ | **+0.871** | **<0.0001** ✓ |
+| distance_to_nearest_trained_km (entry 114) | +0.283 | 0.271 | +0.304 | 0.236 |
+| elevation_m | -0.269 | 0.297 | -0.218 | 0.401 |
+| amenity_density_3km | -0.253 | 0.327 | -0.255 | 0.324 |
+| pm25_mean | +0.212 | 0.414 | +0.161 | 0.538 |
+| n_rows | +0.179 | 0.491 | +0.210 | 0.419 |
+| missing_ratio | (ค่าคงที่ 0.0 ทุกจังหวัด — ไม่มีข้อมูลขาดหายเลยในกลุ่ม 17 จังหวัดเทรน คำนวณ correlation ไม่ได้เพราะไม่มีความแปรปรวน) |
+
+**`pm25_std` (ความผันผวนของ PM2.5 ในจังหวัดนั้นเอง) คือตัวแปรที่อธิบาย MAE ได้ดีที่สุดชัดเจน** — แรงกว่าระยะทางถึง 3 เท่า และเป็นตัวเดียวที่ significant จริง (p<0.0001 ทั้ง 2 โมเดล) สมเหตุสมผลตามสามัญสำนึก: จังหวัดที่ฝุ่นแกว่งตัวรุนแรง/ไม่สม่ำเสมอ ย่อมทายยากกว่าโดยธรรมชาติ ไม่ว่าโมเดลจะเคยเห็นจังหวัดนั้นตอนเทรนหรือไม่ก็ตาม — เป็นปัจจัยที่ตรงประเด็นกว่า "อยู่ใกล้/ไกลจังหวัดเทรน" ซึ่งเป็นแค่ตัวแทนทางอ้อม
+
+**เชื่อมกับ entry 119 (เช็คจังหวัด zero-shot จริง)**: นครพนม (MAE สูงสุดในบรรดา 3 จังหวัด zero-shot จริง, สูงกว่า LOPO max ด้วยซ้ำ) มี **pm25_std = 26.45** — สูงกว่าทุกจังหวัดใน 17 จังหวัดเทรนที่ใช้คำนวณ correlation นี้เลย (สูงสุดในกลุ่มเทรนคือ buengkan ที่ 25.56) ส่วนมหาสารคาม/ร้อยเอ็ด (MAE ดีกว่า) มี pm25_std แค่ 14.24/16.33 — ตรงกับ pattern ที่พบในงานนี้เป๊ะ **เป็นไปได้สูงว่าสาเหตุที่แท้จริงที่นครพนมทายยากไม่ใช่เพราะ "อยู่ไกล" (74km) แต่เพราะฝุ่นในจังหวัดนั้นผันผวนสูงเป็นทุนเดิม** (ซึ่งอาจสัมพันธ์กับที่ตั้งริมแม่น้ำโขง คล้ายกับที่ entry 98 เคยสังเกตว่านครพนม/บึงกาฬ ผันผวนสูงเพราะเป็นจังหวัดริมโขง)
+
+**สรุป**: สมมติฐานเดิม (ระยะทาง→MAE) **ยังพอมีทิศทางถูกแต่ไม่ใช่ตัวขับหลัก** — `pm25_std` เป็นตัวแปรที่ควรใช้อธิบาย/พยากรณ์คุณภาพการ generalize ของโมเดลไปยังจังหวัดใหม่มากกว่าระยะทางอย่างมีนัยสำคัญทางสถิติจริง ถ้าจะประเมินความเสี่ยงก่อนเพิ่มจังหวัด zero-shot ใหม่ในอนาคต ควรดู `pm25_std` ของจังหวัดเป้าหมายเป็นตัวชี้วัดหลัก ไม่ใช่แค่ระยะทางจากจังหวัดเทรนที่ใกล้ที่สุด
+
+**ไฟล์ที่เพิ่ม**: `scripts/analyze_zeroshot_lopo_confounders.py`, `models/zeroshot_lopo_confounders_merged_20260918_142902.csv`, `models/zeroshot_lopo_confounders_correlation_20260918_142902.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (119) — เช็คโมเดล k=1 กับ ground truth จริงของ 3 จังหวัด zero-shot เป็นครั้งแรก: coverage ต่ำกว่าจังหวัดเทรนชัดเจน โดยเฉพาะนครพนม
+
+**ที่มา**: entry 93 และ entry 114 (LOPO) ทั้งคู่เป็นแค่การ**จำลอง**ว่าจังหวัดที่เทรนได้เป็น zero-shot (ตัดออกแล้วทดสอบ) ไม่เคยเช็คกับ 3 จังหวัด zero-shot จริงที่แอปเสิร์ฟอยู่ (นครพนม/ร้อยเอ็ด/มหาสารคาม) เลยสักครั้ง เพราะทุกสคริปต์กรอง `is_zero_shot` ออกหมด — ระหว่างตอบคำถามผู้ใช้พบว่า dataset ที่ใช้เทรนมี pm25 จริงของ 3 จังหวัดนี้อยู่แล้ว (`is_zero_shot=True` แปลว่า "ไม่ถูกใช้เทรน" ไม่ใช่ "ไม่มีข้อมูล") — nakhonphanom 19,090 แถว, roiet 10,299 แถว, mahasarakham 10,368 แถว (2024-2026) ไม่ต้อง fetch ใหม่เลย
+
+**วิธีทำ**: `scripts/eval_zeroshot_real_provinces.py` — โหลด pkg โมเดล k=1 (`_20260917_001147`) เลือก `df[df["is_zero_shot"]]` แทนที่จะกรองออกแบบทุกสคริปต์ก่อนหน้า predict ครบ 24 horizon ด้วยโมเดลที่เทรนไว้แล้ว ใช้ single q_hat เดิม (`conformal_calibration_{lgb,xgb}_20260917_001147.csv`) ประเมิน 2 ช่วงเวลา: (1) จำกัดเท่า test split ทางการของ 17 จังหวัดเทรน (เทียบตรงกับ entry 111 ได้) (2) เต็มประวัติที่มี — คำนวณระยะทางไปจังหวัดเทรนที่ใกล้สุดด้วย (`haversine_km`) เพื่อเทียบกับช่วง MAE ของ LOPO (entry 114)
+
+**ผลลัพธ์ (ช่วง test_period_only, เทียบ LOPO MAE range entry 114 = [1.85, 4.45])**:
+
+| จังหวัด | ระยะทางจังหวัดเทรนใกล้สุด | LGB MAE | XGB MAE | LGB coverage | XGB coverage |
+|---|---|---|---|---|---|
+| mahasarakham | 37.3km (กาฬสินธุ์) | 2.98 | 2.92 | 80.8% | 83.0% |
+| roiet | 45.4km (กาฬสินธุ์) | 3.10 | 3.13 | 87.1% | 85.9% |
+| **nakhonphanom** | **74.2km (สกลนคร)** | **5.14** | **5.34** | **74.1%** | **72.7%** |
+
+**Finding สำคัญ 2 ข้อ**:
+1. **นครพนม (จังหวัดที่ไกลจากจังหวัดเทรนที่สุดในบรรดา 3 จังหวัด zero-shot) มี MAE สูงกว่าค่าสูงสุดที่ LOPO เคยพบทั้ง 17 รอบเสียอีก** (5.14-5.34 เทียบ LOPO max 4.42-4.45) — เป็นหลักฐานเพิ่มเติมที่สอดคล้องกับสมมติฐานระยะทาง (entry 114 ยังไม่ significant ที่ n=17 แต่จุดข้อมูลจริงนี้ไปในทิศทางเดียวกันชัดเจน มหาสารคาม/ร้อยเอ็ดที่ใกล้กว่า (37-45km) มี MAE อยู่ในช่วงกลางๆ ของ LOPO พอดี (เฉลี่ย LOPO ~2.82-2.91))
+2. **Coverage ของทั้ง 3 จังหวัด zero-shot จริงต่ำกว่าค่าที่รายงานสำหรับจังหวัดเทรน (~88-89%) อย่างชัดเจนทุกจังหวัด** (72.7-87.1%) — สมเหตุสมผลเชิงทฤษฎี: การรับประกัน coverage ของ conformal prediction ใช้ได้เฉพาะข้อมูลที่มาจาก distribution เดียวกับ calibration set (17 จังหวัดเทรน) เท่านั้น จังหวัด zero-shot คือ distribution shift โดยธรรมชาติ ทำให้ q_hat ที่ calibrate จากจังหวัดเทรนไม่ transfer มาใช้กับจังหวัด zero-shot ได้ดีเท่า — นครพนม (ไกลสุด) coverage ต่ำสุดด้วย (72.7-75.8%) สอดคล้องกับทั้ง 2 finding พร้อมกัน
+
+**สรุป**: นี่คือหลักฐานตรงที่สุดเท่าที่มีเกี่ยวกับคุณภาพการพยากรณ์ zero-shot จริง (ไม่ใช่แค่จำลอง) — **ความแม่นยำ (MAE) ของจังหวัด zero-shot จริงยังพอรับได้สำหรับจังหวัดใกล้ (มหาสารคาม/ร้อยเอ็ด) แต่แย่ลงชัดเจนสำหรับจังหวัดไกล (นครพนม)** และ**ช่วงความเชื่อมั่น (coverage) ของทั้ง 3 จังหวัดยังไม่น่าเชื่อถือเท่าจังหวัดเทรน** — เป็นข้อจำกัดที่ควรระบุให้อาจารย์/ผู้ใช้แอปทราบตรงๆ ถ้าจะ deploy โมเดลนี้จริง (ไม่ใช่แค่ MAE เฉลี่ยรวมที่ดูดีในภาพรวม แต่ต้องระบุว่า uncertainty interval ของจังหวัด zero-shot โดยเฉพาะนครพนม ยังไม่น่าเชื่อถือเท่าที่ตัวเลข 90% เป้าหมายบอกไว้)
+
+**ไฟล์ที่เพิ่ม**: `scripts/eval_zeroshot_real_provinces.py`, `models/zeroshot_real_provinces_per_horizon_20260918_142819.csv`, `models/zeroshot_real_provinces_summary_20260918_142819.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (118) — แก้จุดนิยาม severity ที่ไม่ตรงกันจาก entry 117 แล้ว: ดีขึ้นกว่าเดิมแต่ยังแพ้ severity-only — สรุปว่ามิติจังหวัดไม่คุ้มกับขนาด calib ที่มีตอนนี้
+
+**ที่มา**: entry 117 พบว่า Mondrian calibration แบบ (province, severity) แย่กว่าทั้ง single_qhat และ flat_3grp (severity อย่างเดียว) วิเคราะห์สาเหตุไว้ 2 ข้อ: (1) ขนาดกลุ่มเล็กทำให้ q_hat แปรปรวนสูง (2) นิยาม severity ไม่ตรงกันระหว่างขั้น calibrate (percentile สัมพัทธ์ต่อจังหวัด) กับขั้น evaluate (percentile สัมบูรณ์รวมทุกจังหวัด) — งานนี้แก้จุด (2) เพื่อแยกดูว่าสาเหตุไหนเป็นตัวหลัก
+
+**วิธีทำ**: `scripts/recalibrate_conformal_per_province_global_severity_k1.py` — ใช้ severity threshold แบบสัมบูรณ์รวมทุกจังหวัด**เดียวกับ `flat_3grp` เป๊ะ** (ไม่ใช่ percentile เทียบจังหวัดตัวเองแบบ entry 117) แล้วแค่แยกคำนวณ q_hat ต่อจังหวัด**ภายใน**แต่ละ severity group — นิยาม "high" ตอน calibrate กับตอน evaluate จึงตรงกันแล้ว เทียบ 4 วิธีในตารางเดียว: `single_qhat`, `flat_3grp` (entry 115), `province_severity` (entry 117), `province_within_global_severity` (ใหม่)
+
+**ผลลัพธ์ (coverage ที่ >p90)**:
+
+| | single_qhat | flat_3grp (115) | province_severity (117) | province_within_global_severity (งานนี้) |
+|---|---|---|---|---|
+| LGB | 84.9% | **86.2%** | 81.9% | 83.2% |
+| XGB | 80.8% | **85.3%** | 79.6% | 82.1% |
+
+**การแก้นิยาม severity ช่วยจริงแต่ไม่พอ**: `province_within_global_severity` ดีขึ้นกว่า `province_severity` เดิมชัดเจน (LGB 81.9%→83.2%, XGB 79.6%→82.1%) ยืนยันว่าสาเหตุ (2) เป็นปัจจัยจริง **แต่ยังแพ้ `flat_3grp` (severity อย่างเดียว ไม่แยกจังหวัด) อยู่ดี** ทั้ง 2 โมเดล — แปลว่าสาเหตุ (1) (ขนาดกลุ่มเล็ก/ความแปรปรวนของ q_hat) เป็นปัจจัยหลักที่แก้ไม่ได้ด้วยการปรับนิยาม severity อย่างเดียว ยืนยันเพิ่มด้วยจำนวน fallback ที่เพิ่มขึ้นจาก 0 cell (entry 117) เป็น 5 cell (จาก 51 cell ต่อโมเดล) ในงานนี้ — เพราะ threshold สัมบูรณ์ทำให้บางจังหวัดฝุ่นน้อยแทบไม่มีแถวเข้ากลุ่ม "สูง" ของ global เลย
+
+**สรุป**: **ปฏิเสธแนวทางเพิ่มมิติจังหวัดเข้าไปในการ calibrate ทั้ง 2 แบบที่ลอง** (relative percentile และ absolute-threshold-with-per-province-qhat) — ที่ calib size ปัจจุบัน (~45,406 แถวรวม, ~2,671 แถว/จังหวัด) การแบ่งกลุ่มตาม severity อย่างเดียว (`flat_3grp`, entry 115) ยังคงเป็นทางเลือกที่ดีที่สุดที่ลองมา (86.2%/85.3%) — ถ้า calib split มีขนาดใหญ่ขึ้นมากในอนาคต (เช่น สะสมข้อมูลมากขึ้นหลายปี) แนวทางนี้อาจกลับมาคุ้มค่าอีกครั้งเพราะปัญหาความแปรปรวนของ q_hat กลุ่มเล็กจะลดลงตามขนาดข้อมูล — แต่ ณ ตอนนี้ไม่แนะนำ ปิดประเด็นนี้ไว้ที่ `flat_3grp` เป็นคำตอบสุดท้ายของการทดลองปรับ calibration รอบนี้
+
+**ไฟล์ที่เพิ่ม**: `scripts/recalibrate_conformal_per_province_global_severity_k1.py`, `models/recalibrate_province_global_severity_k1_20260918_142033.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (117) — ลอง Mondrian calibration แบบ (province, severity) ร่วมกัน: แย่กว่าเดิมทั้ง 2 มิติ (negative result)
+
+**ที่มา**: entry 115 (severity-only group-conditional calibration) ดีขึ้นกว่า single q_hat แต่ยังไม่ถึงเป้า 90% — CHANGELOG (76) เคยตั้งข้อสังเกตว่า q_hat รวมทุกจังหวัดทำให้ coverage เบี่ยงต่อจังหวัดด้วย (คนละมิติกับ severity) แต่ไม่เคยลองรวม 2 มิตินี้เข้าด้วยกันจริง ผู้ใช้ขอให้ลอง
+
+**วิธีทำ**: `scripts/recalibrate_conformal_per_province_severity_k1.py` — จัดกลุ่ม Mondrian ด้วย (จังหวัด, severity) ร่วมกัน โดย severity แบ่งตาม **percentile ของ predicted P50 เทียบกับจังหวัดตัวเองเท่านั้น** (ไม่ใช่ percentile รวมทุกจังหวัด เพราะระดับฝุ่นพื้นฐานต่างกันมากระหว่างจังหวัด — entry 105) คำนวณ q_hat แยกต่อ (จังหวัด, severity group) มี fallback chain (province-group → province เดี่ยว → single q_hat เดิม) เทียบ 3 วิธีในตารางเดียว: `single_qhat` (baseline), `flat_3grp` (severity อย่างเดียว, ดีที่สุดจาก entry 115), `province_severity` (ใหม่)
+
+**ผลลัพธ์ — แย่กว่าทั้ง single_qhat และ flat_3grp อย่างชัดเจน (ไม่ใช่แค่ไม่ดีขึ้น แต่แย่ลงกว่าเดิม)**:
+
+| Coverage >p90 | single_qhat | flat_3grp (entry 115) | province_severity (งานนี้) |
+|---|---|---|---|
+| LGB | 84.9% | 86.2% | **81.9%** |
+| XGB | 80.8% | 85.3% | **79.6%** |
+
+ไม่ใช่ปัญหาขนาดกลุ่มเล็กเกินไปจน fallback บ่อย (calib เฉลี่ย 2,671 แถว/จังหวัด, top-5% ~134 แถว/จังหวัด ยัง >= MIN_GROUP_SIZE=20 เสมอ — ตรวจแล้วพบว่า **0 cell ต้อง fallback** ทั้ง 51 cell ของทั้ง 2 โมเดล)
+
+**สาเหตุที่เป็นไปได้ (วิเคราะห์เชิงสาเหตุ ไม่ใช่แค่รายงานตัวเลข)**:
+1. **q_hat จากกลุ่มเล็กมีความแปรปรวนสูง** — คำนวณ quantile ที่ 90th percentile ของ residual score จากแค่ ~134 แถว/จังหวัด แปรปรวนสูงกว่าการคำนวณจาก 4,539 แถวรวมทุกจังหวัด (`flat_3grp`) มาก ทำให้ q_hat มักถูกประเมินต่ำกว่าค่าจริง (underestimate) จาก sampling noise
+2. **นิยาม "severity" ไม่ตรงกันระหว่างขั้น calibrate กับขั้น evaluate** — งานนี้จัดกลุ่ม "high" ด้วย percentile **สัมพัทธ์ต่อจังหวัดตัวเอง** แต่ประเมินผลด้วย severity bin ที่นิยามจาก percentile **สัมบูรณ์รวมทุกจังหวัด** (`>p90` ของค่าจริงทั้งหมด) — จังหวัดที่ฝุ่นพื้นฐานต่ำ ค่า "top 5% ของตัวเอง" อาจยังตกอยู่ใน bin ประเมินผลที่ "p50-p75" เท่านั้น (ไม่ใช่ `>p90` จริง) ทำให้หลายแถวที่ actual สูงจริงไม่ได้ถูกจัดเข้ากลุ่ม "high" ในขั้น calibrate เลย ยังคงได้ q_hat แคบไปอยู่ดี — เป็นปัญหาเดียวกับที่ entry 101 อธิบายไว้ (จัดกลุ่มด้วย predicted ไม่ใช่ actual) แต่ซ้อนกันหนักขึ้นอีกชั้นจากมิติจังหวัด
+
+**สรุป**: **ปฏิเสธแนวทางนี้ — ไม่แนะนำใช้** `province_severity` วิธีที่ดีที่สุดยังคงเป็น `flat_3grp` จาก entry 115 (86.2%/85.3%) การเพิ่มมิติจังหวัดเข้าไปแบบตรงๆ (relative percentile ต่อจังหวัด) ทำให้แย่ลงทั้ง 2 มิติพร้อมกัน ไม่ใช่ทางแก้ที่ใช้ได้ — ถ้าจะลองมิติจังหวัดต่อในอนาคต ควรแก้จุดที่ (2) ก่อน เช่น ใช้ severity threshold **สัมบูรณ์รวมทุกจังหวัดเหมือน `flat_3grp` เดิม** แต่แค่แยกคำนวณ q_hat ต่อจังหวัดภายในแต่ละ severity group (ไม่ใช่แยก threshold ด้วย) เพื่อไม่ให้นิยาม severity เพี้ยนไปตามจังหวัด — ยังไม่ได้ลองในงานนี้
+
+**ไฟล์ที่เพิ่ม**: `scripts/recalibrate_conformal_per_province_severity_k1.py`, `models/recalibrate_province_severity_k1_20260918_141645.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (116) — Individual ablation ซ้ำบน dataset k=1 จริง: ปิดจุดที่ entry 107 เคยรันบน k=3 ค้างไว้ ผลยืนยันตรงเดิม
+
+**ที่มา**: ตอบคำถามผู้ใช้ "feature ทั้ง 19 ตัวของโมเดลล่าสุดผ่านการทดสอบครบหรือยัง" — พบว่า entry 107 (individual leave-one-out ablation ครบ 19 ตัว) รันบน dataset ที่ยังใช้ `pm25_neighbor_avg` แบบ **k=3** (ก่อนเปลี่ยนเป็น k=1 ที่ entry 110) เพราะรันก่อนหน้า entry 108/110 — เป็นจุดเดียวที่ยังไม่ verify บน dataset ปัจจุบันเป๊ะๆ ผู้ใช้ขอให้รันซ้ำปิดจุดนี้
+
+**วิธีทำ**: รัน `scripts/ablation_individual_features.py` **ซ้ำโดยไม่ต้องแก้โค้ด** — สคริปต์นี้ดึง `train_mod.DATA_PATH`/`FEATURE_COLS` สดจาก `train_multiprovince_models.py` อยู่แล้ว ซึ่งตอนนี้ชี้ไปไฟล์ k=1 (`multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv`) ตั้งแต่ entry 110 เปลี่ยนไว้ — แค่รันคำสั่งเดิมก็ได้ผลบน dataset ปัจจุบันทันที (baseline + leave-one-out ทีละตัว 19 ตัว x 2 โมเดล x 5 horizon ตัวแทน = 200 fit เหมือน entry 107 เป๊ะ)
+
+**ผลลัพธ์ — อันดับความสำคัญของ feature เหมือน entry 107 (k=3) แทบทุกจุด**:
+- **`pm25_neighbor_avg` ยังคงเป็น feature เดี่ยวที่ทรงพลังสุดชัดเจน** และกระทบแรงขึ้นเล็กน้อยด้วยซ้ำ: ตัดออก MAE แย่ลง **+4.69% (LGB) / +4.70% (XGB)** เทียบกับ k=3 เดิมที่ +4.20%/+3.01% (entry 107) — สมเหตุสมผลเพราะ k=1 เป็นสัญญาณที่ "เข้มข้น" กว่า (เฉลี่ยจากจังหวัดเดียวที่ใกล้สุด ไม่เจือจางด้วยจังหวัดที่ 2-3 แบบ k=3)
+- **Multicollinearity ของกลุ่ม pm25_lag_rolling ยังยืนยันเหมือนเดิม**: ตัดทีละตัวเฉลี่ยแค่ +0.19% (LGB) / +0.40% (XGB) เทียบกับตัดทั้งกลุ่ม +9.1%/+8.0% (entry 90) — ต่างกันเกือบ 25-50 เท่าเหมือนที่ entry 107 พบ
+- Feature อื่นๆ (weather/wind/pressure/lat-lon) ยังคงมีผลเล็กและบางตัวสลับเครื่องหมาย (+/-) ระหว่าง LGB/XGB เหมือนเดิม อยู่ในช่วงที่ตีความว่าเป็น noise ของการวัดแบบ single-seed/5-horizon ได้ ไม่มีตัวไหนโดดเด่นผิดปกติจากที่เคยเห็น
+
+**สรุป**: ผลยืนยันว่าข้อสรุปเดิมจาก entry 107 **ไม่ได้ขึ้นกับ k value ของ spatial-lag feature** — อันดับความสำคัญและข้อสรุปเรื่อง multicollinearity คงเดิมทั้งหมด จุดที่ค้างไว้จากคำถามผู้ใช้ปิดแล้ว: **ตอนนี้ทั้ง 19 feature ของโมเดล k=1 ผ่านการทดสอบทั้งระดับกลุ่มและทีละตัวบน dataset ปัจจุบันจริงครบทุกตัวแล้ว**
+
+**ไฟล์ที่เพิ่ม**: `models/ablation_individual_features_20260918_135602.csv`, `models/ablation_individual_summary_20260918_135602.csv`, `CHANGELOG.md` (entry นี้) — ไม่มีไฟล์ script ใหม่ (reuse `scripts/ablation_individual_features.py` เดิมตรงๆ)
+
+## 2026-09-18 (115) — Group-conditional conformal calibration ซ้ำบนโมเดล k=1: ช่วยทั้ง 2 โมเดลมากกว่าบน k=3 เดิม แต่ยังไม่ถึงเป้า 90%
+
+**ที่มา**: entry 111 (backtest ฤดูฝุ่นบน k=1) ยืนยันว่า coverage ช่วง >p90 ไม่ดีขึ้นจาก single q_hat เดิมเลยแม้ MAE จะดีขึ้นมาก — entry 102 เคยลอง group-conditional (Mondrian) calibration แก้ปัญหานี้บนโมเดล candidate ก่อนหน้า (k=3) ได้ผลผสม (ช่วย XGBoost, ไม่ช่วย LightGBM) แต่ไม่เคยลองกับโมเดล k=1 ล่าสุดเลย — ผู้ใช้ขอให้ทำต่อเป็นขั้นถัดไปแทนการ retrain (recalibration ถูกกว่าและตรงจุดที่ยัง gap อยู่มากกว่า)
+
+**วิธีทำ**: `scripts/recalibrate_conformal_configs_k1.py` — copy ของ `recalibrate_conformal_configs.py` เปลี่ยนแค่ `MODEL_TAG = "20260917_001147"` ตรรกะที่เหลือเหมือนเดิมทุกจุด (3 config: 2 กลุ่ม top10%, 2 กลุ่ม top5%, 3 กลุ่ม top5%/5-15%/rest จัดกลุ่มด้วย predicted P50 บน calib split แล้วคำนวณ q_hat แยกต่อกลุ่ม) ไม่มีการ retrain โมเดลใดๆ ใช้ pkg ที่เทรนไว้แล้ว (`_20260917_001147`) อย่างเดียว แค่ predict ซ้ำแล้วคำนวณ calibration ใหม่
+
+**ผลลัพธ์ (coverage ที่ severity bin >p90, เป้าหมาย 90%) — เทียบ k=3 เดิม (entry 102) vs k=1 ใหม่ (งานนี้)**:
+
+| Config | LGB k=3 (entry 102) | LGB k=1 (งานนี้) | XGB k=3 (entry 102) | XGB k=1 (งานนี้) |
+|---|---|---|---|---|
+| single_qhat (เดิม) | 85.0% | 84.9% | 81.4% | 80.8% |
+| 2 กลุ่ม top10% | 84.5% | 85.2% | 83.7% | 83.5% |
+| 2 กลุ่ม top5% | 85.1% | 86.2% | 84.7% | 85.1% |
+| **3 กลุ่ม top5/5-15/rest** | 85.1% | **86.2%** | 84.9% | **85.3%** |
+
+**ข้อสังเกตสำคัญที่ต่างจาก entry 102**: บนโมเดล k=3 เดิม **LightGBM แทบไม่ตอบสนองต่อ group-conditional calibration เลย** (85.0%→85.1%, +0.1pp เท่านั้น) แต่บนโมเดล k=1 ใหม่ **LightGBM ตอบสนองชัดเจนขึ้น** (84.9%→86.2%, **+1.3pp**) — XGBoost ก็ดีขึ้นกว่าเดิมเช่นกัน (+3.5pp บน k=3 เทียบ **+4.5pp** บน k=1) ทั้งสองโมเดลดีขึ้นมากกว่าที่เคยพบบนโมเดลเก่า — เป็นไปได้ว่า feature k=1 (spatial-lag เพื่อนบ้านใกล้สุด) ทำให้ predicted P50 สัมพันธ์กับ severity จริงแม่นขึ้น ทำให้การจัดกลุ่มด้วย predicted P50 (ซึ่งเป็นข้อจำกัดหลักของวิธีนี้ตามที่ entry 101 อธิบายไว้) แม่นยำขึ้นตามไปด้วย — เป็นหลักฐานว่าการปรับปรุง feature engineering (k=1) กับการปรับปรุง calibration (group-conditional) **ส่งเสริมกันได้** ไม่ใช่คนละเรื่องที่ไม่เกี่ยวกันอย่างที่ entry 111 สรุปไว้ตอนแรก (entry 111 เทียบแค่ coverage ของ single_qhat วิธีเดียว ยังไม่ได้ลอง group-conditional บน k=1)
+
+**สรุป**: config ที่ดีที่สุดยังเป็น **3 กลุ่ม top5%/5-15%/rest** เหมือนเดิม (86.2% LGB / 85.3% XGB) — ดีขึ้นกว่า single_qhat ชัดเจนทั้ง 2 โมเดล แต่**ยังไม่ถึงเป้า 90%** เหมือนเดิม เป็นการปรับปรุงที่คุ้มทำ (ไม่ต้อง retrain, แค่เปลี่ยนวิธีคำนวณ q_hat ตอน calibration) และควรพิจารณาใช้แทน single q_hat เดิมถ้าจะ deploy โมเดล k=1 ในอนาคต — ยังไม่ได้แก้ `app.py`/deploy ในงานนี้ตามที่ผู้ใช้ระบุ (แยก scope การทดลองจากการตัดสินใจ deploy เหมือนเดิม)
+
+**ไฟล์ที่เพิ่ม**: `scripts/recalibrate_conformal_configs_k1.py`, `models/recalibrate_configs_k1_20260918_135138.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (114) — LOPO zero-shot vs ระยะทาง (n=17 แทน n=3): ทิศทางตรงสมมติฐานแล้ว แต่ยังไม่มีนัยสำคัญทางสถิติ
+
+**ที่มา**: task C เดิม (entry 93) ทดสอบด้วยจังหวัด held-out ตายตัวแค่ 3 จังหวัด (n=3 จุดข้อมูล) ไม่พอสรุปทางสถิติ และผลที่ได้ตอนนั้นขัดสมมติฐานเสียด้วย (correlation=-0.31) — ต้องการกำลังทางสถิติที่มากกว่านี้ก่อนจะสรุปว่าโมเดลใช้ประโยชน์จาก spatial pattern (task B, r=-0.644) ในการ generalize ไปจังหวัด zero-shot ได้จริงหรือไม่
+
+**วิธีทำ**: `scripts/eval_zeroshot_lopo_spatial_distance.py` (ใหม่) — ทำ **leave-one-province-out (LOPO)** ข้ามทั้ง 17 จังหวัดที่เทรนได้จริง แต่ละรอบตัด 1 จังหวัดออกจาก training pool (เทรนบน 16 จังหวัดที่เหลือ) แล้วประเมิน MAE บน test split (20% ท้ายตามเวลา) ของจังหวัดที่ถูกตัดออก ได้ (distance, MAE) 17 คู่แทนที่จะเป็น 3 คู่ — ต่างจาก task C เดิมตรงที่ใช้ dataset/feature set **ปัจจุบัน** (k=1 spatial-lag, 19 feature, `train_multiprovince_models.DATA_PATH`) ไม่ใช่ dataset เก่า 23 feature เพื่อให้ผลตรงกับโมเดลที่กำลังพิจารณา deploy จริง และใช้ P50-only บน 5 horizon ตัวแทน (t+1/6/12/18/24) แทน 24 horizon เต็ม เพื่อคุมงบประมาณ (17 fold x 2 โมเดล x 5 horizon = 170 fit) — 3 จังหวัด zero-shot จริง (นครพนม/ร้อยเอ็ด/มหาสารคาม) ไม่เข้าร่วมทั้ง pool และ held-out ทุกรอบ เหมือน production จริง
+
+**ผลลัพธ์**: **ทิศทางตรงกับสมมติฐานแล้ว** (ต่างจาก n=3 ที่ขัดทิศทาง) — correlation(distance, MAE) = **+0.283 (LGB)**, **+0.304 (XGB)** คือจังหวัดที่ไกลจากจังหวัดเทรนที่ใกล้สุดมักมี MAE สูงกว่าจริง แต่ **p-value = 0.27 (LGB)**, **0.24 (XGB)** — ยังไม่ถึงเกณฑ์นัยสำคัญทางสถิติ (p<0.05) ที่ n=17 นี้ ตัวอย่างชัด: บึงกาฬ (ไกลสุด 112km จากหนองคาย) มี MAE สูงสุดทั้ง 2 โมเดล (4.42/4.45) สอดคล้องสมมติฐาน แต่ก็มีข้อยกเว้น เช่น นครราชสีมา (ไกลเป็นอันดับ 2 ที่ 92.9km) กลับมี MAE ต่ำสุดอันดับต้นๆ (1.97/2.15)
+
+**สรุป**: ผลนี้**เสริม**สมมติฐานที่ตั้งไว้ (ทิศทางถูกต้องแล้ว ไม่ใช่ noise สุ่มแบบ n=3 เดิม) แต่ยังไม่ใช่หลักฐานยืนยันเชิงสถิติที่หนักแน่น — น่าจะต้องมีปัจจัยกวนอื่น (คุณภาพ/ความสมบูรณ์ข้อมูลเซนเซอร์ต่อจังหวัด, ลักษณะภูมิประเทศเฉพาะจุด) ที่ทำให้บางจังหวัดหลุดจาก pattern ระยะทางล้วนๆ — เพียงพอที่จะรายงานได้ตรงไปตรงมาว่า "แนวโน้มไปในทิศทางที่คาด แต่ยังพิสูจน์ไม่ได้แน่ชัดด้วยข้อมูลระดับจังหวัด (n=17 คือเพดานของจำนวนจังหวัดอีสานที่มี ไม่สามารถเพิ่ม n ได้อีกด้วยวิธีนี้)"
+
+**ไฟล์ที่เพิ่ม**: `scripts/eval_zeroshot_lopo_spatial_distance.py`, `models/zeroshot_lopo_distance_per_horizon_20260918_132858.csv`, `models/zeroshot_lopo_distance_summary_20260918_132858.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (113) — สาเหตุจริงที่ตัด time_cyclical แล้ว MAE ดีขึ้น: month_sin/cos คือตัวการหลัก ไม่ใช่ทั้งกลุ่ม
+
+**ที่มา**: การตัด time_cyclical (hour/month/dayofweek cyclical, 5 คอลัมน์) ออกช่วย MAE ดีขึ้นจริง ยืนยันซ้ำ 2 รอบแล้ว (entry 90, 96) แต่คำอธิบาย ("ซ้ำซ้อนกับ pm25_lag/rolling ที่มี autocorrelation แฝง diurnal/seasonal pattern อยู่แล้ว") เป็นแค่สมมติฐานที่ไม่เคยตรวจสอบจริง — งานนี้ตรวจสอบ 2 ขั้น
+
+**วิธีทำ**: `scripts/investigate_time_cyclical_drop.py` (ใหม่) — ขั้น A: correlation matrix ระหว่าง 5 คอลัมน์ time_cyclical กับกลุ่ม pm25_lag_rolling (9 ตัว) บน train split (ไม่ต้อง retrain, คอลัมน์ยังอยู่ในไฟล์ raw dataset แค่ไม่ได้ใช้เป็น FEATURE_COLS แล้ว) ขั้น B: add-one-back-in ablation — ตรงข้ามกับ leave-one-out (`ablation_individual_features.py`) ใส่ time_cyclical กลับเข้า baseline 19-feature ปัจจุบันทีละกลุ่มย่อยเชิงแนวคิด (`with_hour_cyclical`, `with_month_cyclical`, `with_dayofweek`) P50-only บน 5 horizon ตัวแทน (4 variant x 2 โมเดล x 5 horizon = 40 fit) — เพื่อ pinpoint ว่าตัวไหนในกลุ่มเป็นตัวการจริง แทนที่จะมองทั้งกลุ่มเป็นก้อนเดียวแบบ ablation เดิม (ปัญหา aggregation เดียวกับที่ entry 107 แก้ให้กลุ่ม pm25_lag_rolling ไปแล้ว)
+
+**ผลลัพธ์ — ยืนยันบางส่วน ปฏิเสธบางส่วนของสมมติฐานเดิม**:
+- **`month_sin`/`month_cos` คือตัวการหลักจริง**: correlation กับกลุ่ม pm25_lag_rolling สูงถึง **0.52-0.57** (month_sin) และ **0.19-0.24** (month_cos) — สอดคล้องสมมติฐาน multicollinearity ชัดเจน และใส่กลับเข้าโมเดลทำให้ MAE **แย่ลงชัดเจนที่สุด**: `with_month_cyclical` +1.44% (LGB) / +1.81% (XGB)
+- **`hour_sin`/`hour_cos` ไม่ใช่ตัวการ**: correlation กับกลุ่มเดียวกันแทบเป็นศูนย์ (0.01-0.02) — **ไม่ใช่ redundant แบบที่ตั้งสมมติฐานไว้** และใส่กลับแทบไม่มีผล (`with_hour_cyclical` -0.34% LGB / +0.01% XGB, อยู่ในช่วง noise)
+- **`dayofweek`**: correlation อ่อนมาก (0.01-0.02) เหมือน hour cyclical แต่ใส่กลับเข้าไปทำให้ MAE แย่ลงเล็กน้อยสม่ำเสมอ (+0.35%/+0.46%) — อาจเป็น noise/overfitting เล็กน้อยจาก feature ที่มี cardinality ต่ำ ไม่ใช่ multicollinearity
+
+**สรุป**: สมมติฐานเดิม ("ซ้ำซ้อนกับ lag/rolling") **ถูกแค่บางส่วน** — จริงเฉพาะ `month_sin/cos` (ซึ่งเป็นตัวเดียวกับที่ entry 100 พบว่า humidity ก็เป็น proxy ของฤดูกาลเช่นกัน สอดคล้องกัน) ส่วน `hour_sin/cos`/`dayofweek` ไม่ redundant กับกลุ่มไหนเลย แค่ไม่ช่วยเพิ่มข้อมูลใหม่ (hour) หรือช่วยน้อยจนติดลบเล็กน้อย (dayofweek) — ถ้าจะ optimize เพิ่มเติมในอนาคต ควรพิจารณาแยกทดสอบ "ตัดเฉพาะ month_cyclical" เทียบกับ "ตัดทั้งกลุ่ม 5 ตัว" ว่าต่างกันแค่ไหน (ยังไม่ได้ทำในงานนี้ เพราะ baseline ปัจจุบันตัดทั้งกลุ่มไปแล้วและ deploy ยังไม่ได้ตัดสินใจ)
+
+**ไฟล์ที่เพิ่ม**: `scripts/investigate_time_cyclical_drop.py`, `models/time_cyclical_correlation_20260918_132602.csv`, `models/time_cyclical_investigation_20260918_132602.csv`, `models/time_cyclical_investigation_summary_20260918_132602.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (112) — Ensemble vs Routing ซ้ำบนโมเดล k=1 ล่าสุด: ผลเดิมยังคงอยู่ (ensemble ไม่ช่วย) แต่ weighted_avg(w=0.7) ขยับมาเสมอตัวกับ lgb_only
+
+**ที่มา**: entry 109 เปรียบเทียบ ensemble กับ Dynamic Routing บนโมเดล candidate ก่อนหน้า (`_20260914_211416`, k=3) เท่านั้น ยังไม่เคยทำกับโมเดล k=1 ล่าสุด (`_20260917_001147`, entry 110) ที่ MAE ดีขึ้นกว่าเดิม
+
+**วิธีทำ**: `scripts/eval_ensemble_vs_routing_k1.py` — copy ของ `eval_ensemble_vs_routing.py` เปลี่ยนแค่ module ที่ import (`analyze_burning_season_backtest_k1` แทน `_latest`) ทำให้ `MODEL_TAG` เปลี่ยนตามเป็น `20260917_001147` โดยอัตโนมัติ ตรรกะที่เหลือเหมือนเดิมทุกจุด (lgb_only/xgb_only/simple_avg/weighted_avg/oracle_routing, น้ำหนักเลือกจาก calib)
+
+**ผลลัพธ์**: MAE เฉลี่ยรวมทุก horizon — `lgb_only`=2.7204 ยังคงชนะ `xgb_only`=2.8055 สม่ำเสมอเหมือนเดิม `simple_avg`=2.7293 ยังแย่กว่า `lgb_only` (+0.33%) เหมือนเดิม **แต่ `weighted_avg(w=0.7)`=2.7174 ตอนนี้ดีกว่า `lgb_only` เล็กน้อย (-0.11%)** ต่างจากผลเดิมบนโมเดล k=3 ที่ `weighted_avg` แพ้ `lgb_only` ทุก config (+0.07% เป็นอย่างน้อย) — น้ำหนักที่เลือกจาก calib (w=0.7, ให้น้ำหนัก lgb หนัก) แทบเป็นการใช้ lgb เดี่ยวๆ อยู่แล้ว ส่วนต่างเล็กมาก (-0.11%) อยู่ในระดับที่ตีความว่าเป็น noise ได้พอๆ กับเป็นการปรับปรุงจริง
+
+**Coverage**: `simple_avg`=88.9%, `weighted_avg(w=0.7)`=89.0% — ใกล้เคียง `lgb_only`=88.8% เหมือนเดิม ไม่มีอะไรเปลี่ยนแปลงมีนัยสำคัญ
+
+**สรุป**: ข้อสรุปเดิมจาก entry 109 ("ไม่แนะนำเปลี่ยนจาก Dynamic Routing ไปเป็น ensemble แบบง่าย") **ยังคงใช้ได้กับโมเดล k=1**: ประโยชน์ของ weighted_avg ที่เห็น (-0.11%) เล็กเกินกว่าจะคุ้มความซับซ้อนที่เพิ่มขึ้น (ต้อง maintain 2 โมเดลพร้อมกันตลอดเวลาแทนที่จะ route เลือกตัวเดียว) — Dynamic Routing ยังเป็นทางเลือกที่สมเหตุสมผลกว่า
+
+**ไฟล์ที่เพิ่ม**: `scripts/eval_ensemble_vs_routing_k1.py`, `models/ensemble_vs_routing_mae_by_horizon_20260918_132452.csv`, `models/ensemble_vs_routing_coverage_20260918_132452.csv`, `CHANGELOG.md` (entry นี้)
+
+## 2026-09-18 (111) — Backtest ฤดูฝุ่นซ้ำบนโมเดล k=1 ล่าสุด: coverage ช่วง >p90 ยังไม่ดีขึ้น แม้ MAE ดีขึ้นชัดเจนทุกที่อื่น
+
+**ที่มา**: entry 103 ทำ burning-season backtest กับโมเดล candidate ก่อนหน้า (`_20260914_211416`, k=3) เท่านั้น โมเดล k=1 ล่าสุด (`_20260917_001147`, entry 110) ยังไม่เคยผ่านการทดสอบนี้ มีแต่ตัวเลข eval มาตรฐานตอน train
+
+**วิธีทำ**: `scripts/analyze_burning_season_backtest_k1.py` — copy ของ `analyze_burning_season_backtest_latest.py` เปลี่ยนแค่ `MODEL_TAG = "20260917_001147"` (ไม่ต้องเปลี่ยน `DATA_PATH` เพราะ `train_multiprovince_models.DATA_PATH` ชี้ไปไฟล์ k=1 อยู่แล้ว) ตรรกะที่เหลือเหมือนเดิมทุกจุด
+
+**ผลลัพธ์เทียบ k=3 เดิม vs k=1 ใหม่**:
+
+| | LGB k=3 (entry 103) | LGB k=1 (งานนี้) | XGB k=3 (entry 103) | XGB k=1 (งานนี้) |
+|---|---|---|---|---|
+| MAE ปกติ | 1.96 | **1.79** | 2.00 | **1.82** |
+| MAE ฤดูฝุ่น | 3.66 | **3.48** | 3.79 | **3.62** |
+| MAE t+24 ฤดูฝุ่น | 6.57 | **6.09** | 6.90 | **6.38** |
+| Coverage >p90 | 85.5% | 84.9% | 81.9% | 80.8% |
+
+**สรุป**: MAE ดีขึ้นสม่ำเสมอทุกมิติ (ปกติ/ฤดูฝุ่น/t+24) ตรงกับที่ entry 110 รายงานไว้ในภาพรวม **แต่ coverage เฉพาะช่วงฝุ่นวิกฤตที่สุด (>p90) ไม่ได้ดีขึ้นเลย — นิ่งหรือแย่ลงเล็กน้อยด้วยซ้ำ** (LGB -0.6pp, XGB -1.1pp) ยืนยันสมมติฐานที่ entry 110 ตั้งไว้ตรงเป๊ะ: **conformal calibration เป็นขั้นตอนแยกจาก feature engineering โดยสิ้นเชิง** — การปรับปรุง feature (k=1 spatial-lag) ช่วยความแม่นยำของค่าพยากรณ์ได้ แต่ไม่แตะปัญหา coverage-gap เชิงโครงสร้างที่มาจากวิธี calibration เอง (single q_hat รวมทุกจังหวัด/ทุกระดับความรุนแรง) — ปัญหานี้ยังเปิดอยู่เหมือนเดิม (entry 101-103) ไม่ว่าโมเดลจะดีขึ้นแค่ไหนก็ตาม
+
+**ไฟล์ที่เพิ่ม**: `scripts/analyze_burning_season_backtest_k1.py`, `CHANGELOG.md` (entry นี้)
+
 ## 2026-09-17 (110) — Retrain เต็มรูปแบบด้วย k=1 (spatial-lag): ยืนยันผลจาก entry 108 จริง MAE ดีขึ้น 1.2-1.9%
 
 **ที่มา**: entry 108 validate แบบย่อ (P50-only, 5 horizon ตัวแทน) แล้วพบว่า k=1 ดีกว่า k=3 ที่ใช้อยู่ +1.43%/+2.07% — ผู้ใช้ตกลงให้ retrain เต็มรูปแบบด้วย k=1 จริง (ไม่ต้อง refetch API เพราะ pm25 ดิบมีอยู่แล้ว)

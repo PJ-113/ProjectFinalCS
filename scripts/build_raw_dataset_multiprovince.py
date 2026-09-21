@@ -108,7 +108,12 @@ OPENAQ_KEY = _load_env_key("OPENAQ_KEY")
 HEADERS = {"X-API-Key": OPENAQ_KEY}
 
 
-def fetch_pm25(sensor_id):
+def fetch_pm25(sensor_id, offset_hours=0):
+    """offset_hours (CHANGELOG 144-145): ป้ายเวลาของ /measurements ของบาง 9 สถานีเลื่อนไป 23 ชม. (ค่าที่ป้าย t คือค่าจริงของ t+23)
+    วัดโดย scripts/annotate_registry_timestamp_offset.py แล้วเก็บใน registry field openaq_timestamp_offset_hours — บวกเข้า datetime_utc
+    ให้ตรงเวลาจริง และดึงช่วง label เลื่อนลง offset เพื่อให้ครอบเวลาจริง [WINDOW_START, WINDOW_END] ครบ (offset=0 = พฤติกรรมเดิมทุกอย่าง)"""
+    offset = pd.Timedelta(hours=offset_hours)
+
     def fetch_chunk(dt_from, dt_to):
         params = {"datetime_from": dt_from.isoformat(), "datetime_to": dt_to.isoformat(), "limit": 1000}
         for attempt in range(6):
@@ -129,9 +134,10 @@ def fetch_pm25(sensor_id):
         return []
 
     all_rows = []
-    cur = WINDOW_START
-    while cur < WINDOW_END:
-        chunk_end = min(cur + pd.Timedelta(days=30), WINDOW_END)
+    cur = WINDOW_START - offset
+    window_end_label = WINDOW_END - offset
+    while cur < window_end_label:
+        chunk_end = min(cur + pd.Timedelta(days=30), window_end_label)
         all_rows.extend(fetch_chunk(cur, chunk_end))
         cur = chunk_end
         time.sleep(REQUEST_SLEEP_S)
@@ -142,7 +148,7 @@ def fetch_pm25(sensor_id):
         "datetime_utc": r["period"]["datetimeFrom"]["utc"],
         "pm25": r["value"],
     } for r in all_rows])
-    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True) + offset
     df = df.dropna(subset=["pm25"]).drop_duplicates(subset=["datetime_utc"]).sort_values("datetime_utc").reset_index(drop=True)
     return df
 
@@ -296,8 +302,9 @@ def main():
               f"sensor={province['sensor_id_pm25']}")
 
         try:
-            print("  ดึง pm25 จาก OpenAQ...")
-            pm25_raw = fetch_pm25(province["sensor_id_pm25"])
+            offset_hours = int(province.get("openaq_timestamp_offset_hours", 0))
+            print(f"  ดึง pm25 จาก OpenAQ... (offset ป้ายเวลา {offset_hours:+d} ชม.)")
+            pm25_raw = fetch_pm25(province["sensor_id_pm25"], offset_hours)
             print(f"    {len(pm25_raw)} ชม.ที่มีข้อมูลจริง")
 
             if pm25_raw.empty:

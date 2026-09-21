@@ -20,6 +20,8 @@ const forecast = ref([]);
 const highPollutionRisk = ref(false);
 const riskGroup = ref("ทั่วไป");
 const fallbackHorizons = ref([]);
+// สถานะข้อมูลที่ใช้ทำพยากรณ์ (data_quality จาก /api/forecast): target_stale = reading ล่าสุดของจังหวัดนี้เก่ากว่า 6 ชม.
+const dataQuality = ref({ target_stale: false, target_age_hours: 0 });
 const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
 const riskScoreConfig = ref(null);
 
@@ -81,7 +83,7 @@ function pctOf(value) {
 }
 
 function modelColor(modelUsed) {
-  if (modelUsed === "xgboost_pooled") return "var(--model-xgboost)";
+  if (String(modelUsed).startsWith("xgboost")) return "var(--model-xgboost)";
   if (modelUsed === "naive_fallback") return "var(--model-fallback)";
   return "var(--model-lightgbm)";
 }
@@ -147,11 +149,12 @@ async function loadForecast() {
     highPollutionRisk.value = data.high_pollution_risk;
     riskGroup.value = data.risk_group || "ทั่วไป";
     fallbackHorizons.value = data.fallback_triggered_horizons || [];
+    dataQuality.value = data.data_quality || { target_stale: false, target_age_hours: 0 };
     provinceInfo.value = data.province || { th: "", en: "", is_zero_shot: false };
     riskScoreConfig.value = data.risk_score_config || null;
     state.value = "content";
   } catch (err) {
-    errorMessage.value = "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
+    errorMessage.value = err.dataUnavailable ? err.message : "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
     state.value = "error";
     console.error("โหลดข้อมูลพยากรณ์ล้มเหลว:", err);
   }
@@ -204,6 +207,10 @@ defineExpose({ loadForecast });
       <div v-else>
         <div v-if="highPollutionRisk" class="warning-box">
           ⚠️ {{ warningMessage }}
+        </div>
+
+        <div v-if="dataQuality.target_stale" class="warning-box">
+          ⚠️ ข้อมูลล่าสุดของสถานีตรวจวัดในจังหวัดนี้เก่ากว่า {{ Math.round(dataQuality.target_age_hours) }} ชั่วโมง (สถานีอาจขัดข้อง) ค่าที่แสดงอาจไม่ตรงกับสถานการณ์ปัจจุบัน
         </div>
 
         <div v-if="fallbackHorizons.length > 0" class="info-box">
