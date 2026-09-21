@@ -38,3 +38,17 @@ data/multiprovince_pm25_features_raw_*.csv
 *.swp
 Thumbs.db
 .DS_Store
+
+# ===== ไฟล์ใหญ่/ชั่วคราวที่ไม่ขึ้น git (ดู docs/MODEL_FILES.md) =====
+# โมเดล pooled ใหม่ (เกิน 100MB ต่อไฟล์) — ไฟล์เก่าที่ track อยู่แล้วไม่กระทบ
+models/*multiprovince*.pkl
+models/shap_values_by_horizon_*.pkl
+# ผลกลางทางขนาดใหญ่ที่ regenerate ได้
+models/zeroshot_real_provinces_per_horizon_*.csv
+data/multiprovince_pm25_features_refined_*.csv
+data/firms_hotspots_isaan_*.csv
+data/firms_hotspots_wide_2*.csv
+data/fire_wide_candidate_features_*.csv
+# log ชั่วคราวจากการรันสคริปต์
+models/_log_*.txt
+data/_log_*.txt
