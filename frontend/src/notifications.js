@@ -38,7 +38,9 @@ export async function fetchForecast() {
     const res = await fetch(`/api/forecast?province=${provinceState.selected}`)
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
-      throw new Error(body.error || `Server error (${res.status})`)
+      const err = new Error(body.error || `Server error (${res.status})`)
+      err.dataUnavailable = Boolean(body.data_unavailable) // 503: สถานีของจังหวัดนี้ไม่มีข้อมูลเลย (ไม่ใช่ server พัง)
+      throw err
     }
     const data = await res.json()
     notificationState.highPollutionRisk = data.high_pollution_risk

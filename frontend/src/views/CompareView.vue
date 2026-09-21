@@ -25,7 +25,7 @@ const chartEl = ref(null);
 // model-breakdown chip ของส่วน "รายละเอียดทางเทคนิค" เท่านั้น กราฟหลักไม่ encode สีตามโมเดลแล้ว (ดู
 // drawChart() — ผู้ใช้ตัดสินใจแล้วว่าให้ซ่อนชื่อ/สีโมเดลไว้ในส่วนขั้นสูงเท่านั้น)
 function modelHex(modelUsed) {
-  if (modelUsed === "xgboost_pooled") return "#1baf7a";
+  if (String(modelUsed).startsWith("xgboost")) return "#1baf7a";
   if (modelUsed === "naive_fallback") return "#eda100";
   return "#2a78d6";
 }
@@ -347,7 +347,12 @@ const overviewBars = computed(() => {
   }));
 });
 
-const modelLabel = { lightgbm_pooled: "LightGBM", xgboost_pooled: "XGBoost", naive_fallback: "Fallback" };
+// รุ่นเก่า (ไม่มี suffix) ยังอยู่ในแถวเก่าของ prediction_log — v2 คือโมเดลรุ่นล่าสุด (21 feature, CHANGELOG 141)
+const modelLabel = {
+  lightgbm_pooled_v3: "LightGBM (v3 ข้อมูลแก้แล้ว)", xgboost_pooled_v3: "XGBoost (v3 ข้อมูลแก้แล้ว)",
+  lightgbm_pooled_v2: "LightGBM (v2 ข้อมูลป้ายเวลาผิด)", xgboost_pooled_v2: "XGBoost (v2 ข้อมูลป้ายเวลาผิด)",
+  lightgbm_pooled: "LightGBM (รุ่นก่อน)", xgboost_pooled: "XGBoost (รุ่นก่อน)", naive_fallback: "Fallback",
+};
 const modelBreakdown = computed(() => {
   const byModel = overviewData.value?.by_model || [];
   return byModel.map((m) => ({
@@ -497,8 +502,12 @@ watch(() => provinceState.selected, () => {
           <label for="modelSelect">กรองกราฟด้านบนเฉพาะโมเดล:</label>
           <select id="modelSelect" v-model="model" @change="loadComparison">
             <option value="all">ทุกโมเดล</option>
-            <option value="lightgbm_pooled">LightGBM</option>
-            <option value="xgboost_pooled">XGBoost</option>
+            <option value="lightgbm_pooled_v3">LightGBM (v3 ข้อมูลแก้แล้ว)</option>
+            <option value="xgboost_pooled_v3">XGBoost (v3 ข้อมูลแก้แล้ว)</option>
+            <option value="lightgbm_pooled_v2">LightGBM (v2 ข้อมูลป้ายเวลาผิด)</option>
+            <option value="xgboost_pooled_v2">XGBoost (v2 ข้อมูลป้ายเวลาผิด)</option>
+            <option value="lightgbm_pooled">LightGBM (รุ่นก่อน)</option>
+            <option value="xgboost_pooled">XGBoost (รุ่นก่อน)</option>
             <option value="naive_fallback">Fallback</option>
           </select>
         </div>

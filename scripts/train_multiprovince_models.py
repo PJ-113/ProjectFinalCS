@@ -13,13 +13,27 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # -4.1% ถึง -4.3%) ชี้ไปไฟล์ augmented ใหม่แทนไฟล์เดิม (ดู scripts/augment_raw_dataset_with_spatial_lag.py)
 # k tuning (CHANGELOG 108) — k=1 ดีกว่า k=3 เดิม +1.43%/+2.07% เปลี่ยนมาใช้ dataset ที่คำนวณ
 # pm25_neighbor_avg ด้วย k=1 แทน (ดู scripts/augment_raw_dataset_with_spatial_lag_k1.py)
-DATA_PATH = os.path.join(_ROOT, "data", "multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv")
+# fire hotspot (CHANGELOG 122-126) — validate แล้วว่าช่วย MAE ช่วงฤดูฝุ่น/severity สูงสุดชัดเจน
+# (>p90: -1.85%/-0.60%) แม้ MAE รวมก้ำกึ่ง เปลี่ยนมาใช้ dataset ที่มี fire_hotspot_count_100km_24h
+# ผสานแล้ว (ดู scripts/compute_fire_hotspot_feature.py) — ยังไม่ sync build_raw_dataset_multiprovince.py/
+# app.py (deploy ยังไม่ใช่ scope ตอนนี้ ตามที่ผู้ใช้ระบุ)
+# hyperparameter tuning + nb_trend_12h (CHANGELOG 133-137) — จูน LGB/XGB (A1, ไม่เคยจูนมาก่อน) และเพิ่ม nb_trend_12h
+# (แนวโน้ม pm25 เพื่อนบ้าน 12 ชม.) ยืนยันบน test แล้ว MAE -2.6%/-5.7% (LGB/XGB) เปลี่ยนมาใช้ dataset ที่ผสาน nb_trend_12h
+# (ดู scripts/compute_neighbor_trend_feature.py) — tuning ทำที่ P50 เท่านั้น P05/P95 ใช้ค่าเดียวกัน (conformal ชดเชย coverage)
+# แก้ป้ายเวลา OpenAQ (CHANGELOG 144-145): dataset เดิม (..._135009.csv) มี PM2.5 ของ 9 จังหวัดติดป้ายเวลาเร็วไป 23 ชม. ทำให้ feature จังหวัดข้างเคียง
+# รั่วข้อมูลอนาคต — โมเดลรุ่น _20260919_135655 (v2) เทรนจากชุดนั้น ห้ามอ้างผลของมัน; ชี้มา dataset ที่สร้างใหม่ด้วย offset ต่อสถานี
+# (scripts/rebuild_dataset_clean.py) ชุด feature 21 ตัวเดิม (ตัดสินด้วย rolling-origin CV ที่ครอบคลุมฤดูฝุ่น: scripts/validate_features_timeblocked_cv.py)
+DATA_PATH = os.path.join(
+    _ROOT, "data", "multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv"
+)
 MODEL_DIR = os.path.join(_ROOT, "models")
 TIMESTAMP = dt.now().strftime("%Y%m%d_%H%M%S")
 
 QUANTILES = [0.05, 0.5, 0.95]
 ALPHA = 0.10  # target coverage = 1 - ALPHA = 90%
-N_ESTIMATORS = 300
+N_ESTIMATORS = 300  # ค่าเดิม (สคริปต์ validate อื่นอ้างถึง) — โมเดลจริงใช้ TUNED_PARAMS_* ด้านล่างแทน
+TUNED_PARAMS_LGB = dict(learning_rate=0.05, num_leaves=63, min_child_samples=50, reg_lambda=1.0, n_estimators=400)
+TUNED_PARAMS_XGB = dict(learning_rate=0.03, max_depth=8, min_child_weight=20, reg_lambda=10.0, n_estimators=800)
 BAGGING_PARAMS_LGB = dict(subsample=0.8, subsample_freq=1, colsample_bytree=0.8)
 BAGGING_PARAMS_XGB = dict(subsample=0.8, colsample_bytree=0.8)
 
@@ -31,9 +45,12 @@ FEATURE_COLS = [
     "pm25_lag_1", "pm25_lag_3", "pm25_lag_6", "pm25_lag_12", "pm25_lag_24",
     "pm25_roll_mean_6", "pm25_roll_std_6", "pm25_roll_mean_24", "pm25_roll_std_24",
     "wind_dir_sin", "wind_dir_cos", "pressure", "lat", "lon",
-    "pm25_neighbor_avg",
+    "fire_hotspot_count_100km_24h",
+    "nb_trend_12h",
 ]
-assert len(FEATURE_COLS) == 19
+# v3 (CHANGELOG 149): ตัด pm25_neighbor_avg ออก — บนข้อมูลสะอาดมันซ้ำซ้อนกับ nb_trend_12h (ablation test: ตัดแล้ว MAE -0.04%/-0.11%, SHAP ขัดสมมติฐาน 3/6 จุด)
+# และ CV บล็อกเวลายืนยันว่าตัดแล้วดีกว่าเล็กน้อย (macro -0.51%/-0.38%, ฤดูฝุ่น -0.84%/-0.61%): scripts/validate_drop_neighbor_avg_cv.py
+assert len(FEATURE_COLS) == 20
 TARGET_COLS = [f"pm25_t+{h}" for h in range(1, 25)]
 
 
@@ -56,8 +73,8 @@ def split_train_calib_test(df, fracs=(0.65, 0.15, 0.20)):
 def fit_lgb_quantile(X, y, alpha):
     model = lgb.LGBMRegressor(
         objective="quantile", alpha=alpha,
-        n_estimators=N_ESTIMATORS, random_state=42, verbose=-1,
-        **BAGGING_PARAMS_LGB,
+        random_state=42, verbose=-1,
+        **BAGGING_PARAMS_LGB, **TUNED_PARAMS_LGB,
     )
     model.fit(X, y)
     return model
@@ -67,8 +84,8 @@ def fit_xgb_quantile(X, y, alpha):
     model = xgb.XGBRegressor(
         objective="reg:quantileerror", quantile_alpha=alpha,
         tree_method="hist",
-        n_estimators=N_ESTIMATORS, random_state=42, verbosity=0,
-        **BAGGING_PARAMS_XGB,
+        random_state=42, verbosity=0,
+        **BAGGING_PARAMS_XGB, **TUNED_PARAMS_XGB,
     )
     model.fit(X, y)
     return model

@@ -17,7 +17,8 @@
       "n_candidates": 1,
       "elevation_m": 168.0,
       "building_count_3km": 951,
-      "amenity_density_3km": 1434
+      "amenity_density_3km": 1434,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "เลย",
@@ -35,7 +36,8 @@
       "n_candidates": 2,
       "elevation_m": 237.0,
       "building_count_3km": 94,
-      "amenity_density_3km": 155
+      "amenity_density_3km": 155,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "หนองคาย",
@@ -53,7 +55,8 @@
       "n_candidates": 6,
       "elevation_m": 169.0,
       "building_count_3km": 286,
-      "amenity_density_3km": 358
+      "amenity_density_3km": 358,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "อุดรธานี",
@@ -71,7 +74,8 @@
       "n_candidates": 1,
       "elevation_m": 177.0,
       "building_count_3km": 1299,
-      "amenity_density_3km": 812
+      "amenity_density_3km": 812,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "นครราชสีมา",
@@ -89,7 +93,8 @@
       "n_candidates": 1,
       "elevation_m": 182.0,
       "building_count_3km": 1322,
-      "amenity_density_3km": 852
+      "amenity_density_3km": 852,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "อุบลราชธานี",
@@ -107,7 +112,8 @@
       "n_candidates": 1,
       "elevation_m": 123.0,
       "building_count_3km": 2148,
-      "amenity_density_3km": 643
+      "amenity_density_3km": 643,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "บุรีรัมย์",
@@ -125,7 +131,8 @@
       "n_candidates": 4,
       "elevation_m": 223.0,
       "building_count_3km": 57,
-      "amenity_density_3km": 40
+      "amenity_density_3km": 40,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "สุรินทร์",
@@ -143,7 +150,8 @@
       "n_candidates": 2,
       "elevation_m": 149.0,
       "building_count_3km": 94,
-      "amenity_density_3km": 129
+      "amenity_density_3km": 129,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "ศรีสะเกษ",
@@ -161,7 +169,8 @@
       "n_candidates": 5,
       "elevation_m": 127.0,
       "building_count_3km": 5047,
-      "amenity_density_3km": 220
+      "amenity_density_3km": 220,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "สกลนคร",
@@ -179,7 +188,8 @@
       "n_candidates": 4,
       "elevation_m": 176.0,
       "building_count_3km": 277,
-      "amenity_density_3km": 125
+      "amenity_density_3km": 125,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "กาฬสินธุ์",
@@ -197,7 +207,8 @@
       "n_candidates": 2,
       "elevation_m": 143.0,
       "building_count_3km": 190,
-      "amenity_density_3km": 167
+      "amenity_density_3km": 167,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "มุกดาหาร",
@@ -215,7 +226,8 @@
       "n_candidates": 4,
       "elevation_m": 141.0,
       "building_count_3km": 5887,
-      "amenity_density_3km": 202
+      "amenity_density_3km": 202,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "ยโสธร",
@@ -233,7 +245,8 @@
       "n_candidates": 1,
       "elevation_m": 130.0,
       "building_count_3km": 11,
-      "amenity_density_3km": 59
+      "amenity_density_3km": 59,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "ชัยภูมิ",
@@ -251,7 +264,8 @@
       "n_candidates": 4,
       "elevation_m": 188.0,
       "building_count_3km": 356,
-      "amenity_density_3km": 66
+      "amenity_density_3km": 66,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "อำนาจเจริญ",
@@ -269,7 +283,8 @@
       "n_candidates": 4,
       "elevation_m": 163.0,
       "building_count_3km": 763,
-      "amenity_density_3km": 43
+      "amenity_density_3km": 43,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "หนองบัวลำภู",
@@ -287,7 +302,8 @@
       "n_candidates": 3,
       "elevation_m": 227.0,
       "building_count_3km": 28,
-      "amenity_density_3km": 56
+      "amenity_density_3km": 56,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "บึงกาฬ",
@@ -305,7 +321,8 @@
       "n_candidates": 4,
       "elevation_m": 156.0,
       "building_count_3km": 1050,
-      "amenity_density_3km": 47
+      "amenity_density_3km": 47,
+      "openaq_timestamp_offset_hours": 23
     },
     {
       "province_th": "นครพนม",
@@ -323,7 +340,8 @@
       "n_candidates": 3,
       "elevation_m": 149.0,
       "building_count_3km": 377,
-      "amenity_density_3km": 114
+      "amenity_density_3km": 114,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "ร้อยเอ็ด",
@@ -341,7 +359,8 @@
       "n_candidates": 4,
       "elevation_m": 149.0,
       "building_count_3km": 70,
-      "amenity_density_3km": 186
+      "amenity_density_3km": 186,
+      "openaq_timestamp_offset_hours": 0
     },
     {
       "province_th": "มหาสารคาม",
@@ -359,8 +378,11 @@
       "n_candidates": 3,
       "elevation_m": 149.0,
       "building_count_3km": 12939,
-      "amenity_density_3km": 67
+      "amenity_density_3km": 67,
+      "openaq_timestamp_offset_hours": 23
     }
   ],
-  "needs_review": []
+  "needs_review": [],
+  "timestamp_offset_measured_at_utc": "2026-09-19T10:19:02.545314+00:00",
+  "needs_timestamp_offset_review": []
 }

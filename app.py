@@ -3,6 +3,7 @@ import os
 import pickle
 import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -29,11 +30,25 @@ from sklearn.metrics import r2_score
 # ===== Config =====
 
 # pooled model: โมเดลเดียวรับใช้ 17 จังหวัดที่เทรน + 3 zero-shot (lat/lon เป็น feature — CHANGELOG 75)
-LGB_MODEL_PATH = "models/lgb_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl"
-XGB_MODEL_PATH = "models/xgb_pm25_multiprovince_residual_bagged_quantile_20260913_014901.pkl"
-CONFORMAL_LGB_PATH = "models/conformal_calibration_lgb_20260913_014901.csv"
-CONFORMAL_XGB_PATH = "models/conformal_calibration_xgb_20260913_014901.csv"
+# v3 = _20260919_203455 (20 feature: ประวัติ PM2.5 + อากาศ + lat/lon + nb_trend_12h + fire_hotspot_count_100km_24h, hyperparameter จูนแล้ว)
+# เทรนจาก dataset ที่แก้ป้ายเวลา OpenAQ แล้ว (CHANGELOG 144-149) — ต้องใช้คู่กับ USE_TIMESTAMP_OFFSET = True เสมอ
+# รุ่นก่อนหน้าทั้งหมด (v2 = _20260919_135655 เทรนจากข้อมูลป้ายเวลาผิด และ _20260913_014901) ยังอยู่ใน models/ แต่ห้ามกลับไปใช้โดยไม่ปิด offset
+# (ย้อนกลับ: คืน path + MODEL_LGB/MODEL_XGB + USE_TIMESTAMP_OFFSET=False — ดู CLAUDE.md)
+LGB_MODEL_PATH = "models/lgb_pm25_multiprovince_residual_bagged_quantile_20260919_203455.pkl"
+XGB_MODEL_PATH = "models/xgb_pm25_multiprovince_residual_bagged_quantile_20260919_203455.pkl"
+CONFORMAL_LGB_PATH = "models/conformal_calibration_lgb_20260919_203455.csv"
+CONFORMAL_XGB_PATH = "models/conformal_calibration_xgb_20260919_203455.csv"
+# ชื่อโมเดลที่บันทึกใน prediction_log.model_used — รุ่นใหม่ใช้ชื่อ _v2 แยกจากรุ่นเก่า
+# ("lightgbm_pooled"/"xgboost_pooled" = รุ่นเก่าสุด, "*_v2" = รุ่นที่เทรนจากข้อมูลป้ายเวลาผิด ยังมีอยู่ในแถวเก่า) กัน compute_rolling_r2() ปนผลรุ่นเก่าเข้ากับรุ่นใหม่
+MODEL_LGB = "lightgbm_pooled_v3"
+MODEL_XGB = "xgboost_pooled_v3"
+MODEL_NAIVE = "naive_fallback"
 PROVINCE_REGISTRY_PATH = "data/province_station_registry.json"
+# ป้ายเวลา OpenAQ /measurements ของ 9 สถานีเลื่อนไป 23 ชม. (CHANGELOG 144-145): registry เก็บ offset ต่อสถานีใน openaq_timestamp_offset_hours (วัดโดย
+# scripts/annotate_registry_timestamp_offset.py) ต้องบวกเข้า datetime_utc เสมอ — เฉพาะโมเดลที่เทรนจาก dataset ที่แก้ป้ายเวลาแล้ว (v3 ขึ้นไป) เท่านั้น
+# (โมเดลรุ่นก่อนเทรนจากข้อมูลป้ายเวลาผิด ใช้กับข้อมูลที่แก้แล้วไม่ได้)
+USE_TIMESTAMP_OFFSET = True
+OFFSET_FUTURE_TOLERANCE_H = 1  # หลังบวก offset แล้ว reading ล่าสุดล้ำอนาคตเกินนี้ = OpenAQ แก้ป้ายเวลาแล้ว offset จะแก้ซ้ำ -> ทิ้ง offset (ดู fetch_recent_pm25_openaq)
 DEFAULT_PROVINCE = "khonkaen"
 HIGH_POLLUTION_THRESHOLD = 37.5  # ค่าเดียวกันทุกจังหวัด (มาตรฐาน คพ. ไม่ใช่ค่าที่ผูกกับโมเดล)
 # ต้องรัน `npm run build` ใน frontend/ ก่อน ถึงจะมีโฟลเดอร์นี้ (ดู CHANGELOG)
@@ -64,6 +79,9 @@ GEMINI_KEY = _ENV["GEMINI_KEY"]
 SECRET_KEY = _ENV["SECRET_KEY"]  # เซ็น Flask session cookie (login/register) — ห้าม print/log
 OPENAQ_KEY = _ENV["OPENAQ_KEY"]  # ส่งเป็น header X-API-Key (fetch_recent_pm25_openaq) — ห้าม print/log
 OPENAQ_HEADERS = {"X-API-Key": OPENAQ_KEY}
+# NASA FIRMS MAP_KEY (fire_hotspot_count_100km_24h) — ไม่บังคับ: ไม่มี/ใช้ไม่ได้ -> feature = 0 + flag ใน data_quality
+# (แอปต้องไม่ล่มเพราะ FIRMS) ห้าม print/log คีย์นี้ และห้าม log URL/ข้อความ exception ของ requests (URL มีคีย์)
+FIRMS_KEY = _ENV.get("FIRMS_KEY")
 
 # PostgreSQL (ย้ายจาก sqlite แล้ว ดู CHANGELOG) — get_db_connection() เปิด connection ใหม่ทุกครั้งที่เรียก
 POSTGRES_HOST = _ENV["POSTGRES_HOST"]
@@ -111,14 +129,17 @@ XGB_MODELS = xgb_package["models"]
 FEATURE_COLS = lgb_package["feature_cols"]
 assert FEATURE_COLS == xgb_package["feature_cols"], "feature_cols ของ LightGBM กับ XGBoost ต้องตรงกันเป๊ะ"
 QUANTILES = lgb_package["quantiles"]  # [0.05, 0.5, 0.95]
+# โมเดลใช้ feature เพื่อนบ้าน/จุดความร้อนไหม (ตาม FEATURE_COLS ของ pkl) — ถ้าไม่ใช้ get_forecast() จะไม่ดึงข้อมูลนั้นและไม่บังคับ naive_fallback
+USES_NEIGHBOR = any(c in FEATURE_COLS for c in ("pm25_neighbor_avg", "nb_trend_12h"))
+USES_FIRE = "fire_hotspot_count_100km_24h" in FEATURE_COLS
 
 # conformal calibration q_hat ต่อ horizon ต่อโมเดล (train_multiprovince_models.py) — ใช้ปรับขอบ
 # P05/P95 ให้ coverage เข้าใกล้เป้าหมาย 90% จริง ไม่ใช่แค่ P05/P95 ดิบจาก quantile regression
 _conformal_lgb_df = pd.read_csv(CONFORMAL_LGB_PATH)
 _conformal_xgb_df = pd.read_csv(CONFORMAL_XGB_PATH)
 CONFORMAL_QHAT = {
-    "lightgbm_pooled": {int(r.horizon): float(r.q_hat) for r in _conformal_lgb_df.itertuples()},
-    "xgboost_pooled": {int(r.horizon): float(r.q_hat) for r in _conformal_xgb_df.itertuples()},
+    MODEL_LGB: {int(r.horizon): float(r.q_hat) for r in _conformal_lgb_df.itertuples()},
+    MODEL_XGB: {int(r.horizon): float(r.q_hat) for r in _conformal_xgb_df.itertuples()},
 }
 
 # กลุ่มเปราะบางเริ่มระวังเร็วกว่าคนทั่วไป ~1 ระดับ AQI (ตาม WHO/US EPA) ลด threshold 10 หน่วย
@@ -219,7 +240,7 @@ def compute_rolling_r2(model_name, horizon, province, N=24):
     return r2_score(y_true, y_pred)
 
 
-ROLLING_R2_MODELS = ("xgboost_pooled", "lightgbm_pooled")
+ROLLING_R2_MODELS = (MODEL_XGB, MODEL_LGB)
 
 
 def fetch_rolling_r2_lookup(province, N=24):
@@ -259,8 +280,12 @@ def fetch_rolling_r2_lookup(province, N=24):
     return lookup
 
 
-def select_model(feature_row, horizon, province, r2_lookup):
+def select_model(feature_row, horizon, province, r2_lookup, force_naive=False):
     """Dynamic Routing (proposal 4.1.6, 2 ทางหลังตัด Prophet ออก):
+    0. force_naive -> "naive_fallback" ทันที (CHANGELOG 141: ไม่มีจังหวัดข้างเคียงที่ข้อมูลสดเลย จึงไม่มีค่า
+       pm25_neighbor_avg/nb_trend_12h ให้โมเดล — ต้องแยก flag นี้ออกมาต่างหาก เพราะ NaN แค่ 2 จาก 21
+       feature = 0.095 < SIGMA_CRITICAL จะไม่ trigger ข้อ 1 เอง แล้วโมเดลจะได้รับ NaN ซึ่งแย่กว่า persistence
+       ชัดเจน: MAE +32%/+65% ใน scripts/check_model_sensitivity_live_degradation.py)
     1. missing_ratio > SIGMA_CRITICAL -> "naive_fallback" (โมเดล pooled ไม่เคยเห็นแถวมี NaN ตอนเทรน
        เลย ป้อน NaN ตรงๆ คือ out-of-distribution ใช้ persistence แทน)
     2. ไม่งั้นเทียบ rolling R² ล่าสุดจาก r2_lookup (precompute โดย fetch_rolling_r2_lookup()) — เช็ค
@@ -268,20 +293,20 @@ def select_model(feature_row, horizon, province, r2_lookup):
        CHANGELOG 20): ไม่มีข้อมูลทั้งคู่ -> สุ่ม 50/50, มีแค่ตัวเดียว -> explore ตัวที่ขาดด้วย
        EXPLORATION_RATE ไม่งั้น fallback ไปตัวที่มีข้อมูล, มีครบ -> เลือก R² สูงกว่า
     """
-    if compute_missing_ratio(feature_row) > SIGMA_CRITICAL:
-        return "naive_fallback"
+    if force_naive or compute_missing_ratio(feature_row) > SIGMA_CRITICAL:
+        return MODEL_NAIVE
 
-    r2_xgb = r2_lookup.get(("xgboost_pooled", horizon))
-    r2_lgb = r2_lookup.get(("lightgbm_pooled", horizon))
+    r2_xgb = r2_lookup.get((MODEL_XGB, horizon))
+    r2_lgb = r2_lookup.get((MODEL_LGB, horizon))
 
     if r2_xgb is None and r2_lgb is None:
-        return random.choice(["xgboost_pooled", "lightgbm_pooled"])
+        return random.choice([MODEL_XGB, MODEL_LGB])
     elif r2_xgb is None:
-        return "xgboost_pooled" if random.random() < EXPLORATION_RATE else "lightgbm_pooled"
+        return MODEL_XGB if random.random() < EXPLORATION_RATE else MODEL_LGB
     elif r2_lgb is None:
-        return "lightgbm_pooled" if random.random() < EXPLORATION_RATE else "xgboost_pooled"
+        return MODEL_LGB if random.random() < EXPLORATION_RATE else MODEL_XGB
     else:
-        return "xgboost_pooled" if r2_xgb > r2_lgb else "lightgbm_pooled"
+        return MODEL_XGB if r2_xgb > r2_lgb else MODEL_LGB
 
 
 # ===== Database schema =====
@@ -455,12 +480,18 @@ def login_required(view_func):
 
 # ===== Live data fetching (OpenAQ + Open-Meteo — ไม่มี Air4Thai/calibration อีกต่อไป) =====
 
-def fetch_recent_pm25_openaq(sensor_id, hours_back=72):
+def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
     """ดึง pm25 ย้อนหลัง hours_back ชม. จาก OpenAQ v3 — สเกลเดียวกับตอนเทรน (ไม่ต้อง calibrate)
-    72h พอสำหรับ lag_24/roll_24 + เผื่อ gap, retry แบบ backoff เฉพาะ 429/5xx"""
+    72h พอสำหรับ lag_24/roll_24 + เผื่อ gap, retry แบบ backoff เฉพาะ 429/5xx
+
+    offset_hours (CHANGELOG 149): ป้ายเวลาของสถานีบางแห่งเลื่อน -> ดึง label ย้อนหลังเพิ่มอีก offset แล้วบวก offset เข้า datetime_utc ให้ตรงเวลาจริง
+    (ค่าที่ป้าย L คือค่าจริงของ L+offset) **ไม่ตัดปลายช่วงที่ now-offset** โดยตั้งใจ เพื่อให้จับกรณี OpenAQ แก้ป้ายเวลาแล้วได้: ถ้าหลังบวก offset
+    reading ล่าสุดล้ำอนาคตเกิน OFFSET_FUTURE_TOLERANCE_H ชม. แปลว่า offset ไม่จำเป็นแล้ว (ถ้าไม่ตรวจ ข้อมูลเก่า 23 ชม.จะถูกเลื่อนให้ดูสดโดยไม่มีอะไรเตือน)
+    -> ทิ้ง offset ชั่วคราวและ log เตือน (ให้รัน scripts/annotate_registry_timestamp_offset.py ใหม่)"""
     end = pd.Timestamp.now(tz="UTC")
+    offset = pd.Timedelta(hours=offset_hours)
     start = end - pd.Timedelta(hours=hours_back)
-    params = {"datetime_from": start.isoformat(), "datetime_to": end.isoformat(), "limit": 1000}
+    params = {"datetime_from": (start - offset).isoformat(), "datetime_to": end.isoformat(), "limit": 1000}
 
     r = None
     for attempt in range(5):
@@ -484,6 +515,13 @@ def fetch_recent_pm25_openaq(sensor_id, hours_back=72):
         return df
     df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
     df = df.dropna(subset=["pm25"]).drop_duplicates(subset=["datetime_utc"]).sort_values("datetime_utc").reset_index(drop=True)
+    if offset_hours and not df.empty:
+        shifted_max = df["datetime_utc"].max() + offset
+        if shifted_max > end + pd.Timedelta(hours=OFFSET_FUTURE_TOLERANCE_H):
+            print(f"[openaq] sensor {sensor_id}: หลังบวก offset {offset_hours}h ข้อมูลล้ำอนาคต -> OpenAQ น่าจะแก้ป้ายเวลาแล้ว ทิ้ง offset "
+                  f"(รัน scripts/annotate_registry_timestamp_offset.py ใหม่)")
+        else:
+            df["datetime_utc"] = df["datetime_utc"] + offset
     return df
 
 
@@ -498,6 +536,186 @@ def fetch_current_weather_openmeteo(lat, lon):
     r = requests.get(url, params=params, timeout=15)
     r.raise_for_status()
     return r.json()["current"]
+
+
+# ===== Live features ใหม่ของโมเดล v2: จังหวัดข้างเคียง + จุดความร้อน (CHANGELOG 141) =====
+# ตรรกะทั้งหมดทดสอบแล้วใน scripts/check_live_feature_parity.py (สูตรตรง dataset เทรน 97-100%) และ
+# scripts/check_model_sensitivity_live_degradation.py (เลือกนโยบายสำรองด้วยตัวเลข) — แก้ที่นี่ต้องตรวจซ้ำด้วย
+# scripts/verify_app_feature_parity.py
+
+NEIGHBOR_FRESH_HOURS = 3       # reading ล่าสุดของเพื่อนบ้านห่างจากเวลาของจังหวัดเป้าหมายไม่เกินนี้ = "สด" (เก่า 1-3 ชม. เสียหาย <0.4%)
+NEIGHBOR_AVG_K = 3             # อันดับ 1 ไม่สด -> เฉลี่ยเพื่อนบ้านสดใกล้สุดสูงสุดกี่จังหวัด (MAE +2.4%/+2.5% เทียบ NaN +32%/+65%)
+NEIGHBOR_MAX_FETCH = 8         # ดึงเพื่อนบ้านตามลำดับระยะทางสูงสุดกี่จังหวัดต่อรอบ (กัน request บาน)
+TARGET_STALE_HOURS = 6         # จังหวัดเป้าหมายมี reading ล่าสุดเก่ากว่านี้ = ข้อมูลเก่า (ไม่ log, ไม่ทำ NLG — ดู get_forecast)
+TARGET_CACHE_TTL_S = 300       # จังหวัดเป้าหมายใช้ cache สั้น (ค่า "ปัจจุบัน" ต้องสด)
+SERIES_CACHE_TTL_S = 1800      # เพื่อนบ้านใช้ cache 30 นาที (scheduled job วน 20 จังหวัดต่อชั่วโมง = ดึงจังหวัดละ 1 ครั้ง)
+SERIES_CACHE_MAX_AGE_S = 6 * 3600  # ดึงเพื่อนบ้านไม่สำเร็จ -> ใช้ cache เก่าได้ไม่เกินนี้ (ยังผ่านเกณฑ์ "สด" อีกที)
+FIRE_CACHE_TTL_S = 3600
+FIRE_CACHE_MAX_AGE_S = 6 * 3600
+FIRE_RADIUS_KM = 100
+FIRE_WINDOW_HOURS = 24
+FIRMS_AREA = "100.5,13.5,106.5,19.0"  # bbox เดียวกับตอนเทรน (อีสาน + กันชนลาว/กัมพูชา)
+FIRMS_NRT_SOURCE = "VIIRS_NOAA20_NRT"  # ตอนเทรนใช้ _SP (archive, ล่าช้า ~2.5 เดือน) live ต้องใช้ NRT — เทียบตรงไม่ได้ (CHANGELOG 140)
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    a = np.sin((p2 - p1) / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2
+    return 2 * 6371.0 * np.arcsin(np.sqrt(a))
+
+
+# เพื่อนบ้านเรียงตามระยะทางจริง (คิดจากทั้ง 20 จังหวัด รวม zero-shot — เหมือน add_spatial_lag_feature ตอนเทรน)
+NEIGHBOR_RANKING = {
+    p["province_en"]: [
+        q["province_en"] for q in sorted(
+            (q for q in PROVINCE_REGISTRY if q["province_en"] != p["province_en"]),
+            key=lambda q: haversine_km(p["lat"], p["lon"], q["lat"], q["lon"]),
+        )
+    ]
+    for p in PROVINCE_REGISTRY
+}
+
+_SERIES_CACHE = {}  # province_en -> (เวลา monotonic ที่ดึง, DataFrame[datetime_utc, pm25])
+_SERIES_LOCK = threading.Lock()
+
+
+def get_recent_series(province, strict=False, max_age_s=SERIES_CACHE_TTL_S):
+    """pm25 72 ชม.ล่าสุดของจังหวัด ผ่าน cache ร่วม (scheduled job ที่วน 20 จังหวัด + /api/forecast ใช้ร่วมกัน
+    จำนวน request OpenAQ ต่อรอบเท่าเดิม = จังหวัดละ 1 ครั้ง) คืน DataFrame หรือ None (ไม่มีข้อมูล)
+    strict=True (จังหวัดเป้าหมาย): ดึงไม่สำเร็จ -> raise เหมือนพฤติกรรมเดิม ไม่ใช้ cache เก่า
+    strict=False (เพื่อนบ้าน): ดึงไม่สำเร็จ -> ใช้ cache เก่า (<= SERIES_CACHE_MAX_AGE_S) ไม่งั้น None (ไม่ raise)"""
+    now = time.monotonic()
+    with _SERIES_LOCK:
+        hit = _SERIES_CACHE.get(province)
+    if hit is not None and now - hit[0] < max_age_s:
+        return hit[1]
+    try:
+        meta = PROVINCES_BY_SLUG[province]
+        offset = int(meta.get("openaq_timestamp_offset_hours", 0)) if USE_TIMESTAMP_OFFSET else 0
+        df = fetch_recent_pm25_openaq(meta["sensor_id_pm25"], offset_hours=offset)
+    except Exception:
+        if strict:
+            raise
+        if hit is not None and now - hit[0] < SERIES_CACHE_MAX_AGE_S:
+            return hit[1]
+        return None
+    if df is None or df.empty:
+        df = None
+    with _SERIES_LOCK:
+        _SERIES_CACHE[province] = (now, df)
+    return df
+
+
+def _filled_grid(df_recent, t):
+    """กริดรายชั่วโมง 48 ชม.ย้อนหลังจาก t (ใช้ข้อมูล <= t เท่านั้น) interpolate เชิงเส้น limit=48 — สูตรเดียวกับ
+    build_feature_row() ของ lag/rolling และกับ scripts/check_live_feature_parity.py"""
+    s = df_recent.set_index("datetime_utc")["pm25"]
+    hist = s[(s.index <= t) & (s.index >= t - pd.Timedelta(hours=72))]
+    grid = pd.date_range(t - pd.Timedelta(hours=48), t, freq="h", tz="UTC")
+    return hist.reindex(grid).interpolate(method="linear", limit=48, limit_direction="both")
+
+
+def _neighbor_is_fresh(df_neighbor, latest_time):
+    if df_neighbor is None or df_neighbor.empty:
+        return False
+    n_latest = df_neighbor["datetime_utc"].max()
+    window = pd.Timedelta(hours=NEIGHBOR_FRESH_HOURS)
+    return (latest_time - n_latest) <= window and (n_latest - latest_time) <= window
+
+
+def compute_neighbor_features(province, latest_time, fetch=None):
+    """pm25_neighbor_avg + nb_trend_12h ของจังหวัดนี้ ณ latest_time ด้วยนโยบายที่เลือกจากผลทดลอง (CHANGELOG 140):
+      - เพื่อนบ้านอันดับ 1 "สด" -> ใช้ตามสูตรเทรนเป๊ะ (policy "k1_exact")
+      - ไม่สด -> เฉลี่ยเพื่อนบ้านสดที่ใกล้สุดสูงสุด NEIGHBOR_AVG_K จังหวัด, trend คิดจากค่าเฉลี่ยชุดเดียวกัน
+        (policy "avg_nearest_fresh")
+      - ไม่มีเพื่อนบ้านสดเลย -> status "no_fresh_neighbor" (ผู้เรียกต้องบังคับ naive_fallback ห้ามส่ง NaN เข้าโมเดล)
+    คืน dict: status, policy, neighbors_used, pm25_neighbor_avg, nb_trend_12h
+    fetch: ฟังก์ชัน province -> DataFrame|None (default get_recent_series) ใส่ไว้ให้ unit test ฉีดข้อมูลสังเคราะห์"""
+    fetch = fetch or get_recent_series
+    fresh = []  # [(province, DataFrame)] เรียงตามระยะทาง
+    for idx, q in enumerate(NEIGHBOR_RANKING[province][:NEIGHBOR_MAX_FETCH]):
+        df_q = fetch(q)
+        is_fresh = _neighbor_is_fresh(df_q, latest_time)
+        if is_fresh:
+            fresh.append((q, df_q))
+        if idx == 0 and is_fresh:
+            break
+        if len(fresh) >= NEIGHBOR_AVG_K:
+            break
+
+    result = {"status": "no_fresh_neighbor", "policy": None, "neighbors_used": [],
+              "pm25_neighbor_avg": np.nan, "nb_trend_12h": np.nan}
+    if not fresh:
+        return result
+
+    used = fresh[:1] if NEIGHBOR_RANKING[province][0] == fresh[0][0] else fresh[:NEIGHBOR_AVG_K]
+    now_vals, ago_vals = [], []
+    for q, df_q in used:
+        grid = _filled_grid(df_q, latest_time)
+        now_vals.append(grid.get(latest_time, np.nan))
+        ago_vals.append(grid.get(latest_time - pd.Timedelta(hours=12), np.nan))
+    avg_now = np.nanmean(now_vals) if not np.all(np.isnan(now_vals)) else np.nan
+    if np.isnan(avg_now):
+        return result
+    avg_ago = np.nanmean(ago_vals) if not np.all(np.isnan(ago_vals)) else np.nan
+    result.update({
+        "status": "ok",
+        "policy": "k1_exact" if used[0][0] == NEIGHBOR_RANKING[province][0] else "avg_nearest_fresh",
+        "neighbors_used": [q for q, _ in used],
+        "pm25_neighbor_avg": float(avg_now),
+        # ไม่มีประวัติ 12 ชม. ก่อนหน้า -> trend = 0 (E4: +3.3%) แทน NaN
+        "nb_trend_12h": float(avg_now - avg_ago) if not np.isnan(avg_ago) else 0.0,
+    })
+    return result
+
+
+_FIRE_CACHE = {"fetched": None, "df": None}
+_FIRE_LOCK = threading.Lock()
+
+
+def get_fire_hotspots():
+    """จุดความร้อน FIRMS NRT 2 วันล่าสุดทั้ง bbox อีสาน (1 request/ชม. ใช้ร่วมทุกจังหวัด) คืน (DataFrame|None, source)
+    source: "live" | "cache" | "stale_cache" | "unavailable" | "no_key" — ไม่ raise (แอปต้องไม่ล่มเพราะ FIRMS)
+    ห้าม log ข้อความ exception ของ requests: URL มี MAP_KEY"""
+    if not FIRMS_KEY:
+        return None, "no_key"
+    now = time.monotonic()
+    with _FIRE_LOCK:
+        cached = dict(_FIRE_CACHE)
+    if cached["df"] is not None and now - cached["fetched"] < FIRE_CACHE_TTL_S:
+        return cached["df"], "cache"
+    try:
+        url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{FIRMS_KEY}/{FIRMS_NRT_SOURCE}/{FIRMS_AREA}/2"
+        r = requests.get(url, timeout=20)
+        text = r.text if r.status_code == 200 else ""
+        if not text or "latitude" not in text.split("\n")[0]:
+            raise ValueError("FIRMS response ไม่ใช่ CSV")
+        from io import StringIO
+        df = pd.read_csv(StringIO(text))
+        if len(df):
+            df["t"] = pd.to_datetime(df["acq_date"] + " " + df["acq_time"].astype(str).str.zfill(4),
+                                      format="%Y-%m-%d %H%M", utc=True)
+        else:
+            df["t"] = pd.Series(dtype="datetime64[ns, UTC]")
+    except Exception:
+        print("[firms] ดึงจุดความร้อนไม่สำเร็จ (ไม่แสดงรายละเอียดเพราะ URL มีคีย์)")
+        if cached["df"] is not None and now - cached["fetched"] < FIRE_CACHE_MAX_AGE_S:
+            return cached["df"], "stale_cache"
+        return None, "unavailable"
+    with _FIRE_LOCK:
+        _FIRE_CACHE["fetched"], _FIRE_CACHE["df"] = now, df
+    return df, "live"
+
+
+def count_fire_hotspots(province_meta, latest_time, hotspots_df):
+    """จำนวนจุดใน (latest_time-24h, latest_time] รัศมี FIRE_RADIUS_KM — ตรรกะเดียวกับ compute_fire_hotspot_feature.py
+    (ไม่มีข้อมูล -> 0, E4: แย่ลงเพียง +1.8%)"""
+    if hotspots_df is None or hotspots_df.empty:
+        return 0
+    near = haversine_km(province_meta["lat"], province_meta["lon"],
+                        hotspots_df["latitude"].values, hotspots_df["longitude"].values) <= FIRE_RADIUS_KM
+    t = hotspots_df["t"][near]
+    return int(((t > latest_time - pd.Timedelta(hours=FIRE_WINDOW_HOURS)) & (t <= latest_time)).sum())
 
 
 def migrate_daily_nlg_risk_group():
@@ -579,10 +797,14 @@ migrate_prediction_interval_columns()
 
 # ===== Feature engineering & prediction logging =====
 
-def build_feature_row(df_recent, current_weather, province_meta):
-    """สร้าง feature row 23 ตัว — สูตร lag/rolling เหมือนตอนเทรนเป๊ะ แต่ยึดตาม "เวลาจริง" ไม่ใช่
-    ตำแหน่งแถว (OpenAQ อาจมีชั่วโมงขาดหาย) gap <=48h interpolate ยาวกว่านั้นปล่อย NaN ให้
-    compute_missing_ratio() จับ — ต้องซิงค์กับ scripts/build_raw_dataset_multiprovince.py เสมอ (ดู CLAUDE.md)
+def build_feature_row(df_recent, current_weather, province_meta, neighbor=None, fire_count=0):
+    """สร้าง feature row (superset: 23 ตัวของรุ่นเก่า + 3 ตัวใหม่ของ v2 แล้วเลือกตาม FEATURE_COLS ของโมเดลที่โหลด)
+    — สูตร lag/rolling เหมือนตอนเทรนเป๊ะ แต่ยึดตาม "เวลาจริง" ไม่ใช่ตำแหน่งแถว (OpenAQ อาจมีชั่วโมงขาดหาย)
+    gap <=48h interpolate ยาวกว่านั้นปล่อย NaN ให้ compute_missing_ratio() จับ — ต้องซิงค์กับ
+    scripts/build_raw_dataset_multiprovince.py + compute_neighbor_trend_feature.py + compute_fire_hotspot_feature.py
+    เสมอ (ดู CLAUDE.md)
+    neighbor: dict จาก compute_neighbor_features() (status != "ok" -> ค่าเพื่อนบ้านเป็น NaN ผู้เรียกต้อง force_naive)
+    fire_count: จำนวนจุดความร้อนจาก count_fire_hotspots()
     """
     latest_time = df_recent["datetime_utc"].max()
     pm25_by_time = df_recent.set_index("datetime_utc")["pm25"]
@@ -625,6 +847,9 @@ def build_feature_row(df_recent, current_weather, province_meta):
         "pressure": current_weather["surface_pressure"],
         "lat": province_meta["lat"],
         "lon": province_meta["lon"],
+        "pm25_neighbor_avg": neighbor["pm25_neighbor_avg"] if neighbor else np.nan,
+        "nb_trend_12h": neighbor["nb_trend_12h"] if neighbor else np.nan,
+        "fire_hotspot_count_100km_24h": fire_count,
     }
 
     X_now = pd.DataFrame([features])[FEATURE_COLS]
@@ -1125,12 +1350,39 @@ def summarize_errors(all_errors, live_errors):
 
 # ===== Core forecast pipeline =====
 
+class DataUnavailableError(RuntimeError):
+    """OpenAQ ไม่มี reading ของจังหวัดเป้าหมายเลยใน 72 ชม.ล่าสุด (สถานีขัดข้อง) — /api/forecast ตอบ 503 แทน 500"""
+
+
 def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     province_meta = PROVINCES_BY_SLUG[province]
-    df_recent = fetch_recent_pm25_openaq(province_meta["sensor_id_pm25"])
+    df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S)
+    if df_recent is None or df_recent.empty:
+        raise DataUnavailableError(f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)")
     current_weather = fetch_current_weather_openmeteo(province_meta["lat"], province_meta["lon"])
-    X_now, latest_time, latest_pm25 = build_feature_row(df_recent, current_weather, province_meta)
+
+    # feature เพื่อนบ้าน + จุดความร้อน (CHANGELOG 141/149) — เวลาอ้างอิงเดียวกับที่ใช้คิด lag; คำนวณ/ดึงเฉพาะเมื่อโมเดลที่โหลดใช้ feature นั้นจริง
+    reference_time = df_recent["datetime_utc"].max()
+    if USES_NEIGHBOR:
+        neighbor = compute_neighbor_features(province, reference_time)
+    else:
+        neighbor = {"status": "not_used", "policy": None, "neighbors_used": [], "pm25_neighbor_avg": np.nan, "nb_trend_12h": np.nan}
+    if USES_FIRE:
+        hotspots_df, fire_source = get_fire_hotspots()
+        fire_count = count_fire_hotspots(province_meta, reference_time, hotspots_df)
+    else:
+        fire_source, fire_count = "not_used", 0
+    # โมเดลใช้เพื่อนบ้านแต่ไม่มีเพื่อนบ้านสดเลย -> ไม่มีค่า neighbor ให้โมเดล ต้องใช้ naive_fallback ทุก horizon (ห้ามส่ง NaN เข้าโมเดล)
+    force_naive = USES_NEIGHBOR and neighbor["status"] != "ok"
+
+    X_now, latest_time, latest_pm25 = build_feature_row(df_recent, current_weather, province_meta, neighbor, fire_count)
     latest_time_th = latest_time.tz_convert("Asia/Bangkok")
+
+    # reading ล่าสุดของจังหวัดนี้เก่ากว่า TARGET_STALE_HOURS: ยังตอบได้ (พร้อม flag ใน data_quality) แต่ไม่ log/ไม่ทำ NLG
+    # — target_time ของ horizon 1-24 จะตกอยู่ในอดีต ถูก backfill ค่าจริงทันที ปน rolling R² ของ routing แบบรั่ว, และ
+    # daily_nlg_log UNIQUE ต่อวัน เขียนครั้งแรกชนะ สรุปจากข้อมูลเก่าจะยึดทั้งวัน
+    target_age_hours = (pd.Timestamp.now(tz="UTC") - latest_time).total_seconds() / 3600
+    target_stale = bool(target_age_hours > TARGET_STALE_HOURS)
 
     # คำนวณ rolling R² ของทั้ง 2 โมเดลทุก horizon ล่วงหน้าด้วย query เดียว (ไม่ใช่ query แยกทีละ
     # (model, horizon) ในลูปข้างล่าง 48 ครั้ง) — ดูคอมเมนต์ที่ fetch_rolling_r2_lookup()
@@ -1141,9 +1393,9 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     risk_horizons = []
     fallback_triggered_horizons = []
     for h in range(1, 25):
-        model_name = select_model(X_now, h, province, r2_lookup)
+        model_name = select_model(X_now, h, province, r2_lookup, force_naive)
 
-        if model_name == "naive_fallback":
+        if model_name == MODEL_NAIVE:
             # ข้อมูลขาดหนักเกินป้อนโมเดล pooled ได้ (ไม่เคยเห็นแถวมี NaN ตอนเทรน) ใช้ persistence
             # แทน ไม่มีขอบเขต uncertainty (ใช้ pred ตรงๆ เป็นทั้ง P05/P95 — สื่อ "ความเชื่อมั่นต่ำ"
             # ผ่าน model_used แทน)
@@ -1152,7 +1404,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             p95_upper_adj = pred
             fallback_triggered_horizons.append(h)
         else:
-            models_by_q = MODELS[h] if model_name == "lightgbm_pooled" else XGB_MODELS[h]
+            models_by_q = MODELS[h] if model_name == MODEL_LGB else XGB_MODELS[h]
             # residual forecasting: โมเดลทาย pm25_t+h - pm25_now ต้องบวก latest_pm25 กลับทุกจุด
             pred = round(float(models_by_q[0.5].predict(X_now)[0]) + latest_pm25, 1)
             p05_pred = float(models_by_q[0.05].predict(X_now)[0]) + latest_pm25
@@ -1185,10 +1437,12 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         if is_horizon_at_risk(p95_upper_adj, risk_group):
             risk_horizons.append(h)
 
-    log_predictions(latest_time, log_rows, province)
-    log_notification_snapshot(latest_time.isoformat(), float(latest_pm25), province)
-    backfill_actuals(df_recent, province)
-    maybe_generate_daily_nlg(forecast, X_now, risk_group, province)
+    if not target_stale:
+        log_predictions(latest_time, log_rows, province)
+        log_notification_snapshot(latest_time.isoformat(), float(latest_pm25), province)
+    backfill_actuals(df_recent, province)  # เติมค่าจริงให้ prediction เก่าจากข้อมูลที่เพิ่งดึง — ปลอดภัยแม้ข้อมูลเก่า
+    if not target_stale:
+        maybe_generate_daily_nlg(forecast, X_now, risk_group, province)
 
     best_time = find_best_time(forecast)
 
@@ -1213,6 +1467,16 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         "high_pollution_risk": high_pollution_risk,
         "risk_horizons": risk_horizons,
         "fallback_triggered_horizons": fallback_triggered_horizons,
+        # สถานะข้อมูลที่ใช้ทำพยากรณ์รอบนี้ (ไม่มี column ใน DB — บอกผ่าน response เท่านั้น)
+        "data_quality": {
+            "target_age_hours": round(float(target_age_hours), 1),
+            "target_stale": target_stale,
+            "neighbor_status": neighbor["status"],
+            "neighbor_policy": neighbor["policy"],
+            "neighbors_used": neighbor["neighbors_used"],
+            "fire_source": fire_source,
+            "fire_count_24h": int(fire_count),
+        },
         "daily_summary": get_today_daily_nlg(risk_group, province),
         "risk_group": risk_group,
         # activity เลือกฝั่ง frontend เท่านั้น (localStorage) ส่งแค่ config ให้ frontend คำนวณคะแนนเอง
@@ -1228,13 +1492,25 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
 def scheduled_forecast_job():
     """เรียก get_forecast() ทุกชั่วโมงต่อจังหวัด (loop ทั้ง 20 จังหวัด) ให้ prediction_log สะสม
     ข้อมูลต่อเนื่องแม้ไม่มีใครเปิดเว็บ — try/except ต่อจังหวัด กัน API hiccup จังหวัดเดียวล้ม job ทั้งหมด"""
+    summary = {"ok": 0, "stale": 0, "naive": 0, "failed": 0}
     for p in PROVINCE_REGISTRY:
         try:
-            get_forecast(province=p["province_en"])
-            print(f"[scheduler] auto forecast logged OK ({p['province_en']})")
+            result = get_forecast(province=p["province_en"])
+            dq = result["data_quality"]
+            if dq["target_stale"]:
+                summary["stale"] += 1
+                print(f"[scheduler] {p['province_en']}: ข้อมูลเก่า {dq['target_age_hours']} ชม. — ไม่บันทึก log")
+            elif dq["neighbor_status"] not in ("ok", "not_used"):
+                summary["naive"] += 1
+                print(f"[scheduler] {p['province_en']}: ไม่มีเพื่อนบ้านที่ข้อมูลสด — ใช้ naive_fallback ทุก horizon")
+            else:
+                summary["ok"] += 1
+                print(f"[scheduler] auto forecast logged OK ({p['province_en']}, neighbor={dq['neighbor_policy']})")
         except Exception as e:
+            summary["failed"] += 1
             print(f"[scheduler] auto forecast failed ({p['province_en']}): {e}")
         time.sleep(0.5)
+    print(f"[scheduler] สรุปรอบนี้: {summary}")
 
 
 # ===== Flask routes =====
@@ -1425,6 +1701,8 @@ def api_forecast():
         return jsonify(get_forecast(province, resolve_risk_group_from_session()))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+    except DataUnavailableError as e:
+        return jsonify({"error": str(e), "data_unavailable": True}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1464,7 +1742,7 @@ def api_notifications():
                 h for h, pred, model_used in horizon_rows
                 if is_horizon_at_risk(pred, risk_group)
             )
-            fallback_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == "naive_fallback")
+            fallback_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == MODEL_NAIVE)
 
             if not (is_current_at_risk(latest_pm25, risk_group) or risk_horizons):
                 continue
@@ -1496,8 +1774,10 @@ def api_comparison():
             return jsonify({"error": "horizon ต้องอยู่ระหว่าง 1-24"}), 400
 
         model = request.args.get("model", "all")
-        if model not in ("all", "lightgbm_pooled", "xgboost_pooled", "naive_fallback"):
-            return jsonify({"error": "model ต้องเป็น all/lightgbm_pooled/xgboost_pooled/naive_fallback"}), 400
+        # ชื่อรุ่นเก่า (lightgbm_pooled/xgboost_pooled) ยังรับอยู่ เพราะแถวเก่าใน prediction_log ใช้ชื่อเหล่านี้
+        valid_models = ("all", MODEL_LGB, MODEL_XGB, "lightgbm_pooled_v2", "xgboost_pooled_v2", "lightgbm_pooled", "xgboost_pooled", MODEL_NAIVE)
+        if model not in valid_models:
+            return jsonify({"error": "model ต้องเป็น " + "/".join(valid_models)}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
