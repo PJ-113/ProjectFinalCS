@@ -3,10 +3,13 @@ import { ref, computed, onMounted, watch } from "vue";
 import { Laugh, Smile, Meh, Frown, Angry, Thermometer, Droplet, Wind } from "@lucide/vue";
 import { fetchForecast, buildWarningMessage } from "../notifications";
 import { riskScoreState, setActivity, ACTIVITY_LEVELS, computeRiskScore, riskScoreAdvice } from "../riskScore";
-import { provinceState } from "../provinces";
+import { provinceState, selectProvince } from "../provinces";
+import { statusClass, severityVar } from "../pm25Levels";
 
-// ชั่วคราว: ปิดการ์ดสรุปวันนี้ (NLG)/ช่วงเวลาดีที่สุด/คะแนนความเสี่ยงส่วนบุคคลไว้ก่อน ตอนตั้งค่า
-// รันบนเครื่องใหม่ เหลือแค่ "การพยากรณ์ + ค่าฝุ่นปัจจุบัน" ตามที่ขอ — เปลี่ยนกลับเป็น true ทีหลังได้
+// ปิดไว้ก่อนอีกครั้ง 2026-09-23 — ผู้ใช้จะ redesign หน้านี้ใหม่ทีหลังแล้วค่อยจัดวางส่วนนี้เพิ่ม
+// (ไม่เกี่ยวกับปัญหา GEMINI_KEY ใช้ไม่ได้ที่เจอก่อนหน้านี้ — นั่นเป็นเหตุผลที่ทำให้สังเกตเห็นปัญหา
+// แต่เหตุผลที่ปิดจริงๆ คือรอ redesign) risk_group ยังต่อสายไปปรับ threshold/NLG ผ่าน session ปกติ
+// อยู่ (ไม่ได้ปิด) แค่การ์ดสรุปวันนี้/ช่วงเวลาดีที่สุด/คะแนนความเสี่ยงส่วนบุคคลไม่โชว์ในหน้านี้ชั่วคราว
 const SHOW_EXTRA_CARDS = false;
 
 const state = ref("loading"); // "loading" | "error" | "content"
@@ -25,16 +28,7 @@ const dataQuality = ref({ target_stale: false, target_age_hours: 0 });
 const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
 const riskScoreConfig = ref(null);
 
-// ระดับตรงกับ PM25_LEVELS ใน app.py (มาตรฐาน คพ. 2566): ดีมาก/ดี/ปานกลาง/
-// เริ่มมีผลกระทบต่อสุขภาพ/มีผลกระทบต่อสุขภาพ — ต้อง match string ให้ตรงเป๊ะกับที่ pm25_status()
-// คืนกลับมา ไม่งั้นจะ fall through ไปโชว์สี/icon ผิดระดับ (เคยเป็นบั๊กมาก่อน ตอนยังมีแค่ 3 ระดับ)
-function statusClass(status) {
-  if (status === "ดีมาก") return "status-excellent";
-  if (status === "ดี") return "status-good";
-  if (status === "ปานกลาง") return "status-moderate";
-  if (status === "เริ่มมีผลกระทบต่อสุขภาพ") return "status-unhealthy";
-  return "status-bad";
-}
+// statusClass/severityVar ย้ายไป pm25Levels.js (โมดูลกลาง ใช้ร่วมกับ MapView.vue) — import ไว้บนสุด
 
 function bodyClassFor(status) {
   if (status === "ดีมาก") return "aqi-excellent";
@@ -54,15 +48,6 @@ function moodIconFor(status) {
   return Angry;
 }
 
-// threshold เดียวกับ PM25_LEVELS ใน app.py (15/25/37.5/75) — ไล่สี (เข้ม->อ่อน) ของสีระดับเดียวกัน
-// เอง ต่อแท่ง ไม่ใช่ไล่สีฟ้าเดียวทุกแท่งแบบ mockup เพราะสีระดับ PM2.5 เป็นข้อมูลจริงที่ต้องคงไว้
-function severityVar(pm25) {
-  return pm25 <= 15 ? "--excellent"
-    : pm25 <= 25 ? "--good"
-    : pm25 <= 37.5 ? "--moderate"
-    : pm25 <= 75 ? "--unhealthy"
-    : "--bad";
-}
 function barColor(pm25) {
   const v = severityVar(pm25);
   return `linear-gradient(180deg, var(${v}) 0%, color-mix(in srgb, var(${v}) 55%, white) 100%)`;
@@ -172,7 +157,19 @@ defineExpose({ loadForecast });
     <div class="haze-decor"><span></span><span></span><span></span><span></span></div>
 
     <div class="wrap">
-      <h1><span class="title-main">พยากรณ์ PM2.5</span><span class="title-sub"> - จังหวัด{{ provinceInfo.th || "..." }}{{ provinceInfo.is_zero_shot ? " (zero-shot)" : "" }}</span></h1>
+      <div class="title-row">
+        <h1><span class="title-main">พยากรณ์ PM2.5</span><span class="title-sub"> - จังหวัด{{ provinceInfo.th || "..." }}{{ provinceInfo.is_zero_shot ? " (zero-shot)" : "" }}</span></h1>
+        <select
+          class="province-select"
+          :value="provinceState.selected"
+          @change="selectProvince($event.target.value)"
+          aria-label="เลือกจังหวัด"
+        >
+          <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
+            {{ p.province_th }}{{ p.is_zero_shot ? " (zero-shot)" : "" }}
+          </option>
+        </select>
+      </div>
       <!--<div class="subtitle">
         <span class="live-dot"></span>
         ข้อมูลจาก OpenAQ + Open-Meteo, พยากรณ์ล่วงหน้า 24 ชั่วโมงด้วยระบบ Dynamic Routing
@@ -445,16 +442,48 @@ defineExpose({ loadForecast });
 
 .wrap { max-width: 1180px; margin: 0 auto; position: relative; z-index: 1; }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
 h1 {
   font-size: 1.9rem;
   font-weight: 800;
-  margin: 0 0 4px;
+  margin: 0;
+}
+/* พื้นหลังทึบชัดเจน ไม่ใช้ --card-bg แบบโปร่งแสง (ตรงนี้วางบนพื้นหลัง gradient sky ของหน้าตรงๆ
+   ไม่ได้อยู่ใน .card ที่มี blur ช่วย โปร่งแสงแล้วสีจะกลืนกับพื้นหลังฟ้า อ่านยาก) */
+.province-select {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.province-select option { background: #ffffff; color: #0f172a; }
+@media (prefers-color-scheme: dark) {
+  .province-select {
+    background: rgba(15, 23, 42, 0.92);
+    color: #f1f5f9;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .province-select option { background: #1e293b; color: #f1f5f9; }
 }
 .title-main { color: var(--page-text); }
 .title-sub { color: var(--page-text-muted); font-weight: 600; font-size: 1.1rem; }
 @media (max-width: 600px) {
   h1 { font-size: 1.4rem; }
   .title-sub { font-size: 0.85rem; display: block; }
+  /* header กลายเป็น 2 แถวคงที่บนจอแคบ (ดู AppHeader.vue) ต้องเผื่อ padding-top เพิ่มไม่งั้นเนื้อหา
+     ด้านบนโดนบัง */
+  .forecast-page { padding-top: 148px; }
 }
 
 .subtitle {

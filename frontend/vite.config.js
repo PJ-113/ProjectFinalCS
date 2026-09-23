@@ -30,6 +30,22 @@ export default defineConfig({
         // ไม่ cache /api/* แบบ offline-first เพราะข้อมูลพยากรณ์ต้องเป็นข้อมูลสดเสมอ
         // ปล่อยให้ fetch ตรงไป network ทุกครั้ง ตัว service worker ดูแลแค่ static assets (JS/CSS/HTML shell)
         navigateFallbackDenylist: [/^\/api\//],
+        runtimeCaching: [
+          {
+            // แผนที่ (/map) โหลด tile จาก OpenStreetMap — เป็นภาพนิ่งไม่เปลี่ยนบ่อย cache ยาวได้ปลอดภัย
+            // ต่างจาก /api/* ด้านบนที่ต้องสดเสมอ, ลด request ซ้ำและช่วยให้ใช้ offline ได้บางส่วน
+            urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "osm-tiles-cache",
+              expiration: {
+                maxEntries: 200,
+                maxAgeSeconds: 30 * 24 * 60 * 60,
+              },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
       },
     }),
   ],

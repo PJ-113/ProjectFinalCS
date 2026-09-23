@@ -2,23 +2,29 @@
 import { ref, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
 import { authState, changePassword, logout, updateProfile } from '../auth'
+import { provinceState } from '../provinces'
 
 const RISK_GROUPS = ['ทั่วไป', 'เด็ก-ผู้สูงอายุ', 'มีโรคประจำตัว']
+const FAR_THRESHOLD_KM = 200 // ไกลกว่านี้ = อาจอยู่นอกภาคอีสาน เตือนแต่ไม่บล็อกการบันทึก
 
 const router = useRouter()
 
 const email = ref('')
 const riskGroup = ref('ทั่วไป')
 const age = ref('')
+const homeProvince = ref('')
 const profileMessage = ref('')
 const profileError = ref('')
 const savingProfile = ref(false)
+const geoLocating = ref(false)
+const geoMessage = ref('')
 
 watchEffect(() => {
   if (authState.user) {
     email.value = authState.user.email
     riskGroup.value = authState.user.risk_group
     age.value = authState.user.age ?? ''
+    homeProvince.value = authState.user.home_province || ''
   }
 })
 
@@ -31,6 +37,7 @@ async function handleSaveProfile() {
       email: email.value,
       risk_group: riskGroup.value,
       age: age.value ? Number(age.value) : null,
+      home_province: homeProvince.value || null,
     })
     profileMessage.value = 'บันทึกโปรไฟล์เรียบร้อยแล้ว'
   } catch (e) {
@@ -38,6 +45,54 @@ async function handleSaveProfile() {
   } finally {
     savingProfile.value = false
   }
+}
+
+// ระยะทางวงกลมใหญ่ (กม.) ระหว่างสองพิกัด — ใช้หาจังหวัดที่ใกล้ตำแหน่งปัจจุบันที่สุด ไม่มี dependency
+// เพิ่ม เป็นแค่สูตรคณิตศาสตร์ทั่วไป
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+// ปุ่ม GPS แค่ "ช่วยเดา" เติมค่าใน dropdown ให้เฉยๆ ไม่ auto-save — ผู้ใช้ต้องกดบันทึกโปรไฟล์เองเสมอ
+// (ตัดสินใจไว้ตั้งแต่ตอนวางแผน กัน GPS หยาบ/ผิดพลาดไปบันทึกทับโดยไม่ได้ตรวจสอบก่อน)
+function handleUseLocation() {
+  geoMessage.value = ''
+  if (!navigator.geolocation) {
+    geoMessage.value = 'เบราว์เซอร์นี้ไม่รองรับการระบุตำแหน่ง — เลือกจังหวัดเองจากรายการได้เลย'
+    return
+  }
+  geoLocating.value = true
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      geoLocating.value = false
+      const { latitude, longitude } = pos.coords
+      let nearest = null
+      for (const p of provinceState.list) {
+        const d = haversineKm(latitude, longitude, p.lat, p.lon)
+        if (!nearest || d < nearest.d) nearest = { p, d }
+      }
+      if (!nearest) {
+        geoMessage.value = 'ยังโหลดรายชื่อจังหวัดไม่เสร็จ ลองใหม่อีกครั้ง'
+        return
+      }
+      homeProvince.value = nearest.p.province_en
+      geoMessage.value = nearest.d > FAR_THRESHOLD_KM
+        ? `ตรวจพบตำแหน่งห่างจาก${nearest.p.province_th}ประมาณ ${Math.round(nearest.d)} กม. (อาจอยู่นอกภาคอีสาน) ตรวจสอบให้แน่ใจก่อนกดบันทึก`
+        : `เลือก${nearest.p.province_th}ให้แล้ว (ใกล้ตำแหน่งปัจจุบันที่สุด) กด "บันทึกโปรไฟล์" เพื่อยืนยัน`
+    },
+    (err) => {
+      geoLocating.value = false
+      geoMessage.value = err.code === err.PERMISSION_DENIED
+        ? 'ไม่ได้รับอนุญาตให้เข้าถึงตำแหน่ง — เลือกจังหวัดเองจากรายการได้เลย'
+        : 'ไม่สามารถระบุตำแหน่งได้ตอนนี้ ลองใหม่อีกครั้งหรือเลือกจังหวัดเอง'
+    },
+    { timeout: 10000 },
+  )
 }
 
 const currentPassword = ref('')
@@ -96,6 +151,21 @@ async function handleLogout() {
         <label>
           อายุ
           <input v-model="age" type="number" min="1" max="120" />
+        </label>
+        <label>
+          จังหวัดหลัก (ไม่บังคับ — ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้แยกจากจังหวัดที่กำลังดูพยากรณ์อยู่)
+          <div class="province-row">
+            <select v-model="homeProvince">
+              <option value="">-- ไม่ระบุ --</option>
+              <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
+                {{ p.province_th }}{{ p.is_zero_shot ? ' (zero-shot)' : '' }}
+              </option>
+            </select>
+            <button type="button" class="geo-btn" @click="handleUseLocation" :disabled="geoLocating">
+              {{ geoLocating ? 'กำลังค้นหา...' : '📍 ใช้ตำแหน่งปัจจุบัน' }}
+            </button>
+          </div>
+          <span v-if="geoMessage" class="geo-message">{{ geoMessage }}</span>
         </label>
         <p v-if="profileMessage" class="success-text">{{ profileMessage }}</p>
         <p v-if="profileError" class="error-text">{{ profileError }}</p>
@@ -228,6 +298,35 @@ input:focus, select:focus {
 @media (prefers-color-scheme: dark) {
   input, select { background: rgba(0, 0, 0, 0.2); }
   input:focus, select:focus { background: rgba(0, 0, 0, 0.4); }
+}
+
+.province-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.province-row select { flex: 1 1 160px; }
+.geo-btn {
+  flex: 0 0 auto;
+  padding: 0 14px;
+  border: 1px solid var(--auth-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--auth-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.geo-btn:hover:not(:disabled) { border-color: var(--auth-accent); color: var(--auth-accent); }
+.geo-btn:disabled { opacity: 0.6; cursor: default; }
+@media (prefers-color-scheme: dark) {
+  .geo-btn { background: rgba(0, 0, 0, 0.2); }
+}
+.geo-message {
+  font-size: 0.78rem;
+  color: var(--auth-muted);
+  font-weight: 400;
 }
 
 button[type='submit'] {

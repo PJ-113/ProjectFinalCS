@@ -1,8 +1,21 @@
 <script setup>
-import { onMounted } from 'vue'
-import { notificationHistory, fetchNotificationHistory, summarizeHistoryItem } from '../notifications'
+import { computed, onMounted } from 'vue'
+import { authState } from '../auth'
+import { provinceState } from '../provinces'
+import { notificationHistory, fetchNotificationHistory, summarizeHistoryItem, formatCardTime } from '../notifications'
 
-onMounted(() => fetchNotificationHistory(50))
+// province: ให้ตรงกับจังหวัดหลักที่กระดิ่งเฝ้าอยู่จริง (เดิมหน้านี้ไม่ส่ง province เลยจึงใช้
+// provinceState.selected เสมอ ไม่ตรงกับ dropdown ใน AppHeader.vue ที่ใช้ home_province เป็นหลัก)
+onMounted(() => fetchNotificationHistory(50, authState.user?.home_province || provinceState.selected))
+
+// คำนวณ summary/timeLabel ครั้งเดียวต่อ item แทนที่จะเรียกฟังก์ชันซ้ำหลายครั้งในเทมเพลต
+const items = computed(() =>
+  notificationHistory.items.map((item) => ({
+    ...item,
+    timeLabel: formatCardTime(item.recorded_at_th),
+    summary: summarizeHistoryItem(item),
+  })),
+)
 </script>
 
 <template>
@@ -15,13 +28,17 @@ onMounted(() => fetchNotificationHistory(50))
       <div v-else-if="notificationHistory.status === 'error'" class="state-msg">
         ไม่สามารถโหลดข้อมูลได้ ลองรีเฟรชหน้าอีกครั้ง
       </div>
-      <div v-else-if="notificationHistory.items.length === 0" class="state-msg">
+      <div v-else-if="items.length === 0" class="state-msg">
         ยังไม่มีประวัติการแจ้งเตือน
       </div>
       <ul v-else class="history-list">
-        <li v-for="item in notificationHistory.items" :key="item.recorded_at_th" class="history-card glass-card">
-          <div class="history-time">{{ item.recorded_at_th }}</div>
-          <div class="history-text">{{ summarizeHistoryItem(item) }}</div>
+        <li v-for="item in items" :key="item.recorded_at_th" class="history-card glass-card">
+          <div class="history-time">{{ item.timeLabel }}</div>
+          <div class="history-headline">{{ item.summary.headline }}</div>
+          <div v-if="item.summary.ranges.length" class="history-ranges">
+            <span v-for="(r, i) in item.summary.ranges" :key="i" class="history-range-chip">{{ r }}</span>
+          </div>
+          <div v-if="item.summary.note" class="history-note">{{ item.summary.note }}</div>
           <div class="history-pm25">PM2.5 ล่าสุดตอนนั้น: {{ item.latest_pm25 }} µg/m³</div>
         </li>
       </ul>
@@ -96,8 +113,31 @@ h1 {
   margin-bottom: 6px;
 }
 
-.history-text {
+.history-headline {
   line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.history-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.history-range-chip {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--auth-accent);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.history-note {
+  font-size: 0.85rem;
+  color: var(--auth-muted);
   margin-bottom: 6px;
 }
 

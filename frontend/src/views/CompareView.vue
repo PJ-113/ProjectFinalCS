@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from "vue";
 import { CircleCheck, CircleAlert, CircleX, ChevronDown } from "@lucide/vue";
-import { provinceState } from "../provinces";
+import { provinceState, selectProvince } from "../provinces";
 
 const horizon = ref(1);
 const model = ref("all");
@@ -389,6 +389,16 @@ watch(() => provinceState.selected, () => {
           <h1>เปรียบเทียบผลพยากรณ์กับค่าจริง</h1>
           <div class="subtitle">ดูว่าที่ผ่านมาระบบพยากรณ์ PM2.5 แม่นยำแค่ไหน เทียบกับค่าที่วัดได้จริง</div>
         </div>
+        <select
+          class="province-select"
+          :value="provinceState.selected"
+          @change="selectProvince($event.target.value)"
+          aria-label="เลือกจังหวัด"
+        >
+          <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
+            {{ p.province_th }}{{ p.is_zero_shot ? " (zero-shot)" : "" }}
+          </option>
+        </select>
         <router-link class="back-link" to="/">← กลับหน้าแรก</router-link>
       </div>
 
@@ -609,6 +619,29 @@ h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
 }
 .back-link:hover { text-decoration: underline; }
 
+/* พื้นหลังทึบชัดเจน ไม่ใช้ var(--card-bg) โปร่งแสง — ตรงนี้วางบนพื้นหลัง gradient sky ตรงๆ ไม่ได้อยู่
+   ใน .card ที่มี blur ช่วย โปร่งแสงแล้วสีจะกลืนกับพื้นหลังฟ้า อ่านยาก */
+.province-select {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.95);
+  color: #0f172a;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.province-select option { background: #ffffff; color: #0f172a; }
+@media (prefers-color-scheme: dark) {
+  .province-select {
+    background: rgba(15, 23, 42, 0.92);
+    color: #f1f5f9;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .province-select option { background: #1e293b; color: #f1f5f9; }
+}
+
 .card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -665,6 +698,12 @@ h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
   .hero-row { gap: 12px; }
   .hero-icon { width: 48px; height: 48px; }
   .hero-label { font-size: 1.3rem; }
+}
+
+@media (max-width: 600px) {
+  /* header กลายเป็น 2 แถวคงที่บนจอแคบ (ดู AppHeader.vue) ต้องเผื่อ padding-top เพิ่มไม่งั้นเนื้อหา
+     ด้านบนโดนบัง */
+  .compare-page { padding-top: 148px; }
 }
 
 .section-title {

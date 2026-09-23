@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { register } from '../auth'
+import { provinceState } from '../provinces'
 
 const RISK_GROUPS = ['ทั่วไป', 'เด็ก-ผู้สูงอายุ', 'มีโรคประจำตัว']
 
@@ -12,6 +13,7 @@ const password = ref('')
 const confirmPassword = ref('')
 const riskGroup = ref('ทั่วไป')
 const age = ref('')
+const homeProvince = ref('')
 const errorMessage = ref('')
 const submitting = ref(false)
 
@@ -32,6 +34,7 @@ async function handleSubmit() {
       password: password.value,
       risk_group: riskGroup.value,
       age: age.value ? Number(age.value) : null,
+      home_province: homeProvince.value || null,
     })
     router.push('/')
   } catch (e) {
@@ -72,6 +75,16 @@ async function handleSubmit() {
       <label>
         อายุ (ไม่บังคับ)
         <input v-model="age" type="number" min="1" max="120" />
+      </label>
+
+      <label>
+        จังหวัดหลัก (ไม่บังคับ — ตั้งทีหลังในหน้าโปรไฟล์ได้ ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้)
+        <select v-model="homeProvince">
+          <option value="">-- ไม่ระบุ --</option>
+          <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
+            {{ p.province_th }}{{ p.is_zero_shot ? ' (zero-shot)' : '' }}
+          </option>
+        </select>
       </label>
 
       <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>

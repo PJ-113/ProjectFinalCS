@@ -158,16 +158,20 @@ RISK_SCORE_BREAKPOINTS = [(0, 0), (15, 20), (25, 40), (37.5, 60), (75, 80), (150
 
 
 def effective_threshold_for(risk_group):
-    """threshold เดียว (37.5 + offset ตาม risk_group) — การชดเชย "โมเดลทายพลาดแค่ไหนช่วงมลพิษสูง"
-    ย้ายไปอยู่ที่ P95 conformal interval แทนแล้ว (ดู is_horizon_at_risk) ไม่ใช้ bias CSV แบบเดิม"""
+    """threshold เดียว (37.5 + offset ตาม risk_group) ไม่ใช้ bias CSV แบบเดิม (per-province, เลิกใช้
+    ตั้งแต่ย้ายมาโมเดล pooled)"""
     return HIGH_POLLUTION_THRESHOLD + RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0)
 
 
-# ให้ get_forecast() และ /api/notifications ใช้ตรรกะ "อะไรถือว่าเสี่ยง" เดียวกันเป๊ะ — เทียบขอบบน P95
-# (conformal-adjusted) กับ threshold แทน point prediction ตรงๆ กันทายพลาดต่ำกว่าจริงช่วงมลพิษสูง
-# naive_fallback ไม่มีขอบเขต quantile ใช้ point prediction เป็น p95_upper_adj ตรงๆ (ไม่มี margin)
-def is_horizon_at_risk(p95_upper_adj, risk_group):
-    return p95_upper_adj > effective_threshold_for(risk_group)
+# ให้ get_forecast() และ /api/notifications ใช้ตรรกะ "อะไรถือว่าเสี่ยง" เดียวกันเป๊ะ — เทียบค่าพยากรณ์
+# ตรงๆ (median prediction) กับ threshold ไม่ใช่ขอบบน P95 (เคยใช้ P95 มาก่อน 2026-09-23 เพื่อชดเชย
+# "โมเดลทายพลาดช่วงมลพิษสูง" แต่เป็นการเลือกแบบ heuristic ไม่เคยผ่านการทดลองเทียบวิธี พอทดสอบจริงบน
+# day-ahead backtest (models/alert_capability_pooled_20260922_203655.csv, 1,372 คู่ threshold 37.5)
+# พบว่า P95 ทำ false-alarm สูงถึง 36.8-37.1% (เกือบ 4 ใน 10 ครั้งที่เตือนคือเตือนผิด) ขณะที่ค่าพยากรณ์
+# ตรงๆ ได้ recall 92.3-92.5% กับ false-alarm แค่ 13.4% ชนะทั้งสองมิติพร้อมกันเทียบกับ persistence/
+# ค่าเฉลี่ยวันก่อนหน้า จึงเปลี่ยนมาใช้ค่าพยากรณ์ตรงๆ เป็นเกณฑ์เดียวทั้งระบบ)
+def is_horizon_at_risk(predicted_pm25, risk_group):
+    return predicted_pm25 > effective_threshold_for(risk_group)
 
 
 def is_current_at_risk(latest_pm25, risk_group):
@@ -387,6 +391,8 @@ def _public_user(row):
         "risk_group": row[2],
         "age": row[3],
         "created_at": row[4],
+        "role": row[5],
+        "home_province": row[6],
     }
 
 
@@ -394,7 +400,7 @@ def get_user_by_email(email):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, email, risk_group, age, created_at FROM users WHERE email = %s",
+        "SELECT id, email, risk_group, age, created_at, role, home_province FROM users WHERE email = %s",
         (email,),
     )
     row = cur.fetchone()
@@ -408,7 +414,7 @@ def get_user_by_email_with_hash(email):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, email, risk_group, age, created_at, password_hash FROM users WHERE email = %s",
+        "SELECT id, email, risk_group, age, created_at, role, home_province, password_hash FROM users WHERE email = %s",
         (email,),
     )
     row = cur.fetchone()
@@ -416,14 +422,14 @@ def get_user_by_email_with_hash(email):
     conn.close()
     if row is None:
         return None
-    return {**_public_user(row[:5]), "password_hash": row[5]}
+    return {**_public_user(row[:7]), "password_hash": row[7]}
 
 
 def get_user_by_id(user_id):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, email, risk_group, age, created_at FROM users WHERE id = %s",
+        "SELECT id, email, risk_group, age, created_at, role, home_province FROM users WHERE id = %s",
         (user_id,),
     )
     row = cur.fetchone()
@@ -432,14 +438,14 @@ def get_user_by_id(user_id):
     return _public_user(row) if row else None
 
 
-def create_user(email, password_hash, risk_group, age):
+def create_user(email, password_hash, risk_group, age, home_province=None):
     conn = get_db_connection()
     cur = conn.cursor()
     created_at = pd.Timestamp.now(tz="UTC").isoformat()
     cur.execute(
-        """INSERT INTO users (email, password_hash, risk_group, age, created_at)
-           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-        (email, password_hash, risk_group, age, created_at),
+        """INSERT INTO users (email, password_hash, risk_group, age, created_at, home_province)
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+        (email, password_hash, risk_group, age, created_at, home_province),
     )
     user_id = cur.fetchone()[0]
     conn.commit()
@@ -448,12 +454,12 @@ def create_user(email, password_hash, risk_group, age):
     return user_id
 
 
-def update_user_profile(user_id, email, risk_group, age):
+def update_user_profile(user_id, email, risk_group, age, home_province=None):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE users SET email = %s, risk_group = %s, age = %s WHERE id = %s",
-        (email, risk_group, age, user_id),
+        "UPDATE users SET email = %s, risk_group = %s, age = %s, home_province = %s WHERE id = %s",
+        (email, risk_group, age, home_province, user_id),
     )
     conn.commit()
     cur.close()
@@ -793,6 +799,38 @@ def migrate_prediction_interval_columns():
 
 
 migrate_prediction_interval_columns()
+
+
+def migrate_users_role():
+    """เพิ่ม role ให้ users (แยกจาก risk_group — risk_group คือกลุ่มสุขภาพ ใช้ปรับ threshold/NLG,
+    role คือสิทธิ์ใช้งานระบบ ไม่เกี่ยวกัน) ค่าเริ่มต้น 'user' ทุกแถวเก่า ไม่มีทางสมัครเป็น 'admin' เอง
+    ได้ผ่าน /api/auth/register (ดู api_auth_register — ไม่รับ field role จาก request เลย) ต้องตั้งผ่าน
+    scripts/promote_admin.py เท่านั้น"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+migrate_users_role()
+
+
+def migrate_users_home_province():
+    """เพิ่ม home_province ให้ users (nullable, ไม่มี default — "ยังไม่ตั้ง" เป็นสถานะปกติ ต่างจาก
+    risk_group ที่มี default 'ทั่วไป' เพราะจังหวัดไม่มีค่าเริ่มต้นที่สมเหตุสมผล) เก็บเป็น province_en
+    slug เดียวกับที่ใช้ทั้งระบบ ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้แทน provinceState.selected (dropdown)
+    เมื่อตั้งไว้ — ดู resolve_home_province_status()/api_notifications_status()"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS home_province TEXT")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+migrate_users_home_province()
 
 
 # ===== Feature engineering & prediction logging =====
@@ -1434,7 +1472,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             "pm25_hi": round(max(0.0, p95_upper_adj), 1),
         })
 
-        if is_horizon_at_risk(p95_upper_adj, risk_group):
+        if is_horizon_at_risk(pred, risk_group):
             risk_horizons.append(h)
 
     if not target_stale:
@@ -1546,6 +1584,7 @@ def api_auth_register():
         password = str(data.get("password", ""))
         risk_group = data.get("risk_group") or "ทั่วไป"
         age = data.get("age")
+        home_province = data.get("home_province") or None  # "" -> None (ยังไม่ตั้ง)
 
         if not _EMAIL_RE.match(email):
             return jsonify({"error": "รูปแบบอีเมลไม่ถูกต้อง"}), 400
@@ -1553,6 +1592,8 @@ def api_auth_register():
             return jsonify({"error": f"รหัสผ่านต้องมีอย่างน้อย {MIN_PASSWORD_LENGTH} ตัวอักษร"}), 400
         if risk_group not in VALID_RISK_GROUPS:
             return jsonify({"error": "risk_group ไม่ถูกต้อง"}), 400
+        if home_province is not None and home_province not in PROVINCES_BY_SLUG:
+            return jsonify({"error": "home_province ไม่ถูกต้อง"}), 400
         if age is not None:
             try:
                 age = int(age)
@@ -1564,7 +1605,7 @@ def api_auth_register():
         if get_user_by_email(email) is not None:
             return jsonify({"error": "อีเมลนี้ถูกใช้งานแล้ว"}), 409
 
-        user_id = create_user(email, generate_password_hash(password), risk_group, age)
+        user_id = create_user(email, generate_password_hash(password), risk_group, age, home_province)
         session.clear()
         session.permanent = True
         session["user_id"] = user_id
@@ -1621,11 +1662,14 @@ def api_auth_update_profile():
         email = str(data.get("email", current["email"])).strip().lower()
         risk_group = data.get("risk_group", current["risk_group"])
         age = data.get("age", current["age"])
+        home_province = data.get("home_province", current["home_province"]) or None  # "" -> None (ล้างค่า)
 
         if not _EMAIL_RE.match(email):
             return jsonify({"error": "รูปแบบอีเมลไม่ถูกต้อง"}), 400
         if risk_group not in VALID_RISK_GROUPS:
             return jsonify({"error": "risk_group ไม่ถูกต้อง"}), 400
+        if home_province is not None and home_province not in PROVINCES_BY_SLUG:
+            return jsonify({"error": "home_province ไม่ถูกต้อง"}), 400
         if age is not None:
             try:
                 age = int(age)
@@ -1638,7 +1682,7 @@ def api_auth_update_profile():
         if existing is not None and existing["id"] != session["user_id"]:
             return jsonify({"error": "อีเมลนี้ถูกใช้งานแล้ว"}), 409
 
-        update_user_profile(session["user_id"], email, risk_group, age)
+        update_user_profile(session["user_id"], email, risk_group, age, home_province)
         return jsonify(get_user_by_id(session["user_id"])), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1694,6 +1738,85 @@ def api_provinces():
     ])
 
 
+@app.route("/api/provinces/overview", methods=["GET"])
+def api_provinces_overview():
+    """สรุปสถานะ PM2.5 ทุกจังหวัดพร้อมกัน (หน้า /map) — อ่านจาก notification_log/prediction_log แทนการ
+    เรียก get_forecast() 20 ครั้งสด (แพง: OpenAQ/Open-Meteo/FIRMS/neighbor ต่อจังหวัด) ค่าที่ได้จึงหน่วง
+    สุด ~1 ชม. ตามรอบ scheduled_forecast_job() ยอมรับได้สำหรับภาพรวมระดับจังหวัด ไม่ใช่หน้าเดี่ยวที่ต้อง
+    real-time เป๊ะ (หน้านั้นคือ / ซึ่งยังคง live เหมือนเดิม)
+
+    ?horizon=0 (ค่าเริ่มต้น): คืนแค่ current_* (ค่าปัจจุบันจาก notification_log)
+    ?horizon=1..24: คืน current_* คู่กับ forecast_* (ค่าพยากรณ์ ณ horizon นั้นจาก prediction_log) เพื่อให้
+    popup ฝั่ง frontend โชว์ "ตอนนี้" เทียบกับ "พยากรณ์ที่เลือก" ได้โดยไม่ต้อง fetch ซ้ำ"""
+    horizon_raw = request.args.get("horizon", "0")
+    try:
+        horizon = int(horizon_raw)
+        if not (0 <= horizon <= 24):
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": f"horizon ต้องเป็นจำนวนเต็ม 0-24: {horizon_raw}"}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT ON (province) province, recorded_at_utc, latest_pm25
+            FROM notification_log
+            ORDER BY province, recorded_at_utc DESC
+        """)
+        current_by_province = {province: (recorded_at_utc, latest_pm25) for province, recorded_at_utc, latest_pm25 in cur.fetchall()}
+
+        forecast_by_province = {}
+        if horizon > 0:
+            cur.execute("""
+                SELECT DISTINCT ON (province) province, target_time_utc, predicted_pm25, model_used
+                FROM prediction_log
+                WHERE horizon = %s
+                ORDER BY province, predicted_at_utc DESC
+            """, (horizon,))
+            forecast_by_province = {
+                province: (target_time_utc, predicted_pm25, model_used)
+                for province, target_time_utc, predicted_pm25, model_used in cur.fetchall()
+            }
+
+        cur.close()
+        conn.close()
+
+        results = []
+        for p in PROVINCE_REGISTRY:
+            row = {
+                "province_th": p["province_th"], "province_en": p["province_en"],
+                "lat": p["lat"], "lon": p["lon"], "is_zero_shot": p["is_zero_shot"],
+                "horizon": horizon,
+                "current_pm25": None, "current_status": None, "current_recorded_at_th": None,
+                "forecast_pm25": None, "forecast_status": None,
+                "forecast_target_time_th": None, "forecast_model_used": None,
+            }
+
+            # ยังไม่มี snapshot เลย (DB ใหม่/scheduler ยังไม่เคยรันสำเร็จจังหวัดนี้) — ส่ง null ไม่ raise
+            # ให้จังหวัดอื่นยังโชว์ได้ปกติ
+            current_snapshot = current_by_province.get(p["province_en"])
+            if current_snapshot is not None:
+                recorded_at_utc, latest_pm25 = current_snapshot
+                row["current_pm25"] = round(float(latest_pm25), 1)
+                row["current_status"] = pm25_status(latest_pm25)
+                row["current_recorded_at_th"] = pd.Timestamp(recorded_at_utc).tz_convert("Asia/Bangkok").strftime("%Y-%m-%d %H:%M")
+
+            forecast_snapshot = forecast_by_province.get(p["province_en"])
+            if forecast_snapshot is not None:
+                target_time_utc, predicted_pm25, model_used = forecast_snapshot
+                row["forecast_pm25"] = round(float(predicted_pm25), 1)
+                row["forecast_status"] = pm25_status(predicted_pm25)
+                row["forecast_target_time_th"] = pd.Timestamp(target_time_utc).tz_convert("Asia/Bangkok").strftime("%Y-%m-%d %H:%M")
+                row["forecast_model_used"] = model_used
+
+            results.append(row)
+
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/forecast", methods=["GET"])
 def api_forecast():
     try:
@@ -1711,8 +1834,9 @@ def api_forecast():
 def api_notifications():
     """ประวัติการแจ้งเตือน (เฉพาะรอบที่ high_pollution_risk=true) — คำนวณ risk_horizons สดตาม
     risk_group ของผู้เรียก ณ เวลา query (ไม่ใช่ค่า freeze ไว้ตอนบันทึก) กรอง province เสมอ กัน
-    cross จังหวัดที่ timestamp ตรงกันบังเอิญ ใช้ predicted_pm25 ตรงๆ ไม่มีขอบบน P95 (ประมาณหยาบกว่า
-    get_forecast() เล็กน้อย ยอมรับได้เพราะหน้านี้ถูกซ่อนอยู่ตอนนี้)
+    cross จังหวัดที่ timestamp ตรงกันบังเอิญ ใช้ predicted_pm25 ตรงๆ เข้า is_horizon_at_risk() —
+    วิธีเดียวกันเป๊ะกับ get_forecast() แล้ว (ทั้งคู่ใช้ค่าพยากรณ์ตรงๆ ไม่ใช่ P95 อีกต่อไป ตั้งแต่
+    2026-09-23) ไม่ใช่การประมาณหยาบกว่าเหมือนก่อนหน้านี้
     """
     try:
         province = resolve_province_from_request()
@@ -1758,6 +1882,64 @@ def api_notifications():
         cur.close()
         conn.close()
         return jsonify(results)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/notifications/status", methods=["GET"])
+def api_notifications_status():
+    """สถานะเสี่ยงปัจจุบันของจังหวัดที่ระบุ อ่านจาก notification_log/prediction_log ล่าสุดเท่านั้น
+    (ไม่เรียก get_forecast()/live API — ถูกกว่ามาก) ใช้สำหรับกระดิ่งแจ้งเตือนเฝ้า "จังหวัดหลัก" ของ
+    user (home_province) แยกจากจังหวัดที่เลือกดูอยู่ใน dropdown (provinceState.selected) — เดียวกับ
+    pattern ที่ /api/provinces/overview ใช้สำหรับหน้าแผนที่ ข้อมูลหน่วงสุด ~1 ชม. ตามรอบ scheduler"""
+    try:
+        province = resolve_province_from_request()
+        risk_group = resolve_risk_group_from_session()
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT recorded_at_utc, latest_pm25 FROM notification_log WHERE province = %s "
+            "ORDER BY recorded_at_utc DESC LIMIT 1",
+            (province,),
+        )
+        snapshot = cur.fetchone()
+
+        if snapshot is None:
+            cur.close()
+            conn.close()
+            return jsonify({
+                "high_pollution_risk": False, "risk_horizons": [], "fallback_horizons": [],
+                "current_pm25": None, "current_status": None, "recorded_at_th": None,
+                "risk_group": risk_group,
+            })
+
+        recorded_at_utc, latest_pm25 = snapshot
+        cur.execute(
+            "SELECT horizon, predicted_pm25, model_used FROM prediction_log "
+            "WHERE predicted_at_utc = %s AND province = %s",
+            (recorded_at_utc, province),
+        )
+        horizon_rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        risk_horizons = sorted(h for h, pred, model_used in horizon_rows if is_horizon_at_risk(pred, risk_group))
+        fallback_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == MODEL_NAIVE)
+        high_pollution_risk = is_current_at_risk(latest_pm25, risk_group) or bool(risk_horizons)
+        recorded_at_th = pd.Timestamp(recorded_at_utc).tz_convert("Asia/Bangkok")
+
+        return jsonify({
+            "high_pollution_risk": high_pollution_risk,
+            "risk_horizons": risk_horizons,
+            "fallback_horizons": fallback_horizons,
+            "current_pm25": round(float(latest_pm25), 1),
+            "current_status": pm25_status(latest_pm25),
+            "recorded_at_th": recorded_at_th.strftime("%Y-%m-%d %H:%M"),
+            "risk_group": risk_group,
+        })
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:

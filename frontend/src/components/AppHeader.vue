@@ -1,24 +1,28 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Bell, BellDot } from '@lucide/vue'
-import { authState, fetchCurrentUser } from '../auth'
+import { authState, fetchCurrentUser, isAdmin } from '../auth'
 import {
   notificationState,
   fetchForecast,
+  fetchHomeProvinceStatus,
   buildWarningMessage,
   notificationHistory,
   fetchNotificationHistory,
   summarizeHistoryItem,
+  formatCardTime,
 } from '../notifications'
-import { provinceState, fetchProvinces, selectProvince } from '../provinces'
+import { provinceState, fetchProvinces } from '../provinces'
 import logoIcon from '../assets/logo-icon.svg'
 
-// ชั่วคราว: ปิด notifications/auth ไว้ก่อน (ยังไม่ได้ตั้งค่า Gemini ฯลฯ) เหลือแค่หน้าพยากรณ์ +
-// ค่าฝุ่นปัจจุบัน + เปรียบเทียบ เปลี่ยนกลับเป็น true เมื่อพร้อมเปิดฟีเจอร์อื่นอีกครั้ง
-const SHOW_EXTRA_FEATURES = false
-// หน้าเปรียบเทียบ (/compare) แยกออกมาเปิดเอง — ใช้แค่ Postgres (prediction_log) ซึ่งตั้งค่าเสร็จแล้ว
-// ไม่ต้องพึ่ง auth/Gemini เหมือนฟีเจอร์อื่นที่ปิดอยู่ข้างบน
+// เปิดใช้งานแล้ว 2026-09-23 (ตั้งค่าเครื่องใหม่เสร็จ: Postgres/SECRET_KEY/GEMINI_KEY พร้อมหมด) —
+// login/register/profile + กระดิ่งแจ้งเตือนกลับมาโชว์
+const SHOW_EXTRA_FEATURES = true
+// หน้าเปรียบเทียบ (/compare) จำกัดเฉพาะ admin เท่านั้น (route guard ที่ router/index.js เป็นคนบังคับจริง
+// อันนี้แค่ซ่อนลิงก์ไม่ให้ user ทั่วไปงงว่ากดแล้วโดนเด้งกลับ)
 const SHOW_COMPARE = true
+// หน้าแผนที่ภาพรวม (/map) เช่นเดียวกัน — อ่านจาก notification_log ล้วนๆ ไม่ต้องพึ่ง auth/Gemini
+const SHOW_MAP = true
 
 const notifOpen = ref(false)
 const notifWrapperEl = ref(null)
@@ -26,8 +30,20 @@ const notifWrapperEl = ref(null)
 function toggleNotif() {
   notifOpen.value = !notifOpen.value
   // ดึงประวัติตอนเปิด dropdown เท่านั้น (ไม่ prewarm ตอน mount เหมือน fetchForecast() — ประวัติไม่
-  // จำเป็นสำหรับ badge จุดแดง กันยิง request เพิ่มทุกหน้าโดยไม่จำเป็น)
-  if (notifOpen.value) fetchNotificationHistory()
+  // จำเป็นสำหรับ badge จุดแดง กันยิง request เพิ่มทุกหน้าโดยไม่จำเป็น) ใช้จังหวัดเดียวกับที่ badge
+  // สถานะกำลังเฝ้าอยู่ (home_province ถ้าตั้งไว้ ไม่งั้น dropdown ที่เลือกอยู่)
+  if (notifOpen.value) fetchNotificationHistory(5, authState.user?.home_province || provinceState.selected)
+}
+
+// เลือกว่ากระดิ่งจะเฝ้าจังหวัดไหน: home_province ของ user (ถ้าตั้งไว้) แยกจาก dropdown ที่ใช้ดู
+// พยากรณ์อยู่ตอนนี้ เพื่อไม่ให้สลับ dropdown ไปดูจังหวัดอื่นแล้วกระดิ่งเปลี่ยนไปเฝ้าจังหวัดนั้นด้วย —
+// ใช้ /api/notifications/status (ถูก, อ่านจาก DB ล่าสุด) แทน /api/forecast (แพง) เมื่อมี home_province
+function refreshNotificationWatch() {
+  if (authState.user?.home_province) {
+    fetchHomeProvinceStatus(authState.user.home_province)
+  } else {
+    fetchForecast()
+  }
 }
 
 // ปิด dropdown เมื่อคลิกนอกกล่อง — ไม่มี pattern นี้อยู่ก่อนในโปรเจกต์ ใช้ document click listener
@@ -39,16 +55,33 @@ function handleOutsideClick(e) {
 }
 
 onMounted(() => {
-  fetchProvinces() // ต้องมีเสมอ ไม่ผูกกับ SHOW_EXTRA_FEATURES — province selector เป็น core feature
+  fetchProvinces() // ต้องมีเสมอ ไม่ผูกกับ SHOW_EXTRA_FEATURES — โหลด list ไว้ให้หน้าพยากรณ์/เปรียบเทียบ
+  // ใช้ (dropdown เลือกจังหวัดย้ายไปอยู่ในแต่ละหน้าแล้ว ไม่ได้อยู่ใน header)
   if (SHOW_EXTRA_FEATURES) {
-    fetchCurrentUser()
-    fetchForecast() // เติม notificationState สำหรับกระดิ่งแจ้งเตือน (ปิดอยู่ตอนนี้)
+    // ต้องรอ fetchCurrentUser() เสร็จก่อน ถึงจะรู้ authState.user?.home_province แน่ชัด (ไม่งั้นจะ
+    // เห็นเป็น undefined ชั่วคราวแล้วเลือกผิดทาง)
+    fetchCurrentUser().then(refreshNotificationWatch)
   }
   document.addEventListener('click', handleOutsideClick)
 })
 onUnmounted(() => {
   document.removeEventListener('click', handleOutsideClick)
 })
+
+// เผื่อ login/logout หรือแก้ home_province ในหน้าโปรไฟล์ระหว่างเปิดหน้าเว็บค้างไว้ — ให้กระดิ่งอัปเดต
+// ตามจังหวัดใหม่โดยไม่ต้องรีเฟรชหน้าเอง
+watch(() => authState.user?.home_province, () => {
+  if (SHOW_EXTRA_FEATURES) refreshNotificationWatch()
+})
+
+// คำนวณ summary/timeLabel ครั้งเดียวต่อ item แทนที่จะเรียกฟังก์ชันซ้ำหลายครั้งในเทมเพลต
+const historyItems = computed(() =>
+  notificationHistory.items.map((item) => ({
+    ...item,
+    timeLabel: formatCardTime(item.recorded_at_th),
+    summary: summarizeHistoryItem(item),
+  })),
+)
 </script>
 
 <template>
@@ -58,19 +91,8 @@ onUnmounted(() => {
         PM2.5 Forecast
       </router-link>
       <router-link to="/" class="nav-link nav-tab">พยากรณ์</router-link>
-      <router-link v-if="SHOW_COMPARE" to="/compare" class="nav-link nav-tab">เปรียบเทียบ</router-link>
-    </nav>
-    <nav class="app-header-province">
-      <select
-        class="province-select"
-        :value="provinceState.selected"
-        @change="selectProvince($event.target.value)"
-        aria-label="เลือกจังหวัด"
-      >
-        <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
-          {{ p.province_th }}{{ p.is_zero_shot ? ' (zero-shot)' : '' }}
-        </option>
-      </select>
+      <router-link v-if="SHOW_COMPARE && isAdmin()" to="/compare" class="nav-link nav-tab">เปรียบเทียบ</router-link>
+      <router-link v-if="SHOW_MAP" to="/map" class="nav-link nav-tab">แผนที่</router-link>
     </nav>
     <nav v-if="SHOW_EXTRA_FEATURES" class="app-header-auth">
       <div class="notif-wrapper" ref="notifWrapperEl">
@@ -102,11 +124,15 @@ onUnmounted(() => {
 
           <div class="notif-dropdown-title notif-history-title">ประวัติล่าสุด</div>
           <div v-if="notificationHistory.status === 'loading'" class="notif-empty">กำลังโหลด...</div>
-          <div v-else-if="notificationHistory.items.length === 0" class="notif-empty">ยังไม่มีประวัติการแจ้งเตือน</div>
+          <div v-else-if="historyItems.length === 0" class="notif-empty">ยังไม่มีประวัติการแจ้งเตือน</div>
           <ul v-else class="notif-history-list">
-            <li v-for="item in notificationHistory.items" :key="item.recorded_at_th" class="notif-history-item">
-              <span class="notif-history-time">{{ item.recorded_at_th }}</span>
-              <span class="notif-history-text">{{ summarizeHistoryItem(item) }}</span>
+            <li v-for="item in historyItems" :key="item.recorded_at_th" class="notif-history-item">
+              <span class="notif-history-time">{{ item.timeLabel }}</span>
+              <span class="notif-history-text">{{ item.summary.headline }}</span>
+              <span v-if="item.summary.ranges.length" class="notif-history-ranges">
+                <span v-for="(r, i) in item.summary.ranges" :key="i" class="notif-history-chip">{{ r }}</span>
+              </span>
+              <span v-if="item.summary.note" class="notif-history-note">{{ item.summary.note }}</span>
             </li>
           </ul>
 
@@ -228,32 +254,13 @@ onUnmounted(() => {
   color: var(--auth-muted);
 }
 
-.app-header-province {
-  display: flex;
-  align-items: center;
-}
-
-.province-select {
-  border: 1px solid var(--auth-border);
-  background: transparent;
-  color: var(--auth-text);
-  font-weight: 600;
-  font-size: 0.85rem;
-  padding: 6px 10px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-/* native <select> popup ไม่รับ background โปร่งแสงของ .province-select เอง (บาง browser/OS ทำให้
-   popup โชว์พื้นหลัง gradient ของหน้าเว็บทะลุมา ตัวอักษรอ่านไม่ออก) ต้องให้สีทึบตรงๆ ที่ option เอง */
-.province-select option {
-  background: #ffffff;
-  color: #0f172a;
-}
-@media (prefers-color-scheme: dark) {
-  .province-select option {
-    background: #1e293b;
-    color: #f1f5f9;
-  }
+/* จอแคบ (มือถือ): brand+nav (+auth links ถ้า login แล้ว) อาจกว้างเกินแถวเดียว ให้ .app-header-nav
+   ยอม wrap เป็น fallback กันชนเนื้อหาหน้าด้านล่าง (padding-top ของแต่ละหน้าเผื่อไว้แล้ว — ดู
+   .forecast-page/.compare-page/.map-page) */
+@media (max-width: 600px) {
+  .app-header { padding: 10px 16px; gap: 6px; }
+  .app-header-nav { gap: 8px; flex-wrap: wrap; row-gap: 4px; }
+  .brand { font-size: 0.95rem; margin-right: 2px; }
 }
 
 .notif-wrapper {
@@ -378,6 +385,28 @@ onUnmounted(() => {
 .notif-history-text {
   line-height: 1.4;
   color: var(--auth-text);
+}
+
+.notif-history-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.notif-history-chip {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--auth-accent);
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.notif-history-note {
+  font-size: 0.72rem;
+  color: var(--auth-muted);
 }
 
 .notif-dropdown-link {

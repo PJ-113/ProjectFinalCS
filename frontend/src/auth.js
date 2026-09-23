@@ -68,3 +68,7 @@ export async function changePassword(payload) {
 export function isLoggedIn() {
   return authState.user !== null
 }
+
+export function isAdmin() {
+  return authState.user?.role === 'admin'
+}
