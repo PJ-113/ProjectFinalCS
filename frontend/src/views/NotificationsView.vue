@@ -1,12 +1,19 @@
 <script setup>
 import { computed, onMounted } from 'vue'
+import { BellOff } from '@lucide/vue'
 import { authState } from '../auth'
 import { provinceState } from '../provinces'
 import { notificationHistory, fetchNotificationHistory, summarizeHistoryItem, formatCardTime } from '../notifications'
 
 // province: ให้ตรงกับจังหวัดหลักที่กระดิ่งเฝ้าอยู่จริง (เดิมหน้านี้ไม่ส่ง province เลยจึงใช้
 // provinceState.selected เสมอ ไม่ตรงกับ dropdown ใน AppHeader.vue ที่ใช้ home_province เป็นหลัก)
-onMounted(() => fetchNotificationHistory(50, authState.user?.home_province || provinceState.selected))
+const watchedProvince = computed(() => authState.user?.home_province || provinceState.selected)
+
+onMounted(() => fetchNotificationHistory(50, watchedProvince.value))
+
+const provinceName = computed(
+  () => provinceState.list.find((p) => p.province_en === watchedProvince.value)?.province_th || '',
+)
 
 // คำนวณ summary/timeLabel ครั้งเดียวต่อ item แทนที่จะเรียกฟังก์ชันซ้ำหลายครั้งในเทมเพลต
 const items = computed(() =>
@@ -22,24 +29,35 @@ const items = computed(() =>
   <div class="notifications-page">
     <div class="wrap">
       <h1>ประวัติการแจ้งเตือน</h1>
-      <p class="subtitle">รายการช่วงเวลาที่ PM2.5 อยู่ในระดับที่ควรระวัง ย้อนหลังล่าสุด</p>
+      <p class="subtitle">
+        ช่วงเวลาที่ PM2.5 อยู่ในระดับที่ควรระวัง<template v-if="provinceName"> · จังหวัด{{ provinceName }}</template>
+      </p>
 
-      <div v-if="notificationHistory.status === 'loading'" class="state-msg">กำลังโหลด...</div>
-      <div v-else-if="notificationHistory.status === 'error'" class="state-msg">
+      <div v-if="notificationHistory.status === 'loading'" class="stack">
+        <div v-for="n in 3" :key="n" class="history-card skeleton-card">
+          <div class="skeleton skeleton-line" style="width: 40%"></div>
+          <div class="skeleton skeleton-line" style="width: 90%"></div>
+          <div class="skeleton skeleton-line" style="width: 65%"></div>
+        </div>
+      </div>
+      <div v-else-if="notificationHistory.status === 'error'" class="state-box" role="alert">
         ไม่สามารถโหลดข้อมูลได้ ลองรีเฟรชหน้าอีกครั้ง
       </div>
-      <div v-else-if="items.length === 0" class="state-msg">
-        ยังไม่มีประวัติการแจ้งเตือน
+      <div v-else-if="items.length === 0" class="state-box">
+        <BellOff :size="32" :stroke-width="1.8" aria-hidden="true" />
+        <p>ยังไม่มีประวัติการแจ้งเตือน</p>
       </div>
       <ul v-else class="history-list">
-        <li v-for="item in items" :key="item.recorded_at_th" class="history-card glass-card">
-          <div class="history-time">{{ item.timeLabel }}</div>
+        <li v-for="item in items" :key="item.recorded_at_th" class="history-card">
+          <div class="history-top">
+            <span class="history-time">{{ item.timeLabel }}</span>
+            <span class="history-pm25">PM2.5 ตอนนั้น {{ item.latest_pm25 }} µg/m³</span>
+          </div>
           <div class="history-headline">{{ item.summary.headline }}</div>
           <div v-if="item.summary.ranges.length" class="history-ranges">
             <span v-for="(r, i) in item.summary.ranges" :key="i" class="history-range-chip">{{ r }}</span>
           </div>
           <div v-if="item.summary.note" class="history-note">{{ item.summary.note }}</div>
-          <div class="history-pm25">PM2.5 ล่าสุดตอนนั้น: {{ item.latest_pm25 }} µg/m³</div>
         </li>
       </ul>
     </div>
@@ -47,102 +65,74 @@ const items = computed(() =>
 </template>
 
 <style scoped>
-/* พื้นหลังเดียวกับหน้าตระกูล auth (Login/Register/Profile) — var(--auth-bg) + glowing orb */
+/* โทเคนสีธีมใหม่มาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่) */
 .notifications-page {
   min-height: 100vh;
-  padding: 100px 24px 40px;
-  color: var(--auth-text);
-  background: var(--auth-bg);
-  position: relative;
-  overflow: hidden;
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
+  background: var(--ground);
+  color: var(--ink);
 }
 
-.notifications-page::before {
-  content: "";
-  position: absolute;
-  top: -10%;
-  left: -10%;
-  width: 50vw;
-  height: 50vw;
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, rgba(255, 255, 255, 0) 70%);
-  border-radius: 50%;
-  z-index: 0;
-}
+.wrap { max-width: 640px; margin: 0 auto; }
 
-.wrap {
-  position: relative;
-  z-index: 1;
-  max-width: 700px;
-  margin: 0 auto;
-}
+h1 { font-size: 1.6rem; font-weight: 700; line-height: 1.3; margin: 0 0 4px; }
+.subtitle { color: var(--muted); font-size: 0.9rem; line-height: 1.55; margin: 0 0 16px; }
 
-h1 {
-  font-size: 1.6rem;
-  font-weight: 800;
-  margin: 0 0 4px;
-}
-
-.subtitle {
-  color: var(--auth-muted);
-  margin: 0 0 24px;
-}
-
-.state-msg {
-  color: var(--auth-muted);
-  padding: 24px 0;
-}
-
-.history-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
+.stack, .history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 
 .history-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
   padding: 16px 18px;
-  border-radius: 14px;
 }
 
-.history-time {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--auth-accent);
-  margin-bottom: 6px;
-}
+.history-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.history-time { font-size: 0.85rem; font-weight: 700; color: var(--accent); }
+.history-pm25 { font-size: 0.8rem; color: var(--muted); text-align: right; }
 
-.history-headline {
-  line-height: 1.5;
-  margin-bottom: 8px;
-}
+.history-headline { font-size: 1rem; font-weight: 600; line-height: 1.5; margin-top: 6px; }
 
-.history-ranges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-
+.history-ranges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .history-range-chip {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--auth-accent);
+  background: var(--info-bg);
+  color: var(--info-ink);
   font-size: 0.8rem;
   font-weight: 600;
-  padding: 4px 10px;
+  padding: 5px 12px;
   border-radius: 999px;
   white-space: nowrap;
 }
 
-.history-note {
-  font-size: 0.85rem;
-  color: var(--auth-muted);
-  margin-bottom: 6px;
-}
+.history-note { font-size: 0.8rem; color: var(--muted); line-height: 1.5; margin-top: 8px; }
 
-.history-pm25 {
-  font-size: 0.85rem;
-  color: var(--auth-muted);
+.state-box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.state-box p { margin: 0; }
+
+.skeleton-card { display: flex; flex-direction: column; gap: 10px; }
+.skeleton {
+  background: linear-gradient(90deg, var(--line) 25%, transparent 37%, var(--line) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: 8px;
+}
+.skeleton-line { height: 14px; }
+@keyframes shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
 }
 </style>

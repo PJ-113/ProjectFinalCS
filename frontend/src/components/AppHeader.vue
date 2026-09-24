@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Bell, BellDot } from '@lucide/vue'
+import { Bell, BellDot, TriangleAlert, Info, Sun, Moon } from '@lucide/vue'
+import { themeState, toggleTheme } from '../theme'
 import { authState, fetchCurrentUser, isAdmin } from '../auth'
 import {
   notificationState,
@@ -85,16 +86,25 @@ const historyItems = computed(() =>
 </script>
 
 <template>
-  <header class="app-header">
+  <header class="app-header" :class="{ 'app-header-open': notifOpen }">
     <nav class="app-header-nav">
       <router-link to="/" class="brand">
         PM2.5 Forecast
       </router-link>
-      <router-link to="/" class="nav-link nav-tab">พยากรณ์</router-link>
-      <router-link v-if="SHOW_COMPARE && isAdmin()" to="/compare" class="nav-link nav-tab">เปรียบเทียบ</router-link>
-      <router-link v-if="SHOW_MAP" to="/map" class="nav-link nav-tab">แผนที่</router-link>
+      <router-link to="/" class="nav-link nav-tab desktop-only">พยากรณ์</router-link>
+      <router-link v-if="SHOW_COMPARE && isAdmin()" to="/compare" class="nav-link nav-tab desktop-only">เปรียบเทียบ</router-link>
+      <router-link v-if="SHOW_MAP" to="/map" class="nav-link nav-tab desktop-only">แผนที่</router-link>
     </nav>
     <nav v-if="SHOW_EXTRA_FEATURES" class="app-header-auth">
+      <button
+        type="button"
+        class="theme-toggle"
+        :aria-label="themeState.mode === 'dark' ? 'เปลี่ยนเป็นธีมสว่าง' : 'เปลี่ยนเป็นธีมมืด'"
+        :title="themeState.mode === 'dark' ? 'ธีมสว่าง' : 'ธีมมืด'"
+        @click="toggleTheme"
+      >
+        <component :is="themeState.mode === 'dark' ? Sun : Moon" :size="20" :stroke-width="2" />
+      </button>
       <div class="notif-wrapper" ref="notifWrapperEl">
         <button
           class="notif-bell"
@@ -104,21 +114,25 @@ const historyItems = computed(() =>
         >
           <component :is="notificationState.highPollutionRisk ? BellDot : Bell" :size="20" :stroke-width="2" />
         </button>
-        <div v-if="notifOpen" class="notif-dropdown glass-card">
+        <div v-if="notifOpen" class="notif-backdrop" @click="notifOpen = false"></div>
+        <div v-if="notifOpen" class="notif-dropdown" role="dialog" aria-label="การแจ้งเตือน">
+          <div class="notif-grip" aria-hidden="true"></div>
           <div class="notif-dropdown-title">การแจ้งเตือน</div>
           <div v-if="notificationState.status === 'loading'" class="notif-empty">กำลังโหลด...</div>
           <template v-else>
             <div v-if="notificationState.highPollutionRisk" class="notif-item notif-item-alert">
-              ⚠️ {{ buildWarningMessage(notificationState.riskGroup) }}
+              <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
+              <span>{{ buildWarningMessage(notificationState.riskGroup) }}</span>
             </div>
             <div v-if="notificationState.fallbackHorizons.length > 0" class="notif-item notif-item-info">
-              ℹ️ ข้อมูล input ไม่สมบูรณ์ในบางช่วงเวลา ใช้ค่าพยากรณ์แบบคงที่ชั่วคราว (ความเชื่อมั่นต่ำ)
+              <Info :size="22" :stroke-width="2" aria-hidden="true" />
+              <span>ข้อมูลบางช่วงไม่ครบ ใช้ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)</span>
             </div>
             <div
               v-if="!notificationState.highPollutionRisk && notificationState.fallbackHorizons.length === 0"
               class="notif-empty"
             >
-              ✅ ไม่มีการแจ้งเตือนในขณะนี้ คุณภาพอากาศอยู่ในเกณฑ์ปกติ
+              ไม่มีการแจ้งเตือนในขณะนี้ คุณภาพอากาศอยู่ในเกณฑ์ปกติ
             </div>
           </template>
 
@@ -140,14 +154,14 @@ const historyItems = computed(() =>
         </div>
       </div>
       <template v-if="authState.status === 'loading'">
-        <span class="nav-muted">...</span>
+        <span class="nav-muted desktop-only">...</span>
       </template>
       <template v-else-if="authState.user">
-        <router-link to="/profile" class="nav-link">Profile</router-link>
+        <router-link to="/profile" class="nav-link desktop-only">Profile</router-link>
       </template>
       <template v-else>
-        <router-link to="/login" class="nav-link">เข้าสู่ระบบ</router-link>
-        <router-link to="/register" class="nav-link nav-link-accent">สมัครสมาชิก</router-link>
+        <router-link to="/login" class="nav-link desktop-only">เข้าสู่ระบบ</router-link>
+        <router-link to="/register" class="nav-link nav-link-accent desktop-only">สมัครสมาชิก</router-link>
       </template>
     </nav>
   </header>
@@ -228,11 +242,11 @@ const historyItems = computed(() =>
   background: rgba(59, 130, 246, 0.1);
 }
 
-@media (prefers-color-scheme: dark) {
-  .nav-tab.router-link-exact-active {
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] .nav-tab.router-link-exact-active {
     background: rgba(96, 165, 250, 0.15);
   }
-}
+
 
 .nav-link-accent {
   background: var(--auth-accent);
@@ -252,15 +266,6 @@ const historyItems = computed(() =>
 
 .nav-muted {
   color: var(--auth-muted);
-}
-
-/* จอแคบ (มือถือ): brand+nav (+auth links ถ้า login แล้ว) อาจกว้างเกินแถวเดียว ให้ .app-header-nav
-   ยอม wrap เป็น fallback กันชนเนื้อหาหน้าด้านล่าง (padding-top ของแต่ละหน้าเผื่อไว้แล้ว — ดู
-   .forecast-page/.compare-page/.map-page) */
-@media (max-width: 600px) {
-  .app-header { padding: 10px 16px; gap: 6px; }
-  .app-header-nav { gap: 8px; flex-wrap: wrap; row-gap: 4px; }
-  .brand { font-size: 0.95rem; margin-right: 2px; }
 }
 
 .notif-wrapper {
@@ -283,6 +288,26 @@ const historyItems = computed(() =>
   cursor: pointer;
   transition: color 0.2s ease, background 0.2s ease;
 }
+
+/* ปุ่มสลับธีม — หน้าตาเดียวกับกระดิ่ง */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  background: transparent;
+  color: var(--auth-muted);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+.theme-toggle:hover {
+  color: var(--auth-accent);
+  background: rgba(59, 130, 246, 0.1);
+}
+.theme-toggle:focus-visible { outline: 2px solid var(--auth-accent); outline-offset: 2px; }
 
 .notif-bell:hover {
   color: var(--auth-accent);
@@ -307,56 +332,67 @@ const historyItems = computed(() =>
   50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
 }
 
+.notif-backdrop { display: none; }
+.notif-grip { display: none; }
+
 .notif-dropdown {
   position: absolute;
   top: calc(100% + 12px);
   right: 0;
-  width: 320px;
-  max-width: min(320px, 90vw);
+  width: 340px;
+  max-width: min(340px, 90vw);
   padding: 16px;
-  border-radius: 16px;
+  border-radius: 20px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  color: var(--auth-text);
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--ink);
   text-align: left;
-  font-size: 0.85rem;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  font-size: 0.9rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
 }
 
 .notif-dropdown-title {
   font-weight: 700;
-  font-size: 0.95rem;
-  color: var(--auth-text);
+  font-size: 1rem;
+  color: var(--ink);
 }
 
 .notif-empty {
-  color: var(--auth-muted);
+  color: var(--muted);
   line-height: 1.5;
 }
 
+/* โครงเดียวกับ banner ในหน้าพยากรณ์ (ไอคอน + ข้อความ) ใช้สี warn/info ไม่ใช้แดง error */
 .notif-item {
-  padding: 10px 12px;
-  border-radius: 10px;
-  line-height: 1.5;
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid;
+  line-height: 1.55;
+  font-size: 0.9rem;
 }
+.notif-item > svg { flex-shrink: 0; margin-top: 1px; }
 
 .notif-item-alert {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.25);
-  color: var(--auth-text);
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+  color: var(--warn-ink);
 }
 
 .notif-item-info {
-  background: rgba(59, 130, 246, 0.1);
-  border: 1px solid rgba(59, 130, 246, 0.25);
-  color: var(--auth-text);
+  background: var(--info-bg);
+  border-color: var(--info-line);
+  color: var(--info-ink);
 }
 
 .notif-history-title {
-  margin-top: 4px;
-  padding-top: 10px;
-  border-top: 1px solid var(--auth-border);
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
 .notif-history-list {
@@ -365,8 +401,8 @@ const historyItems = computed(() =>
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 180px;
+  gap: 12px;
+  max-height: 220px;
   overflow-y: auto;
 }
 
@@ -377,47 +413,111 @@ const historyItems = computed(() =>
 }
 
 .notif-history-time {
-  font-size: 0.72rem;
-  color: var(--auth-muted);
+  font-size: 0.75rem;
+  color: var(--muted);
   font-weight: 600;
 }
 
 .notif-history-text {
-  line-height: 1.4;
-  color: var(--auth-text);
+  line-height: 1.45;
+  color: var(--ink);
 }
 
 .notif-history-ranges {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .notif-history-chip {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--auth-accent);
-  font-size: 0.68rem;
+  background: var(--info-bg);
+  color: var(--info-ink);
+  font-size: 0.72rem;
   font-weight: 600;
-  padding: 2px 7px;
+  padding: 3px 9px;
   border-radius: 999px;
   white-space: nowrap;
 }
 
 .notif-history-note {
-  font-size: 0.72rem;
-  color: var(--auth-muted);
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 .notif-dropdown-link {
-  color: var(--auth-accent);
+  color: var(--accent);
   text-decoration: none;
   font-weight: 600;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   margin-top: 2px;
 }
 
 .notif-dropdown-link:hover {
   text-decoration: underline;
+}
+
+/* อยู่ท้ายไฟล์เสมอ: ต้องมาหลังกฎฐานของ .notif-dropdown/.notif-backdrop/.notif-grip ไม่งั้นกฎฐานที่ความเฉพาะเจาะจง
+   เท่ากันแต่มาทีหลังจะทับ media query นี้ (เดิมเป็นบั๊ก: sheet บนมือถือไม่ทำงาน) */
+/* มือถือ (≤720px): เหลือแค่ brand + กระดิ่งแถวเดียว — ลิงก์ tab/login/register ย้ายไป BottomTabBar.vue
+   (ทุกหน้าเผื่อ padding ผ่าน --app-top-offset / --app-bottom-offset ใน main.css) */
+@media (max-width: 720px) {
+  .desktop-only { display: none !important; }
+  .app-header {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    flex-wrap: nowrap;
+    padding: 6px 8px 6px 16px;
+    /* backdrop-filter ทำให้ลูก position:fixed (dropdown แจ้งเตือนที่เป็น bottom sheet) อ้างอิงกล่อง header
+       แทนหน้าจอ — ปิดบนมือถือและใช้พื้นทึบแทน */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: var(--card);
+    border-color: var(--line);
+  }
+  .brand { font-size: 1rem; margin-right: 0; }
+  .notif-bell, .theme-toggle { width: 44px; height: 44px; }
+  .app-header-auth { gap: 0; }
+  .notif-bell-alert::after { top: 9px; right: 10px; }
+
+  /* dropdown แจ้งเตือน → bottom sheet เต็มความกว้าง + backdrop มืด (ยกทั้ง header ให้สูงกว่า tab bar
+     ตอนเปิด ไม่งั้น sheet จะถูก tab bar ที่ z-index เท่ากันแต่มาทีหลังในเอกสารทับ) */
+  .app-header-open { z-index: 250; }
+  .notif-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 18, 22, 0.5);
+    z-index: 1;
+  }
+  .notif-dropdown {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-width: none;
+    max-height: 78vh;
+    overflow-y: auto;
+    border-radius: 24px 24px 0 0;
+    padding: 8px 16px calc(28px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.25);
+    font-size: 0.95rem;
+    z-index: 2;
+  }
+  .notif-grip {
+    display: block;
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line);
+    margin: 4px auto 8px;
+  }
+  .notif-dropdown-title { font-size: 1.15rem; }
+  .notif-history-list { max-height: 40vh; }
+  .notif-history-chip { font-size: 0.75rem; padding: 3px 9px; }
+  .notif-dropdown-link { display: inline-block; padding: 12px 0 0; font-size: 0.95rem; }
 }
 </style>

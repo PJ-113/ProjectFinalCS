@@ -164,6 +164,8 @@ def main():
         fetch_calls.append(sensor_id)
         return make_df(T)
     app.fetch_recent_pm25_openaq = fake_fetch
+    real_fb = app.USE_INPUT_FALLBACK
+    app.USE_INPUT_FALLBACK = False  # T9 = ความหมายเดิม (strict ไม่ใช้ cache เก่า, ไม่ยิง /hours, ไม่เขียนไฟล์ cache); ทางสำรองทดสอบใน test_input_fallback.py
     app._SERIES_CACHE.clear()
     app.get_recent_series("loei")
     app.get_recent_series("loei")
@@ -182,6 +184,7 @@ def main():
     app._SERIES_CACHE.clear()
     assert app.get_recent_series("loei", max_age_s=0) is None, "ไม่มี cache + ดึงไม่ได้ -> None (ไม่ raise)"
     app.fetch_recent_pm25_openaq = real_fetch
+    app.USE_INPUT_FALLBACK = real_fb
     app._SERIES_CACHE.clear()
     print("T9 ผ่าน: cache/strict/fallback ของ get_recent_series")
 
@@ -272,7 +275,8 @@ def main():
         app.requests.get = real_get_
     # (ง) get_recent_series ส่ง offset จาก registry เฉพาะเมื่อเปิด USE_TIMESTAMP_OFFSET
     offsets_seen = []
-    real_fetch2, real_switch = app.fetch_recent_pm25_openaq, app.USE_TIMESTAMP_OFFSET
+    real_fetch2, real_switch, real_fb2 = app.fetch_recent_pm25_openaq, app.USE_TIMESTAMP_OFFSET, app.USE_INPUT_FALLBACK
+    app.USE_INPUT_FALLBACK = False  # ไม่เขียนไฟล์ cache จริงด้วยข้อมูลสังเคราะห์
     app.fetch_recent_pm25_openaq = lambda sensor_id, hours_back=72, offset_hours=0: (offsets_seen.append(offset_hours) or make_df(now_h))
     try:
         for switch, prov_, expected in ((False, "surin", 0), (True, "surin", 23), (True, "khonkaen", 0)):
@@ -281,7 +285,7 @@ def main():
             app.get_recent_series(prov_)
             assert offsets_seen[-1] == expected, f"USE_TIMESTAMP_OFFSET={switch} {prov_}: คาด {expected} ได้ {offsets_seen[-1]}"
     finally:
-        app.fetch_recent_pm25_openaq, app.USE_TIMESTAMP_OFFSET = real_fetch2, real_switch
+        app.fetch_recent_pm25_openaq, app.USE_TIMESTAMP_OFFSET, app.USE_INPUT_FALLBACK = real_fetch2, real_switch, real_fb2
         app._SERIES_CACHE.clear()
     print("T13 ผ่าน: offset เลื่อนป้ายเวลาถูก, ขอ label ย้อนหลังเพิ่ม, guard ทิ้ง offset เมื่อ OpenAQ แก้แล้ว, offset=0 คงเดิม, registry->offset ตามสวิตช์")
 
@@ -304,7 +308,7 @@ def main():
     none_neighbor = {"status": "no_fresh_neighbor", "policy": None, "neighbors_used": [], "pm25_neighbor_avg": np.nan, "nb_trend_12h": np.nan}
     try:
         # (ก) ปกติ: เพื่อนบ้านสด + FIRMS ใช้ไม่ได้ -> โมเดล v2 ทุก horizon, fire=0 พร้อม flag, ถูก log
-        app.get_recent_series = lambda prov_, strict=False, max_age_s=0: make_df(now_h - pd.Timedelta(hours=1), base=15.0)
+        app.get_recent_series = lambda prov_, strict=False, max_age_s=0, info=None: make_df(now_h - pd.Timedelta(hours=1), base=15.0)
         app.compute_neighbor_features = lambda prov_, t, fetch=None: ok_neighbor
         res = app.get_forecast(prov)
         models = {x["model_used"] for x in res["forecast"]}
@@ -330,7 +334,7 @@ def main():
 
         # (ค) ข้อมูลเป้าหมายเก่า 10 ชม. -> ตอบได้แต่ไม่ log/ไม่ทำ NLG, flag stale
         logged["pred"].clear(); logged["notif"].clear(); logged.pop("nlg", None)
-        app.get_recent_series = lambda prov_, strict=False, max_age_s=0: make_df(now_h - pd.Timedelta(hours=10), base=15.0)
+        app.get_recent_series = lambda prov_, strict=False, max_age_s=0, info=None: make_df(now_h - pd.Timedelta(hours=10), base=15.0)
         app.compute_neighbor_features = lambda prov_, t, fetch=None: ok_neighbor
         res = app.get_forecast(prov)
         assert res["data_quality"]["target_stale"] is True and res["data_quality"]["target_age_hours"] >= 9.9
@@ -339,7 +343,7 @@ def main():
         print("T12ค ผ่าน: ข้อมูลเก่า -> ตอบพร้อม flag stale แต่ไม่ log/ไม่ทำ NLG")
 
         # (ง) ไม่มีข้อมูลเลย -> DataUnavailableError (route จะตอบ 503)
-        app.get_recent_series = lambda prov_, strict=False, max_age_s=0: None
+        app.get_recent_series = lambda prov_, strict=False, max_age_s=0, info=None: None
         try:
             app.get_forecast(prov)
             raise AssertionError("ต้อง raise DataUnavailableError")
@@ -347,7 +351,7 @@ def main():
             pass
         print("T12ง ผ่าน: ไม่มีข้อมูลเลย -> DataUnavailableError")
         # (จ) โมเดลที่ไม่ใช้ neighbor/fire: ต้องไม่ดึง/คำนวณ และไม่ force_naive แม้เพื่อนบ้านไม่มีข้อมูล
-        app.get_recent_series = lambda prov_, strict=False, max_age_s=0: make_df(now_h - pd.Timedelta(hours=1), base=15.0)
+        app.get_recent_series = lambda prov_, strict=False, max_age_s=0, info=None: make_df(now_h - pd.Timedelta(hours=1), base=15.0)
         called = []
         app.compute_neighbor_features = lambda prov_, t, fetch=None: called.append("nb") or none_neighbor
         app.get_fire_hotspots = lambda: called.append("fire") or (None, "unavailable")

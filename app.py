@@ -142,6 +142,27 @@ CONFORMAL_QHAT = {
     MODEL_XGB: {int(r.horizon): float(r.q_hat) for r in _conformal_xgb_df.itertuples()},
 }
 
+# ===== เติมข้อมูลของสถานีเป้าหมายที่เงียบ (Data Imputation, H-lite) =====
+# ผลทดลอง: CHANGELOG 169-171, docs/thesis_imputation_experiment.md — เมื่อ reading ล่าสุดของสถานีเก่ากว่าปกติ เดิมระบบยึดเวลา reading
+# ล่าสุดเป็น "ตอนนี้" (พยากรณ์นับจากเวลาเก่า); ตอนนี้เติมค่าช่วงที่เงียบด้วยจังหวัดข้างเคียง (IDW-difference แล้ว Ridge) เพื่อพยากรณ์จากเวลาปัจจุบันจริง
+# ปิดได้ทันทีที่ USE_TARGET_IMPUTATION=False (พฤติกรรมกลับเป็นเดิมทั้งหมด) ไฟล์ค่าสัมประสิทธิ์หาย/พัง -> ปิดเองพร้อม log (แอปไม่ล่ม)
+USE_TARGET_IMPUTATION = True
+IMPUTATION_CONFIG_PATH = "models/imputation_h_lite_20260924_204956.json"
+IMPUTATION_MIN_K = 2   # k = ชั่วโมงเต็มที่ reading ล่าสุดตามหลัง "ชั่วโมงที่เพิ่งจบ" (now-1h); k<2 = ความหน่วงปกติของ OpenAQ ไม่เติม (ค่านี้ยังไม่ได้วัดจริง — scripts/measure_target_data_latency.py)
+IMPUTATION_MAX_K = 48  # เกินนี้ยังไม่เคยทดสอบ -> คงพฤติกรรมเดิม (ข้อมูลเก่า + banner)
+
+# ===== ทางสำรองเมื่อดึง OpenAQ / Open-Meteo ไม่ได้ (CHANGELOG 172) =====
+# ผลวัด: scripts/experiment_weather_fallback.py (สภาพอากาศเก่า <=2 ชม. เสีย MAE <1%; ค่า climatology ยังดีกว่า Persistence ทุก horizon) และ
+# /hours ของ OpenAQ ให้ค่าตรง /measurements ทุกจุดที่ซ้อนกัน (ตรวจ 19 สถานี 72 ชม. ต่างเฉลี่ย 0.0000 ไม่ต้องบวก offset) แต่ **ช้ากว่า ~1 ชม.**
+# (วัดที่นาที 24 ของชั่วโมง: /measurements ถึง 13:00, /hours ถึง 12:00 ทั้ง 19 สถานี) -> ตอนใช้ทางสำรอง k เพิ่มได้ ~1 (ระวังเทียบกับ IMPUTATION_MIN_K)
+# USE_INPUT_FALLBACK=False = พฤติกรรมเดิมทั้งหมด (ดึงพลาด -> raise; ไม่มี retry/breaker/cache สภาพอากาศ/cache จังหวัดเป้าหมาย/ไฟล์ cache)
+USE_INPUT_FALLBACK = True
+WEATHER_TTL_S = 600                 # ใช้ค่าสภาพอากาศที่ดึงไว้ซ้ำได้ 10 นาที (Open-Meteo อัปเดต current ทุก 15 นาที; ลดจำนวน request)
+WEATHER_CACHE_MAX_AGE_H = 2         # ดึงไม่สำเร็จ -> ใช้ค่าเก่าได้ไม่เกินนี้ (ตามเกณฑ์ที่ตั้งก่อนดูผลใน experiment_weather_fallback.py: k=2)
+WEATHER_CLIMATOLOGY_PATH = "models/weather_climatology_20260924_211741.json"
+TARGET_FALLBACK_MAX_AGE_S = 6 * 3600  # OpenAQ ดึงจังหวัดเป้าหมายไม่ได้ -> ใช้ cache ได้ไม่เกินนี้ (เท่ากับที่เพื่อนบ้านใช้อยู่ ไม่ได้วัดแยก)
+SERIES_DISK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_cache")  # กัน cache หายเมื่อแอปรีสตาร์ต (gitignored)
+
 # กลุ่มเปราะบางเริ่มระวังเร็วกว่าคนทั่วไป ~1 ระดับ AQI (ตาม WHO/US EPA) ลด threshold 10 หน่วย
 # ให้เริ่มเตือนตั้งแต่ช่วง "ปานกลาง" แทนที่จะรอถึง "เริ่มมีผลกระทบต่อสุขภาพ" เหมือนคนทั่วไป —
 # เป็นตัวเลข heuristic ไม่มี dataset เฉพาะรองรับเป๊ะๆ ทั้งสองกลุ่มใช้ค่าเดียวกัน (ไม่มีหลักฐานแยกความรุนแรง)
@@ -486,6 +507,49 @@ def login_required(view_func):
 
 # ===== Live data fetching (OpenAQ + Open-Meteo — ไม่มี Air4Thai/calibration อีกต่อไป) =====
 
+class _CircuitBreaker:
+    """เปิดวงจรชั่วคราวหลังล้มเหลวต่อเนื่อง `threshold` ครั้ง: ช่วง cooldown ไม่ยิง request เลย (ไปใช้ cache/ทางสำรองทันที)
+    กันงานรายชั่วโมงที่วน 20 จังหวัด x (retry+timeout ~1-2 นาที) ยาวเกิน 1 ชม. ตอน API ล่มทั้งระบบ; สำเร็จครั้งเดียวรีเซ็ตตัวนับ"""
+
+    def __init__(self, name, threshold, cooldown_s):
+        self.name, self.threshold, self.cooldown_s = name, threshold, cooldown_s
+        self._fails, self._open_until = 0, 0.0
+
+    def allow(self):
+        return time.monotonic() >= self._open_until
+
+    def success(self):
+        self._fails = 0
+
+    def failure(self):
+        self._fails += 1
+        if self._fails >= self.threshold:
+            self._open_until = time.monotonic() + self.cooldown_s
+            self._fails = 0
+            print(f"[{self.name}] ล้มเหลวต่อเนื่อง {self.threshold} ครั้ง — พักการเรียก {self.cooldown_s}s ใช้ cache/ทางสำรองแทน")
+
+
+_OPENAQ_BREAKER = _CircuitBreaker("openaq", threshold=5, cooldown_s=60)
+_WEATHER_BREAKER = _CircuitBreaker("open-meteo", threshold=5, cooldown_s=60)
+
+
+def _openaq_get(kind, sensor_id, params, attempts, timeout=15):
+    """GET /v3/sensors/{id}/{kind} พร้อม retry แบบ backoff เฉพาะ 429/5xx/network — 4xx อื่น raise ทันที; retry หมด -> RuntimeError"""
+    for attempt in range(attempts):
+        try:
+            r = requests.get(f"https://api.openaq.org/v3/sensors/{sensor_id}/{kind}",
+                              headers=OPENAQ_HEADERS, params=params, timeout=timeout)
+        except requests.exceptions.RequestException:
+            r = None
+        if r is not None:
+            if not (r.status_code == 429 or r.status_code >= 500):
+                r.raise_for_status()
+                return r
+        if attempt < attempts - 1:
+            time.sleep(2 ** attempt)
+    raise RuntimeError(f"ดึง pm25 จาก OpenAQ ({kind}) ไม่สำเร็จหลัง retry (sensor {sensor_id})")
+
+
 def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
     """ดึง pm25 ย้อนหลัง hours_back ชม. จาก OpenAQ v3 — สเกลเดียวกับตอนเทรน (ไม่ต้อง calibrate)
     72h พอสำหรับ lag_24/roll_24 + เผื่อ gap, retry แบบ backoff เฉพาะ 429/5xx
@@ -499,21 +563,7 @@ def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
     start = end - pd.Timedelta(hours=hours_back)
     params = {"datetime_from": (start - offset).isoformat(), "datetime_to": end.isoformat(), "limit": 1000}
 
-    r = None
-    for attempt in range(5):
-        try:
-            r = requests.get(f"https://api.openaq.org/v3/sensors/{sensor_id}/measurements",
-                              headers=OPENAQ_HEADERS, params=params, timeout=15)
-        except requests.exceptions.RequestException:
-            time.sleep(2 ** attempt)
-            continue
-        if r.status_code == 429 or r.status_code >= 500:
-            time.sleep(2 ** attempt)
-            continue
-        r.raise_for_status()
-        break
-    else:
-        raise RuntimeError(f"ดึง pm25 จาก OpenAQ ไม่สำเร็จหลัง retry (sensor {sensor_id})")
+    r = _openaq_get("measurements", sensor_id, params, attempts=5)
 
     results = r.json().get("results", [])
     df = pd.DataFrame([{"datetime_utc": rr["period"]["datetimeFrom"]["utc"], "pm25": rr["value"]} for rr in results])
@@ -531,17 +581,164 @@ def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
     return df
 
 
+def fetch_recent_pm25_openaq_hours(sensor_id, hours_back=72):
+    """ทางสำรองภายใน OpenAQ: /v3/sensors/{id}/hours (คนละ endpoint กับ /measurements, key เดียวกัน) — ตรวจแล้วว่าค่าและป้ายเวลาตรงกับ
+    /measurements หลังบวก offset ทุกจุดที่ซ้อนกัน (CHANGELOG 144, 172) จึง **ไม่ต้องบวก offset** (คืน DataFrame รูปแบบเดียวกัน) ข้อแลกเปลี่ยน: reading ล่าสุด
+    ช้ากว่า /measurements ~1 ชม. (วัดจริง 19/19 สถานี) จึงใช้เป็นทางสำรองเท่านั้น ไม่ใช่ทางหลัก"""
+    end = pd.Timestamp.now(tz="UTC")
+    params = {"datetime_from": (end - pd.Timedelta(hours=hours_back)).isoformat(), "datetime_to": end.isoformat(), "limit": 1000}
+    r = _openaq_get("hours", sensor_id, params, attempts=3)
+    results = r.json().get("results", [])
+    df = pd.DataFrame([{"datetime_utc": rr["period"]["datetimeFrom"]["utc"], "pm25": rr["value"]} for rr in results])
+    if df.empty:
+        return df
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+    return df.dropna(subset=["pm25"]).drop_duplicates(subset=["datetime_utc"]).sort_values("datetime_utc").reset_index(drop=True)
+
+
+WEATHER_CURRENT_VARS = "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,wind_direction_10m,surface_pressure"
+WEATHER_REQUIRED_KEYS = ("temperature_2m", "relative_humidity_2m", "wind_speed_10m", "precipitation", "wind_direction_10m", "surface_pressure")
+
+
+def _open_meteo_get(params, attempts, timeout):
+    """GET Open-Meteo forecast API พร้อม retry backoff เฉพาะ 429/5xx/network (ไม่มี key ในคำขอ จึงไม่มีอะไรต้องปิดบังใน log)"""
+    for attempt in range(attempts):
+        try:
+            r = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=timeout)
+        except requests.exceptions.RequestException:
+            r = None
+        if r is not None:
+            if not (r.status_code == 429 or r.status_code >= 500):
+                r.raise_for_status()
+                return r.json()
+        if attempt < attempts - 1:
+            time.sleep(2 ** attempt)
+    raise RuntimeError("ดึงสภาพอากาศจาก Open-Meteo ไม่สำเร็จหลัง retry")
+
+
+def _check_weather(w):
+    """ค่าที่ได้ต้องครบ 6 ตัวแปรและไม่เป็น None (Open-Meteo คืน null ได้) — ไม่ครบ = ถือว่าดึงไม่สำเร็จ ไม่ส่งเข้าโมเดล"""
+    if not isinstance(w, dict) or any(w.get(k) is None for k in WEATHER_REQUIRED_KEYS):
+        raise ValueError("ข้อมูลสภาพอากาศจาก Open-Meteo ไม่ครบ")
+
+
 def fetch_current_weather_openmeteo(lat, lon):
-    """weather ไม่ต้อง lag/rolling เหมือน pm25 (มีแค่ค่า "ปัจจุบัน" เป็น feature) พอแค่ current= เดียว"""
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": lat, "longitude": lon,
-        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,wind_direction_10m,surface_pressure",
-        "timezone": "UTC",
+    """weather ไม่ต้อง lag/rolling เหมือน pm25 (มีแค่ค่า "ปัจจุบัน" เป็น feature) พอแค่ current= เดียว
+    ผู้เรียกในแอปใช้ผ่าน get_current_weather() (cache + ทางสำรอง) ไม่เรียกตรง"""
+    params = {"latitude": lat, "longitude": lon, "current": WEATHER_CURRENT_VARS, "timezone": "UTC"}
+    return _open_meteo_get(params, attempts=2 if USE_INPUT_FALLBACK else 1, timeout=10 if USE_INPUT_FALLBACK else 15)["current"]
+
+
+def fetch_current_weather_batch(provinces):
+    """ค่าปัจจุบันของทุกจังหวัดใน request เดียว (Open-Meteo รับหลายพิกัดคั่น , คืน list ตามลำดับ) -> {province_en: current dict}
+    ตรวจแล้วว่าค่าเท่ากับเรียกทีละจังหวัด (CHANGELOG 172) — ลด 20 request/รอบเหลือ 1 โอกาสโดน 429 ลดลง"""
+    params = {"latitude": ",".join(str(p["lat"]) for p in provinces), "longitude": ",".join(str(p["lon"]) for p in provinces),
+              "current": WEATHER_CURRENT_VARS, "timezone": "UTC"}
+    data = _open_meteo_get(params, attempts=3, timeout=20)
+    if isinstance(data, dict):
+        data = [data]
+    if len(data) != len(provinces):
+        raise ValueError("จำนวนผลลัพธ์ batch ไม่ตรงกับจำนวนจังหวัด")
+    out = {}
+    for prov, item in zip(provinces, data):
+        _check_weather(item["current"])
+        out[prov["province_en"]] = item["current"]
+    return out
+
+
+def _load_weather_climatology():
+    """ตาราง climatology จาก scripts/export_weather_climatology.py — ผิดพลาด -> None (ไม่มีทางสุดท้าย: ดึงสภาพอากาศไม่ได้ก็ raise เหมือนเดิม)"""
+    if not USE_INPUT_FALLBACK:
+        return None
+    try:
+        with open(WEATHER_CLIMATOLOGY_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg["features"] != ["temp", "humidity", "wind_speed", "precipitation", "wind_dir_sin", "wind_dir_cos", "pressure"]:
+            raise ValueError("ลำดับ feature ไม่ตรง")
+        missing = [p["province_en"] for p in PROVINCE_REGISTRY if p["province_en"] not in cfg["table"]]
+        if missing:
+            raise ValueError(f"ไม่มีจังหวัด {missing}")
+        return cfg
+    except Exception as e:
+        print(f"[weather] ปิด climatology สำรอง ({type(e).__name__}: {e})")
+        return None
+
+
+WEATHER_CLIM = _load_weather_climatology()
+_WEATHER_CACHE = {}  # province_en -> (เวลา monotonic ที่ดึงสำเร็จ, dict current weather)
+_WEATHER_LOCK = threading.Lock()
+
+
+def weather_climatology(province, at=None):
+    """ค่าเฉลี่ย (จังหวัด, เดือน, ชั่วโมง UTC) ในรูป dict เดียวกับ Open-Meteo current — ใส่ _wind_dir_sin/_cos ไว้ให้ build_feature_row ใช้ค่าเฉลี่ยตรงๆ
+    (สูตรเดียวกับการทดลอง ไม่แปลงกลับเป็นองศาแล้วคิด sin/cos ใหม่ ซึ่งจะได้เวกเตอร์หน่วยต่างจากค่าเฉลี่ย); wind_direction_10m ไว้แสดงผลเท่านั้น"""
+    if WEATHER_CLIM is None:
+        return None
+    t = pd.Timestamp.now(tz="UTC") if at is None else pd.Timestamp(at)
+    row = WEATHER_CLIM["table"][province][t.month - 1][t.hour]
+    d = dict(zip(WEATHER_CLIM["features"], row))
+    return {
+        "temperature_2m": d["temp"], "relative_humidity_2m": d["humidity"], "wind_speed_10m": d["wind_speed"],
+        "precipitation": d["precipitation"], "surface_pressure": d["pressure"],
+        "wind_direction_10m": float(np.degrees(np.arctan2(d["wind_dir_sin"], d["wind_dir_cos"])) % 360),
+        "_wind_dir_sin": d["wind_dir_sin"], "_wind_dir_cos": d["wind_dir_cos"],
     }
-    r = requests.get(url, params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()["current"]
+
+
+def prefetch_weather_all():
+    """เรียกต้นงานรายชั่วโมง: ดึงสภาพอากาศทุกจังหวัดใน request เดียวแล้วใส่ cache (ล้มเหลว -> ปล่อยให้แต่ละจังหวัดดึงเอง/ใช้ทางสำรองตามปกติ)"""
+    if not USE_INPUT_FALLBACK or not _WEATHER_BREAKER.allow():
+        return
+    try:
+        data = fetch_current_weather_batch(PROVINCE_REGISTRY)
+    except Exception as e:
+        _WEATHER_BREAKER.failure()
+        print(f"[weather] ดึงแบบ batch ไม่สำเร็จ ({type(e).__name__}) — แต่ละจังหวัดจะลองดึงเอง")
+        return
+    _WEATHER_BREAKER.success()
+    now = time.monotonic()
+    with _WEATHER_LOCK:
+        for prov, w in data.items():
+            _WEATHER_CACHE[prov] = (now, w)
+
+
+def get_current_weather(province_meta, at=None):
+    """สภาพอากาศปัจจุบันของจังหวัด พร้อมทางสำรอง -> (dict, {"source": "live"|"stale_cache"|"climatology", "age_hours"})
+    ลำดับ: ค่าที่ดึงไว้ไม่เกิน WEATHER_TTL_S -> ดึงสด -> (พลาด) ค่าเก่าไม่เกิน WEATHER_CACHE_MAX_AGE_H -> climatology ของเดือน/ชั่วโมงที่ `at`
+    -> raise (เหมือนเดิม) ; USE_INPUT_FALLBACK=False = ดึงสดอย่างเดียวเหมือนเดิม"""
+    prov = province_meta["province_en"]
+    now = time.monotonic()
+    with _WEATHER_LOCK:
+        hit = _WEATHER_CACHE.get(prov)
+    if USE_INPUT_FALLBACK and hit is not None and now - hit[0] < WEATHER_TTL_S:
+        return hit[1], {"source": "live", "age_hours": round((now - hit[0]) / 3600, 2)}
+    err = None
+    if USE_INPUT_FALLBACK and not _WEATHER_BREAKER.allow():
+        err = RuntimeError("Open-Meteo circuit open")
+    else:
+        try:
+            w = fetch_current_weather_openmeteo(province_meta["lat"], province_meta["lon"])
+            if USE_INPUT_FALLBACK:
+                _check_weather(w)
+                _WEATHER_BREAKER.success()
+                with _WEATHER_LOCK:
+                    _WEATHER_CACHE[prov] = (time.monotonic(), w)
+            return w, {"source": "live", "age_hours": 0.0}
+        except Exception as e:
+            err = e
+            if USE_INPUT_FALLBACK:
+                _WEATHER_BREAKER.failure()
+    if not USE_INPUT_FALLBACK:
+        raise err
+    age_s = time.monotonic() - hit[0] if hit is not None else None
+    if hit is not None and age_s <= WEATHER_CACHE_MAX_AGE_H * 3600:
+        print(f"[weather] {prov}: ดึงสด ไม่ได้ ({type(err).__name__}) — ใช้ค่าที่ cache ไว้ {age_s / 60:.0f} นาทีที่แล้ว")
+        return hit[1], {"source": "stale_cache", "age_hours": round(age_s / 3600, 2)}
+    clim = weather_climatology(prov, at)
+    if clim is not None:
+        print(f"[weather] {prov}: ดึงสด ไม่ได้ ({type(err).__name__}) และไม่มีค่า cache ที่ใหม่พอ — ใช้ climatology (ไม่บันทึก log)")
+        return clim, {"source": "climatology", "age_hours": None}
+    raise err
 
 
 # ===== Live features ใหม่ของโมเดล v2: จังหวัดข้างเคียง + จุดความร้อน (CHANGELOG 141) =====
@@ -585,31 +782,105 @@ _SERIES_CACHE = {}  # province_en -> (เวลา monotonic ที่ดึง,
 _SERIES_LOCK = threading.Lock()
 
 
-def get_recent_series(province, strict=False, max_age_s=SERIES_CACHE_TTL_S):
+def _series_disk_path(province):
+    return os.path.join(SERIES_DISK_CACHE_DIR, f"openaq_series_{province}.csv")
+
+
+def _save_series_to_disk(province, df):
+    """เก็บซีรีส์ที่ดึงสำเร็จล่าสุดลงไฟล์ (เขียน tmp แล้ว replace) ให้ทางสำรองรอดการรีสตาร์ตแอป — ล้มเหลวเงียบๆ ได้ (เป็นแค่ safety net)"""
+    if not USE_INPUT_FALLBACK or df is None:
+        return
+    try:
+        os.makedirs(SERIES_DISK_CACHE_DIR, exist_ok=True)
+        path = _series_disk_path(province)
+        tmp = path + ".tmp"
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _load_series_disk_cache():
+    """ตอนเริ่มแอป: โหลดไฟล์ cache ที่อายุไม่เกิน TARGET_FALLBACK_MAX_AGE_S เข้า _SERIES_CACHE (เวลา monotonic ย้อนตามอายุไฟล์)"""
+    if not USE_INPUT_FALLBACK:
+        return
+    loaded = 0
+    for p in PROVINCE_REGISTRY:
+        path = _series_disk_path(p["province_en"])
+        try:
+            age_s = time.time() - os.path.getmtime(path)
+            if age_s > TARGET_FALLBACK_MAX_AGE_S:
+                continue
+            df = pd.read_csv(path)
+            df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+            if df.empty:
+                continue
+            _SERIES_CACHE[p["province_en"]] = (time.monotonic() - age_s, df)
+            loaded += 1
+        except Exception:
+            continue
+    if loaded:
+        print(f"[openaq] โหลด cache จากไฟล์ {loaded} จังหวัด (ใช้เป็นทางสำรองเท่านั้น ไม่ถือว่าสด)")
+
+
+def fetch_series_from_openaq(meta):
+    """ดึงซีรีส์ pm25 72 ชม. ของสถานี -> (DataFrame, source) โดย source = "live" (/measurements + offset) หรือ "hours_endpoint" (/hours ไม่มี offset)
+    /measurements พลาด -> ลอง /hours; ทั้งคู่พลาด -> raise (ข้อผิดพลาดของ /measurements) และนับเข้า breaker; breaker เปิดอยู่ -> raise ทันทีไม่ยิง request"""
+    sensor_id = meta["sensor_id_pm25"]
+    offset = int(meta.get("openaq_timestamp_offset_hours", 0)) if USE_TIMESTAMP_OFFSET else 0
+    if not USE_INPUT_FALLBACK:
+        return fetch_recent_pm25_openaq(sensor_id, offset_hours=offset), "live"
+    if not _OPENAQ_BREAKER.allow():
+        raise RuntimeError("OpenAQ circuit open")
+    try:
+        df, source = fetch_recent_pm25_openaq(sensor_id, offset_hours=offset), "live"
+    except Exception as primary_err:
+        try:
+            df, source = fetch_recent_pm25_openaq_hours(sensor_id), "hours_endpoint"
+            print(f"[openaq] {meta['province_en']}: /measurements ไม่สำเร็จ ({type(primary_err).__name__}) — ใช้ /hours แทน")
+        except Exception:
+            _OPENAQ_BREAKER.failure()
+            raise primary_err
+    _OPENAQ_BREAKER.success()
+    return df, source
+
+
+def get_recent_series(province, strict=False, max_age_s=SERIES_CACHE_TTL_S, info=None):
     """pm25 72 ชม.ล่าสุดของจังหวัด ผ่าน cache ร่วม (scheduled job ที่วน 20 จังหวัด + /api/forecast ใช้ร่วมกัน
     จำนวน request OpenAQ ต่อรอบเท่าเดิม = จังหวัดละ 1 ครั้ง) คืน DataFrame หรือ None (ไม่มีข้อมูล)
-    strict=True (จังหวัดเป้าหมาย): ดึงไม่สำเร็จ -> raise เหมือนพฤติกรรมเดิม ไม่ใช้ cache เก่า
-    strict=False (เพื่อนบ้าน): ดึงไม่สำเร็จ -> ใช้ cache เก่า (<= SERIES_CACHE_MAX_AGE_S) ไม่งั้น None (ไม่ raise)"""
+    strict=True (จังหวัดเป้าหมาย): ดึงไม่สำเร็จ -> ใช้ cache เก่าได้ไม่เกิน TARGET_FALLBACK_MAX_AGE_S (เฉพาะ USE_INPUT_FALLBACK) ไม่งั้น raise
+    strict=False (เพื่อนบ้าน): ดึงไม่สำเร็จ -> ใช้ cache เก่า (<= SERIES_CACHE_MAX_AGE_S) ไม่งั้น None (ไม่ raise)
+    info (dict, ไม่บังคับ): ผู้เรียกส่งมารับ {"source": "live"|"hours_endpoint"|"stale_cache", "age_hours"} — stale_cache = ใช้ข้อมูลที่ดึงไว้ก่อนหน้า"""
     now = time.monotonic()
     with _SERIES_LOCK:
         hit = _SERIES_CACHE.get(province)
     if hit is not None and now - hit[0] < max_age_s:
+        if info is not None:
+            info.update({"source": "live", "age_hours": round((now - hit[0]) / 3600, 2)})
         return hit[1]
     try:
-        meta = PROVINCES_BY_SLUG[province]
-        offset = int(meta.get("openaq_timestamp_offset_hours", 0)) if USE_TIMESTAMP_OFFSET else 0
-        df = fetch_recent_pm25_openaq(meta["sensor_id_pm25"], offset_hours=offset)
+        df, source = fetch_series_from_openaq(PROVINCES_BY_SLUG[province])
     except Exception:
+        now = time.monotonic()
+        limit = TARGET_FALLBACK_MAX_AGE_S if (strict and USE_INPUT_FALLBACK) else (None if strict else SERIES_CACHE_MAX_AGE_S)
+        if hit is not None and limit is not None and now - hit[0] < limit and (hit[1] is not None or not strict):
+            if info is not None:
+                info.update({"source": "stale_cache", "age_hours": round((now - hit[0]) / 3600, 2)})
+            return hit[1]
         if strict:
             raise
-        if hit is not None and now - hit[0] < SERIES_CACHE_MAX_AGE_S:
-            return hit[1]
         return None
     if df is None or df.empty:
         df = None
     with _SERIES_LOCK:
         _SERIES_CACHE[province] = (now, df)
+    _save_series_to_disk(province, df)
+    if info is not None:
+        info.update({"source": source, "age_hours": 0.0})
     return df
+
+
+_load_series_disk_cache()
 
 
 def _filled_grid(df_recent, t):
@@ -673,6 +944,117 @@ def compute_neighbor_features(province, latest_time, fetch=None):
         "nb_trend_12h": float(avg_now - avg_ago) if not np.isnan(avg_ago) else 0.0,
     })
     return result
+
+
+IMPUTATION_FEATURES = ["x0", "nb_now", "dnb", "nb_0", "j", "log1p_j", "hour_sin", "hour_cos"]  # ลำดับตรง matrix_trailing_lite ในสคริปต์ทดลอง
+
+
+def _load_imputation_config():
+    """อ่านค่าสัมประสิทธิ์ Ridge-lite + จุดสลับ + ตาราง q(k,h) จาก JSON (สร้างโดย scripts/export_imputation_h_lite.py) ผิดพลาด -> None (ปิดฟีเจอร์)"""
+    if not USE_TARGET_IMPUTATION:
+        return None
+    try:
+        with open(IMPUTATION_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg["features"] != IMPUTATION_FEATURES:
+            raise ValueError("ลำดับ feature ไม่ตรง")
+        cfg["_mean"] = np.array(cfg["scaler_mean"], dtype=float)
+        cfg["_scale"] = np.array(cfg["scaler_scale"], dtype=float)
+        cfg["_coef"] = np.array(cfg["coef"], dtype=float)
+        if not (len(cfg["_mean"]) == len(cfg["_scale"]) == len(cfg["_coef"]) == len(IMPUTATION_FEATURES)):
+            raise ValueError("ขนาดเวกเตอร์ไม่ตรง")
+        cfg["_q"] = {
+            MODEL_LGB: {int(k): {int(h): float(v) for h, v in hs.items()} for k, hs in cfg["q_hat_imputed"]["lgb"].items()},
+            MODEL_XGB: {int(k): {int(h): float(v) for h, v in hs.items()} for k, hs in cfg["q_hat_imputed"]["xgb"].items()},
+        }
+        return cfg
+    except Exception as e:
+        print(f"[imputation] ปิดฟีเจอร์เติมค่าสถานีเป้าหมาย ({type(e).__name__}: {e}) — ใช้พฤติกรรมเดิม")
+        return None
+
+
+IMPUTATION_CFG = _load_imputation_config()
+
+
+def imputed_q_hat(model_name, k, h):
+    """q_hat ของช่วงความเชื่อมั่นเมื่อ input ถูกเติมค่า (ทดสอบไว้ที่ k บางค่า: k จริงที่ไม่ตรง -> ใช้ k ถัดไปที่มากกว่า = conservative,
+    h ระหว่างค่าที่ทดสอบ -> interpolate เชิงเส้น) — แทน CONFORMAL_QHAT ที่สอบเทียบโดยถือว่าค่าปัจจุบันเป็นค่าจริง"""
+    table = IMPUTATION_CFG["_q"][model_name]
+    ks = sorted(table)
+    k_use = next((x for x in ks if x >= k), ks[-1])
+    hs = sorted(table[k_use])
+    return float(np.interp(h, hs, [table[k_use][x] for x in hs]))
+
+
+def impute_target_series(province, df_recent, now=None, fetch=None):
+    """ต่อท้าย df_recent ด้วยค่า PM2.5 ที่เติมของช่วงที่สถานีเงียบ (t0, anchor] โดย t0 = reading จริงล่าสุด, anchor = ชั่วโมงที่เพิ่งจบ
+    (now-1h) วิธี H-lite (ผลทดลองเดียวกับที่ลงเล่ม): ตำแหน่ง j<=switch_j ชม.หลัง t0 = x0 + IDW ของการเปลี่ยนแปลงจังหวัดข้างเคียง,
+    ไกลกว่านั้น = Ridge บน [x0, ค่าเพื่อนบ้าน ณ tau/t0, ผลต่าง, j, log1p(j), ชั่วโมง UTC] (ค่าสัมประสิทธิ์จาก JSON)
+    เพื่อนบ้าน = ที่ใกล้สุด <=5 จังหวัดจากทั้ง 20 ใช้ที่ "วัดได้จริง ณ tau และ t0" ไม่เกิน 3 จังหวัด ถ่วง 1/ระยะทาง² (ไม่ interpolate)
+    ตำแหน่งที่ไม่มีเพื่อนบ้านที่ใช้ได้ -> Persistence (x0); ถ้าตำแหน่งสุดท้าย (ปัจจุบัน) ไม่มีเลย -> ไม่เติม (คืนสภาพเดิม)
+    คืน (df_ใหม่, info) — info=None เมื่อไม่ได้เติม (k อยู่นอก [MIN_K, MAX_K], ฟีเจอร์ปิด, ไม่มีเพื่อนบ้านตอนนี้)
+    ห้ามส่ง df ที่เติมแล้วไป backfill_actuals() (จะบันทึกค่าประมาณเป็นค่าจริง)"""
+    cfg = IMPUTATION_CFG
+    if cfg is None or df_recent is None or df_recent.empty:
+        return df_recent, None
+    fetch = fetch or get_recent_series
+    now = now if now is not None else pd.Timestamp.now(tz="UTC")
+    anchor = now.floor("h") - pd.Timedelta(hours=1)
+    t0 = df_recent["datetime_utc"].max()
+    k = int((anchor - t0) / pd.Timedelta(hours=1))
+    if k < IMPUTATION_MIN_K or k > IMPUTATION_MAX_K:
+        return df_recent, None
+    x0 = float(df_recent.loc[df_recent["datetime_utc"] == t0, "pm25"].iloc[0])
+    meta = PROVINCES_BY_SLUG[province]
+    series, dist = {}, {}
+    for q in NEIGHBOR_RANKING[province][:cfg["n_neighbors_pool"]]:
+        df_q = fetch(q)
+        if df_q is None or df_q.empty:
+            continue
+        series[q] = df_q.drop_duplicates("datetime_utc").set_index("datetime_utc")["pm25"]
+        qm = PROVINCES_BY_SLUG[q]
+        dist[q] = float(haversine_km(meta["lat"], meta["lon"], qm["lat"], qm["lon"]))
+
+    rows = []
+    neighbors_now = []
+    for j in range(1, k + 1):
+        tau = t0 + pd.Timedelta(hours=j)
+        w, v_tau, v_0, used = [], [], [], []
+        for q in NEIGHBOR_RANKING[province][:cfg["n_neighbors_pool"]]:
+            s = series.get(q)
+            if s is None:
+                continue
+            a, b = s.get(tau, np.nan), s.get(t0, np.nan)
+            if np.isnan(a) or np.isnan(b):
+                continue
+            w.append(1.0 / max(dist[q], 1.0) ** 2)
+            v_tau.append(float(a))
+            v_0.append(float(b))
+            used.append(q)
+            if len(w) == cfg["max_valid_neighbors"]:
+                break
+        if not w:
+            if j == k:
+                return df_recent, None  # ไม่มีเพื่อนบ้านที่ใช้ได้ "ตอนนี้" -> ไม่เติม (กลับไปพฤติกรรมเดิม)
+            rows.append((tau, max(x0, 0.0)))
+            continue
+        w, v_tau, v_0 = np.array(w), np.array(v_tau), np.array(v_0)
+        wsum = w.sum()
+        dnb = float((w * (v_tau - v_0)).sum() / wsum)
+        if j <= cfg["switch_j"]:
+            val = x0 + dnb
+        else:
+            f = np.array([x0, float((w * v_tau).sum() / wsum), dnb, float((w * v_0).sum() / wsum), j, np.log1p(j),
+                          np.sin(2 * np.pi * tau.hour / 24), np.cos(2 * np.pi * tau.hour / 24)])
+            val = x0 + cfg["intercept"] + float(cfg["_coef"] @ ((f - cfg["_mean"]) / cfg["_scale"]))
+        rows.append((tau, max(float(val), 0.0)))
+        if j == k:
+            neighbors_now = used
+
+    aug = pd.concat([df_recent, pd.DataFrame(rows, columns=["datetime_utc", "pm25"])], ignore_index=True)
+    info = {"k_hours": k, "method": "H-lite", "last_observed_utc": t0, "last_observed_pm25": x0,
+            "estimated_pm25": rows[-1][1], "neighbors_used": neighbors_now}
+    return aug, info
 
 
 _FIRE_CACHE = {"fetched": None, "df": None}
@@ -880,8 +1262,9 @@ def build_feature_row(df_recent, current_weather, province_meta, neighbor=None, 
         "pm25_roll_std_6": roll_std_6,
         "pm25_roll_mean_24": roll_mean_24,
         "pm25_roll_std_24": roll_std_24,
-        "wind_dir_sin": np.sin(2 * np.pi * wind_dir_deg / 360),
-        "wind_dir_cos": np.cos(2 * np.pi * wind_dir_deg / 360),
+        # climatology (weather_climatology) ส่งค่าเฉลี่ย sin/cos มาตรงๆ (ตรงกับที่ทดลอง) — ค่าจริงจาก Open-Meteo คิดจากองศาตามเดิม
+        "wind_dir_sin": current_weather.get("_wind_dir_sin", np.sin(2 * np.pi * wind_dir_deg / 360)),
+        "wind_dir_cos": current_weather.get("_wind_dir_cos", np.cos(2 * np.pi * wind_dir_deg / 360)),
         "pressure": current_weather["surface_pressure"],
         "lat": province_meta["lat"],
         "lon": province_meta["lon"],
@@ -1394,13 +1777,23 @@ class DataUnavailableError(RuntimeError):
 
 def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     province_meta = PROVINCES_BY_SLUG[province]
-    df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S)
+    series_info = {}
+    df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
     if df_recent is None or df_recent.empty:
         raise DataUnavailableError(f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)")
-    current_weather = fetch_current_weather_openmeteo(province_meta["lat"], province_meta["lon"])
+    # เติมค่าช่วงที่สถานีเงียบ (ถ้าเข้าเงื่อนไข) — df_observed คือข้อมูลจริงล้วน ใช้กับ backfill_actuals()/อายุข้อมูลเสมอ ห้ามใช้ df ที่เติมแล้ว
+    df_observed = df_recent
+    imputed_info = None
+    if IMPUTATION_CFG is not None:
+        df_recent, imputed_info = impute_target_series(province, df_recent)
+    imputed = imputed_info is not None
 
     # feature เพื่อนบ้าน + จุดความร้อน (CHANGELOG 141/149) — เวลาอ้างอิงเดียวกับที่ใช้คิด lag; คำนวณ/ดึงเฉพาะเมื่อโมเดลที่โหลดใช้ feature นั้นจริง
     reference_time = df_recent["datetime_utc"].max()
+    # สภาพอากาศพร้อมทางสำรอง (CHANGELOG 172): ค่าที่ดึงไว้ -> สด -> ค่าเก่า <=2 ชม. -> climatology; source != live เก็บไว้ใน data_quality
+    current_weather, weather_info = get_current_weather(province_meta, at=reference_time)
+    # ค่าจากทางสำรองที่ยังไม่ผ่านเกณฑ์ "เทียบเท่าของจริง": ซีรีส์ pm25 จาก cache เก่า / สภาพอากาศ climatology -> ไม่ log (กัน R² ของ routing ปน)
+    input_degraded = series_info.get("source") == "stale_cache" or weather_info["source"] == "climatology"
     if USES_NEIGHBOR:
         neighbor = compute_neighbor_features(province, reference_time)
     else:
@@ -1419,8 +1812,9 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     # reading ล่าสุดของจังหวัดนี้เก่ากว่า TARGET_STALE_HOURS: ยังตอบได้ (พร้อม flag ใน data_quality) แต่ไม่ log/ไม่ทำ NLG
     # — target_time ของ horizon 1-24 จะตกอยู่ในอดีต ถูก backfill ค่าจริงทันที ปน rolling R² ของ routing แบบรั่ว, และ
     # daily_nlg_log UNIQUE ต่อวัน เขียนครั้งแรกชนะ สรุปจากข้อมูลเก่าจะยึดทั้งวัน
-    target_age_hours = (pd.Timestamp.now(tz="UTC") - latest_time).total_seconds() / 3600
-    target_stale = bool(target_age_hours > TARGET_STALE_HOURS)
+    # อายุวัดจาก reading จริงล่าสุด (ไม่ใช่ค่าที่เติม); เมื่อเติมค่าแล้วพยากรณ์นับจากเวลาปัจจุบันจริง จึงไม่ถือเป็น stale (แต่ไม่ log — ดูด้านล่าง)
+    target_age_hours = (pd.Timestamp.now(tz="UTC") - df_observed["datetime_utc"].max()).total_seconds() / 3600
+    target_stale = bool(target_age_hours > TARGET_STALE_HOURS) and not imputed
 
     # คำนวณ rolling R² ของทั้ง 2 โมเดลทุก horizon ล่วงหน้าด้วย query เดียว (ไม่ใช่ query แยกทีละ
     # (model, horizon) ในลูปข้างล่าง 48 ครั้ง) — ดูคอมเมนต์ที่ fetch_rolling_r2_lookup()
@@ -1447,7 +1841,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             pred = round(float(models_by_q[0.5].predict(X_now)[0]) + latest_pm25, 1)
             p05_pred = float(models_by_q[0.05].predict(X_now)[0]) + latest_pm25
             p95_pred = float(models_by_q[0.95].predict(X_now)[0]) + latest_pm25
-            q_hat = CONFORMAL_QHAT[model_name][h]
+            q_hat = imputed_q_hat(model_name, imputed_info["k_hours"], h) if imputed else CONFORMAL_QHAT[model_name][h]
             p05_adj = p05_pred - q_hat
             p95_upper_adj = p95_pred + q_hat
 
@@ -1475,11 +1869,13 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         if is_horizon_at_risk(pred, risk_group):
             risk_horizons.append(h)
 
-    if not target_stale:
+    # ไม่ log/ไม่ทำ NLG เมื่อ input ถูกเติมค่า (รุ่นแรก: กัน prediction_log/R² ของ routing ปนพยากรณ์จากค่าประมาณ — CHANGELOG 171)
+    loggable = not target_stale and not imputed and not input_degraded
+    if loggable:
         log_predictions(latest_time, log_rows, province)
         log_notification_snapshot(latest_time.isoformat(), float(latest_pm25), province)
-    backfill_actuals(df_recent, province)  # เติมค่าจริงให้ prediction เก่าจากข้อมูลที่เพิ่งดึง — ปลอดภัยแม้ข้อมูลเก่า
-    if not target_stale:
+    backfill_actuals(df_observed, province)  # เติมค่าจริงให้ prediction เก่าจากข้อมูลที่เพิ่งดึง — ต้องเป็นข้อมูลจริงล้วนเสมอ
+    if loggable:
         maybe_generate_daily_nlg(forecast, X_now, risk_group, province)
 
     best_time = find_best_time(forecast)
@@ -1508,12 +1904,30 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         # สถานะข้อมูลที่ใช้ทำพยากรณ์รอบนี้ (ไม่มี column ใน DB — บอกผ่าน response เท่านั้น)
         "data_quality": {
             "target_age_hours": round(float(target_age_hours), 1),
+            # k ตามนิยามของ impute_target_series: ชั่วโมงเต็มที่ reading จริงล่าสุดตามหลัง "ชั่วโมงที่เพิ่งจบ" (now-1h) — ปกติ 0
+            # (ใช้บันทึกความหน่วงปกติสะสมเพื่อตั้ง IMPUTATION_MIN_K: ดู log_target_latency / scripts/summarize_target_latency.py)
+            "observed_lag_k": int((pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(hours=1)
+                                   - df_observed["datetime_utc"].max()) / pd.Timedelta(hours=1)),
             "target_stale": target_stale,
+            # แหล่งของข้อมูลนำเข้า (CHANGELOG 172): series_source = live|hours_endpoint|stale_cache, weather_source = live|stale_cache|climatology
+            "series_source": series_info.get("source", "live"),
+            "series_age_hours": series_info.get("age_hours", 0.0),
+            "weather_source": weather_info["source"],
+            "weather_age_hours": weather_info["age_hours"],
             "neighbor_status": neighbor["status"],
             "neighbor_policy": neighbor["policy"],
             "neighbors_used": neighbor["neighbors_used"],
             "fire_source": fire_source,
             "fire_count_24h": int(fire_count),
+            # ไม่ null = สถานีเงียบ k ชม. ค่า current/พยากรณ์ตั้งอยู่บนค่าประมาณ (H-lite) — frontend ต้องบอกผู้ใช้
+            "input_imputed": None if not imputed else {
+                "k_hours": imputed_info["k_hours"],
+                "method": imputed_info["method"],
+                "last_observed_datetime_th": imputed_info["last_observed_utc"].tz_convert("Asia/Bangkok").strftime("%Y-%m-%d %H:%M"),
+                "last_observed_pm25": round(imputed_info["last_observed_pm25"], 1),
+                "estimated_pm25": round(imputed_info["estimated_pm25"], 1),
+                "neighbors_used": imputed_info["neighbors_used"],
+            },
         },
         "daily_summary": get_today_daily_nlg(risk_group, province),
         "risk_group": risk_group,
@@ -1527,17 +1941,73 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     }
 
 
+TARGET_LATENCY_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "target_latency_scheduler_log.csv")
+
+
+TARGET_LATENCY_LOG_HEADER_OLD = "measured_utc,province_en,observed_lag_k,target_age_hours,imputed"  # ก่อน CHANGELOG 173
+TARGET_LATENCY_LOG_HEADER = TARGET_LATENCY_LOG_HEADER_OLD + ",series_source"
+_LATENCY_LOG_LOCK = threading.Lock()  # scheduler thread + request thread เขียนไฟล์เดียวกัน (และตอนย้าย header ต้องไม่มี append แทรก)
+_LATENCY_LOG_CHECKED = set()  # path ที่ตรวจ/ย้าย header แล้วในโปรเซสนี้
+
+
+def _upgrade_latency_log_header(path):
+    """ไฟล์ log เก่า (header 5 คอลัมน์) -> แก้บรรทัดแรกเป็น 6 คอลัมน์ในที่เดิม (เขียน tmp แล้ว replace) แถวเก่าคงเดิม ไม่มีฟิลด์ series_source
+    = "legacy" (เขียนก่อนมีทางสำรอง จึงมาจาก /measurements เสมอ — summarize_target_latency.py ตีความเป็น live) header อื่นที่ไม่รู้จัก -> ไม่แตะ"""
+    with open(path, encoding="utf-8", newline="") as f:
+        lines = f.readlines()
+    if not lines or lines[0].strip() != TARGET_LATENCY_LOG_HEADER_OLD:
+        return
+    lines[0] = TARGET_LATENCY_LOG_HEADER + "\n"
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.writelines(lines)
+    os.replace(tmp, path)
+
+
+def log_target_latency(province, data_quality):
+    """ต่อท้ายไฟล์ CSV: เวลาที่วัด (UTC), จังหวัด, observed_lag_k, อายุข้อมูล (ชม.), เติมค่าไหม, series_source — สะสมจากงานรายชั่วโมงเพื่อดูการกระจายความหน่วงปกติ
+    ของ OpenAQ ตามนาทีของชั่วโมง/จังหวัด ก่อนสรุปค่า IMPUTATION_MIN_K (scripts/summarize_target_latency.py) series_source (live|hours_endpoint|stale_cache) ให้ตัดแถวที่มาจาก
+    ทางสำรองออกจากการสรุป: /hours ช้ากว่า /measurements ~1 ชม. และ stale_cache มี k โตตามอายุ cache ไม่ใช่ความหน่วงปกติ (CHANGELOG 172-173)
+    ห้าม raise: ล้มเหลวเงียบๆ ได้ เพราะเป็นแค่ telemetry ไม่ใช่ส่วนของการพยากรณ์ (ไม่เขียนคีย์/URL ใดๆ)"""
+    try:
+        path = TARGET_LATENCY_LOG_PATH
+        with _LATENCY_LOG_LOCK:
+            new_file = not os.path.exists(path) or os.path.getsize(path) == 0
+            if not new_file and path not in _LATENCY_LOG_CHECKED:
+                try:
+                    _upgrade_latency_log_header(path)
+                except Exception:
+                    pass  # ย้าย header ไม่ได้ก็ยังต่อท้ายแถวใหม่ได้ (สคริปต์สรุปอ่านด้วย names= จึงไม่พัง)
+            _LATENCY_LOG_CHECKED.add(path)
+            with open(path, "a", encoding="utf-8", newline="") as f:
+                if new_file:
+                    f.write(TARGET_LATENCY_LOG_HEADER + "\n")
+                f.write(f"{pd.Timestamp.now(tz='UTC').isoformat(timespec='seconds')},{province},"
+                        f"{data_quality.get('observed_lag_k')},{data_quality.get('target_age_hours')},"
+                        f"{int(bool(data_quality.get('input_imputed')))},{data_quality.get('series_source', 'live')}\n")
+    except Exception:
+        pass
+
+
 def scheduled_forecast_job():
     """เรียก get_forecast() ทุกชั่วโมงต่อจังหวัด (loop ทั้ง 20 จังหวัด) ให้ prediction_log สะสม
     ข้อมูลต่อเนื่องแม้ไม่มีใครเปิดเว็บ — try/except ต่อจังหวัด กัน API hiccup จังหวัดเดียวล้ม job ทั้งหมด"""
-    summary = {"ok": 0, "stale": 0, "naive": 0, "failed": 0}
+    summary = {"ok": 0, "stale": 0, "naive": 0, "imputed": 0, "input_fallback": 0, "failed": 0}
+    prefetch_weather_all()
     for p in PROVINCE_REGISTRY:
         try:
             result = get_forecast(province=p["province_en"])
             dq = result["data_quality"]
+            log_target_latency(p["province_en"], dq)
+            if dq.get("series_source") == "stale_cache" or dq.get("weather_source") == "climatology":
+                summary["input_fallback"] += 1
+                print(f"[scheduler] {p['province_en']}: ใช้ข้อมูลสำรอง (pm25={dq.get('series_source')}, weather={dq.get('weather_source')}) — ไม่บันทึก log")
             if dq["target_stale"]:
                 summary["stale"] += 1
                 print(f"[scheduler] {p['province_en']}: ข้อมูลเก่า {dq['target_age_hours']} ชม. — ไม่บันทึก log")
+            elif dq.get("input_imputed"):
+                summary["imputed"] += 1
+                print(f"[scheduler] {p['province_en']}: สถานีเงียบ {dq['input_imputed']['k_hours']} ชม. — เติมค่าด้วย H-lite (ไม่บันทึก log)")
             elif dq["neighbor_status"] not in ("ok", "not_used"):
                 summary["naive"] += 1
                 print(f"[scheduler] {p['province_en']}: ไม่มีเพื่อนบ้านที่ข้อมูลสด — ใช้ naive_fallback ทุก horizon")
@@ -1821,7 +2291,9 @@ def api_provinces_overview():
 def api_forecast():
     try:
         province = resolve_province_from_request()
-        return jsonify(get_forecast(province, resolve_risk_group_from_session()))
+        result = get_forecast(province, resolve_risk_group_from_session())
+        log_target_latency(province, result["data_quality"])  # คำขอจากผู้ใช้กระจายตามนาทีของชั่วโมง (งาน scheduler รันนาทีคงที่)
+        return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except DataUnavailableError as e:

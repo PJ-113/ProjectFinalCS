@@ -1,5 +1,57 @@
 :root {
   --font-sans: "Inter", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+  --font-display: "Prompt", "Noto Sans Thai", system-ui, sans-serif;
+  /* ระยะเผื่อ header ลอย (บน) และ bottom tab bar (ล่าง, เฉพาะมือถือ) — ทุกหน้าใช้ตัวแปรนี้แทนเลข px
+     ตายตัว เพื่อให้เปลี่ยน breakpoint/ความสูงแถบนำทางที่เดียวได้ (ดู AppHeader.vue / BottomTabBar.vue) */
+  --app-top-offset: 100px;
+  --app-bottom-offset: 0px;
+
+  /* โทเคนสีธีมใหม่ (พื้นเรียบ การ์ดทึบ) — ใช้ร่วมกันใน Profile/Notifications/AppHeader dropdown/
+     ProvincePickerSheet; ForecastView/MapView ประกาศค่าชุดเดียวกันซ้ำในตัวเอง (scoped ทับได้) */
+  --ground: #f6f4ef;
+  --card: #ffffff;
+  --ink: #16181d;
+  --muted: #565c66;
+  --line: #e6e1d6;
+  --track: #ece8de;
+  --accent: #2563eb;
+  --warn-bg: #fff0d6;
+  --warn-line: #f0be73;
+  --warn-ink: #6b3a00;
+  --info-bg: #e4edfb;
+  --info-line: #b9cdf2;
+  --info-ink: #1e3a8a;
+  --danger: #b42318;
+  --danger-line: #e9b7b1;
+  --success-bg: #dff4e6;
+  --success-ink: #14532d;
+}
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] {
+    --ground: #0e1013;
+    --card: #171a1f;
+    --ink: #f3f4f6;
+    --muted: #a3aab5;
+    --line: #272b33;
+    --track: #232830;
+    --accent: #60a5fa;
+    --warn-bg: #2e2110;
+    --warn-line: #5c4220;
+    --warn-ink: #ffd9a0;
+    --info-bg: #14233f;
+    --info-line: #26406d;
+    --info-ink: #c3d8ff;
+    --danger: #ff9b91;
+    --danger-line: #6b2a25;
+    --success-bg: #12291b;
+    --success-ink: #bdebcb;
+  }
+
+@media (max-width: 720px) {
+  :root {
+    --app-top-offset: 84px;
+    --app-bottom-offset: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 * { box-sizing: border-box; }
@@ -30,10 +82,10 @@ body {
   border-radius: 20px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .glass-card {
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] .glass-card {
     background: rgba(22, 25, 30, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
   }
-}
+

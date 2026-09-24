@@ -35,3 +35,9 @@ python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).h
 ไฟล์อื่นที่ไม่ได้อยู่ใน git และควรสำรองไว้ด้วยเพื่อความสามารถทำซ้ำ: ชุดข้อมูลเทรน
 `data/multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv` และข้อมูลจุดความร้อน
 `data/firms_hotspots_isaan_*.csv`
+
+## ไฟล์เล็กที่ app.py อ่านเพิ่ม (อยู่ใน git)
+
+`models/imputation_h_lite_20260924_204956.json` — ค่าสัมประสิทธิ์วิธีเติมข้อมูลสถานีเงียบ (H-lite) + ตาราง q(k,h) ของช่วงความเชื่อมั่น (CHANGELOG 171) ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดฟีเจอร์เติมค่าเองแล้วทำงานแบบเดิม สร้างใหม่ด้วย `scripts/export_imputation_h_lite.py`
+
+`models/weather_climatology_20260924_211741.json` — ตาราง climatology สภาพอากาศ (จังหวัด x เดือน x ชั่วโมง) ใช้เป็นทางสุดท้ายเมื่อดึง Open-Meteo ไม่ได้ (CHANGELOG 172) ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดทางสุดท้ายนี้เอง (ดึงสภาพอากาศไม่ได้ก็ตอบ 500 เหมือนเดิม) สร้างใหม่ด้วย `scripts/export_weather_climatology.py` (เรียก Open-Meteo archive 20 ครั้ง)

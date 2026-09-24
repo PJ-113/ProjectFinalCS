@@ -213,15 +213,13 @@ onUnmounted(() => {
 
 <template>
   <div class="map-page">
-    <div class="haze-decor"><span></span><span></span><span></span></div>
-
     <div class="wrap">
-      <h1>ภาพรวมคุณภาพอากาศ 20 จังหวัดภาคอีสาน</h1>
-      <div class="subtitle">แตะหมุดแล้วกด +/− ในป๊อปอัปเพื่อดูค่าพยากรณ์ล่วงหน้า</div>
+      <h1>ภาพรวมคุณภาพอากาศ</h1>
+      <p class="subtitle">20 จังหวัดภาคอีสาน · แตะหมุดแล้วกด +/− ในป๊อปอัปเพื่อดูค่าพยากรณ์ล่วงหน้า</p>
 
-      <div v-if="state === 'error'" class="card error-box">
+      <div v-if="state === 'error'" class="card error-box" role="alert">
         <p>{{ errorMessage }}</p>
-        <button class="retry-btn" @click="loadOverview">ลองอีกครั้ง</button>
+        <button type="button" class="retry-btn" @click="loadOverview">ลองอีกครั้ง</button>
       </div>
 
       <div class="card map-card">
@@ -229,188 +227,227 @@ onUnmounted(() => {
         <div v-if="state === 'loading'" class="map-loading-overlay">กำลังโหลดข้อมูล...</div>
       </div>
 
-      <div class="card legend-card">
-        <div class="legend-title">ระดับคุณภาพอากาศ (PM2.5 เฉลี่ยรายชั่วโมง, µg/m³)</div>
-        <div class="legend-list">
-          <span class="legend-item"><span class="legend-dot" style="background: var(--excellent)"></span>ดีมาก (0-15)</span>
-          <span class="legend-item"><span class="legend-dot" style="background: var(--good)"></span>ดี (15-25)</span>
-          <span class="legend-item"><span class="legend-dot" style="background: var(--moderate)"></span>ปานกลาง (25-37.5)</span>
-          <span class="legend-item"><span class="legend-dot" style="background: var(--unhealthy)"></span>เริ่มมีผลกระทบต่อสุขภาพ (37.5-75)</span>
-          <span class="legend-item"><span class="legend-dot" style="background: var(--bad)"></span>มีผลกระทบต่อสุขภาพ (75+)</span>
-          <span class="legend-item"><span class="legend-dot" style="background: #94a3b8"></span>ไม่มีข้อมูล</span>
-        </div>
-      </div>
+      <section class="card legend-card">
+        <h2 class="legend-title">ระดับคุณภาพอากาศ</h2>
+        <p class="legend-sub">PM2.5 รายชั่วโมง (µg/m³)</p>
+        <ul class="legend-list">
+          <li class="legend-item"><span class="legend-dot" style="background: var(--excellent)"></span><span class="legend-name">ดีมาก</span><span class="legend-range">0–15</span></li>
+          <li class="legend-item"><span class="legend-dot" style="background: var(--good)"></span><span class="legend-name">ดี</span><span class="legend-range">15–25</span></li>
+          <li class="legend-item"><span class="legend-dot" style="background: var(--moderate)"></span><span class="legend-name">ปานกลาง</span><span class="legend-range">25–37.5</span></li>
+          <li class="legend-item"><span class="legend-dot" style="background: var(--unhealthy)"></span><span class="legend-name">เริ่มมีผลกระทบต่อสุขภาพ</span><span class="legend-range">37.5–75</span></li>
+          <li class="legend-item"><span class="legend-dot" style="background: var(--bad)"></span><span class="legend-name">มีผลกระทบต่อสุขภาพ</span><span class="legend-range">75+</span></li>
+          <li class="legend-item"><span class="legend-dot" style="background: var(--nodata)"></span><span class="legend-name">ไม่มีข้อมูล</span></li>
+        </ul>
+      </section>
     </div>
   </div>
 </template>
 
 <style scoped>
+/* โทเคนชุดเดียวกับหน้าพยากรณ์ (ForecastView.vue) — พื้นเรียบ ไม่มี gradient/haze/blur */
 .map-page {
-  --sky-top: #4a7fae;
-  --sky-mid: #8fb4d1;
-  --sky-bottom: #dce8f0;
-  --page-text: #0f172a;
-  --page-text-muted: rgba(15, 23, 42, 0.7);
-
-  --card-bg: rgba(255, 255, 255, 0.65);
-  --card-border: rgba(255, 255, 255, 0.4);
-  --text: #0f172a;
-  --muted: #64748b;
-  --border: rgba(255, 255, 255, 0.3);
-  --accent: #3b82f6;
+  --ground: #f6f4ef;
+  --card: #ffffff;
+  --ink: #16181d;
+  --muted: #565c66;
+  --line: #e6e1d6;
+  --track: #ece8de;
+  --accent: #2563eb;
 
   --excellent: #3b82f6;
   --good: #22c55e;
   --moderate: #eab308;
   --unhealthy: #f97316;
   --bad: #ef4444;
+  --nodata: #94a3b8;
 
   min-height: 100vh;
-  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-bottom) 100%);
-  color: var(--text);
-  padding: 100px 16px 48px;
-  position: relative;
-  overflow-x: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
 }
-@media (prefers-color-scheme: dark) {
-  .map-page {
-    --card-bg: rgba(22, 25, 30, 0.55);
-    --card-border: rgba(255, 255, 255, 0.1);
-    --text: #f8fafc;
-    --muted: #94a3b8;
-    --border: rgba(255, 255, 255, 0.1);
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] .map-page {
+    --ground: #0e1013;
+    --card: #171a1f;
+    --ink: #f3f4f6;
+    --muted: #a3aab5;
+    --line: #272b33;
+    --track: #232830;
+    --accent: #60a5fa;
   }
-}
 
-.haze-decor {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 0;
-}
-.haze-decor span {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(30px);
-  background: rgba(255, 255, 255, 0.3);
-  animation: float 24s ease-in-out infinite;
-}
-.haze-decor span:nth-child(1) { width: 220px; height: 220px; top: 6%;  left: -60px; animation-duration: 22s; }
-.haze-decor span:nth-child(2) { width: 160px; height: 160px; top: 40%; right: -40px; animation-duration: 26s; animation-delay: -4s; }
-.haze-decor span:nth-child(3) { width: 240px; height: 240px; top: 78%; left: 15%; animation-duration: 30s; animation-delay: -10s; }
-@keyframes float {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(24px, -18px); }
-}
 
-.wrap { max-width: 860px; margin: 0 auto; position: relative; z-index: 1; }
+.wrap { max-width: 860px; margin: 0 auto; }
 
-h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
-.subtitle { color: var(--page-text-muted); font-size: 0.85rem; margin-bottom: 20px; }
+h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
+.subtitle { color: var(--muted); font-size: 0.9rem; line-height: 1.5; margin: 0 0 16px; }
 
 .card {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+  background: var(--card);
+  border: 1px solid var(--line);
   border-radius: 24px;
-  padding: 24px;
-  margin-bottom: 20px;
+  padding: 20px;
+  margin-bottom: 16px;
 }
 
-.map-card { padding: 0; overflow: hidden; position: relative; }
-.leaflet-container-el { width: 100%; height: 60vh; min-height: 420px; border-radius: 24px; }
+/* แผนที่ (พื้นภาพ + ปุ่ม zoom + popup + attribution) ใช้ธีมสว่างเสมอ ไม่ตามโหมดมืด — ตั้งโทเคนสีสว่าง
+   ทับใน .map-card ทำให้ลูกทั้งหมด (รวม DOM ของ Leaflet/popup) รับค่าสว่างไปด้วย ส่วนการ์ด legend และพื้นหน้า
+   ยังตามธีมปกติ */
+.map-card {
+  --card: #ffffff;
+  --ink: #16181d;
+  --muted: #565c66;
+  --line: #e6e1d6;
+  --track: #ece8de;
+  --accent: #2563eb;
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+  color: var(--ink);
+}
+.leaflet-container-el { width: 100%; height: 60vh; min-height: 420px; border-radius: 24px; background: var(--track); }
 .map-loading-overlay {
   position: absolute;
   inset: 0;
+  z-index: 500;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.5);
+  background: color-mix(in srgb, var(--card) 70%, transparent);
   font-weight: 600;
-  color: var(--text);
+  color: var(--ink);
 }
 
-.legend-title { font-weight: 700; margin-bottom: 10px; }
-.legend-list { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.85rem; color: var(--text); }
-.legend-item { display: inline-flex; align-items: center; gap: 6px; }
-.legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.legend-title { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.legend-sub { margin: 2px 0 12px; font-size: 0.8rem; color: var(--muted); }
+.legend-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; }
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  font-size: 0.95rem;
+}
+.legend-name { flex: 1; }
+.legend-range { color: var(--muted); font-size: 0.85rem; }
+.legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+@media (min-width: 721px) {
+  .legend-list { grid-template-columns: 1fr 1fr; column-gap: 32px; }
+}
 
 .error-box { text-align: center; padding: 32px 20px; }
-.error-box p { color: var(--muted); margin-bottom: 16px; }
+.error-box p { color: var(--muted); margin: 0 0 16px; }
 .retry-btn {
+  min-height: 44px;
   background: var(--accent);
   color: #fff;
   border: none;
-  padding: 10px 22px;
-  border-radius: 8px;
-  font-size: 0.9rem;
+  padding: 0 24px;
+  border-radius: 22px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
 }
 .retry-btn:hover { opacity: 0.9; }
 
-/* popup DOM ถูก Leaflet inject นอกขอบเขต scoped style ของ Vue จึงต้องใช้ :deep() */
-:deep(.map-popup) { font-size: 0.85rem; line-height: 1.5; min-width: 190px; }
-:deep(.map-popup-title) { font-weight: 700; margin-bottom: 6px; }
-:deep(.map-popup-pm25) { font-size: 1.1rem; font-weight: 800; }
-:deep(.map-popup-status) { color: #334155; }
-:deep(.map-popup-time) { color: #64748b; font-size: 0.75rem; margin: 4px 0 8px; }
-:deep(.map-popup-fallback-note) { color: #b45309; font-size: 0.72rem; margin-bottom: 6px; }
+/* ---- ปรับ Leaflet ให้เข้าธีม (DOM ของ Leaflet อยู่ใต้ .map-page จึงรับตัวแปรสีได้ แต่อยู่นอกขอบเขต
+   scoped ของ Vue จึงต้องใช้ :deep()) ---- */
+:deep(.leaflet-container) { font-family: inherit; }
+:deep(.leaflet-bar) { border: 1px solid var(--line); box-shadow: none; border-radius: 14px; overflow: hidden; }
+:deep(.leaflet-bar a) {
+  width: 40px;
+  height: 40px;
+  line-height: 40px;
+  background: var(--card);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+:deep(.leaflet-bar a:last-child) { border-bottom: 0; }
+:deep(.leaflet-bar a:hover) { background: var(--track); }
+:deep(.leaflet-bar a.leaflet-disabled) { color: var(--muted); opacity: 0.5; background: var(--card); }
+:deep(.leaflet-control-attribution) {
+  background: color-mix(in srgb, var(--card) 80%, transparent);
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+:deep(.leaflet-control-attribution a) { color: var(--accent); }
+
+:deep(.leaflet-popup-content-wrapper) {
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+:deep(.leaflet-popup-tip) { background: var(--card); }
+:deep(.leaflet-popup-content) { margin: 14px 16px; }
+:deep(.leaflet-popup-close-button) { color: var(--muted) !important; width: 32px !important; height: 32px !important; font-size: 22px !important; }
+
+/* popup */
+:deep(.map-popup) { font-size: 0.9rem; line-height: 1.5; min-width: 200px; }
+:deep(.map-popup-title) { font-weight: 700; font-size: 1rem; margin-bottom: 6px; padding-right: 16px; }
+:deep(.map-popup-pm25) { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; line-height: 1.2; }
+:deep(.map-popup-status) { color: var(--ink); font-weight: 500; }
+:deep(.map-popup-time) { color: var(--muted); font-size: 0.78rem; margin: 4px 0 8px; }
+:deep(.map-popup-fallback-note) { color: #b45309; font-size: 0.75rem; margin-bottom: 6px; }
 :deep(.map-popup-stepper) {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   margin: 8px 0;
-  padding: 6px 0;
-  border-top: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 :deep(.map-popup-step) {
   border: none;
-  background: #3b82f6;
+  background: var(--accent);
   color: #fff;
-  width: 22px;
-  height: 22px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  font-size: 0.9rem;
+  font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
 }
-:deep(.map-popup-step:disabled) { background: #cbd5e1; cursor: not-allowed; }
+:deep(.map-popup-step:disabled) { background: var(--track); color: var(--muted); cursor: not-allowed; }
 :deep(.map-popup-step:not(:disabled):hover) { opacity: 0.85; }
 :deep(.map-popup-horizon-input) {
-  width: 40px;
+  width: 46px;
   text-align: center;
-  font-size: 0.85rem;
+  font-family: inherit;
+  font-size: 1rem; /* >=16px กัน iOS zoom เข้าช่องพิมพ์ */
   font-weight: 700;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  padding: 3px 2px;
+  color: var(--ink);
+  background: var(--track);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 2px;
   -moz-appearance: textfield;
 }
-:deep(.map-popup-step-unit) { font-size: 0.75rem; color: #64748b; }
-:deep(.map-popup-now-hint) { text-align: center; font-size: 0.72rem; color: #64748b; margin-top: 2px; }
+:deep(.map-popup-step-unit) { font-size: 0.78rem; color: var(--muted); }
+:deep(.map-popup-now-hint) { text-align: center; font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
 :deep(.map-popup-btn) {
   border: none;
-  background: #3b82f6;
-  color: #fff;
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 0.8rem;
+  background: var(--ink);
+  color: var(--card);
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 20px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
   width: 100%;
 }
 :deep(.map-popup-btn:hover) { opacity: 0.9; }
 
 @media (max-width: 600px) {
-  /* header กลายเป็น 2 แถวคงที่บนจอแคบ (ดู AppHeader.vue) ต้องเผื่อ padding-top เพิ่มไม่งั้นเนื้อหา
-     ด้านบนโดนบัง */
-  .map-page { padding-top: 148px; }
-  .leaflet-container-el { height: 50vh; min-height: 320px; }
-  :deep(.map-popup-step) { width: 28px; height: 28px; } /* เป้าแตะใหญ่ขึ้นสำหรับนิ้ว */
+  .leaflet-container-el { height: 55vh; min-height: 360px; }
+  :deep(.map-popup-step) { width: 40px; height: 40px; } /* เป้าแตะ ≥40px สำหรับนิ้ว */
 }
 </style>

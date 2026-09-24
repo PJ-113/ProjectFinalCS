@@ -1,15 +1,17 @@
 <script setup>
 import { ref, computed, onMounted, watch } from "vue";
-import { Laugh, Smile, Meh, Frown, Angry, Thermometer, Droplet, Wind } from "@lucide/vue";
-import { fetchForecast, buildWarningMessage } from "../notifications";
+import {
+  Laugh, Smile, Meh, Frown, Angry, Thermometer, Droplet, Wind,
+  MapPin, ChevronDown, TriangleAlert, Info, Sparkles,
+} from "@lucide/vue";
+import { fetchForecast, buildWarningMessage, formatCardTime } from "../notifications";
 import { riskScoreState, setActivity, ACTIVITY_LEVELS, computeRiskScore, riskScoreAdvice } from "../riskScore";
 import { provinceState, selectProvince } from "../provinces";
-import { statusClass, severityVar } from "../pm25Levels";
+import { statusClass, severityVar, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
+import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
 
-// ปิดไว้ก่อนอีกครั้ง 2026-09-23 — ผู้ใช้จะ redesign หน้านี้ใหม่ทีหลังแล้วค่อยจัดวางส่วนนี้เพิ่ม
-// (ไม่เกี่ยวกับปัญหา GEMINI_KEY ใช้ไม่ได้ที่เจอก่อนหน้านี้ — นั่นเป็นเหตุผลที่ทำให้สังเกตเห็นปัญหา
-// แต่เหตุผลที่ปิดจริงๆ คือรอ redesign) risk_group ยังต่อสายไปปรับ threshold/NLG ผ่าน session ปกติ
-// อยู่ (ไม่ได้ปิด) แค่การ์ดสรุปวันนี้/ช่วงเวลาดีที่สุด/คะแนนความเสี่ยงส่วนบุคคลไม่โชว์ในหน้านี้ชั่วคราว
+// ซ่อนการ์ดช่วงที่ควรออกไปข้างนอก / ความเสี่ยงส่วนบุคคล / สรุปวันนี้ไว้ก่อน (ผู้ใช้สั่ง 2026-09-24) —
+// โค้ดและ logic ยังอยู่ครบ แค่เปลี่ยนเป็น true เพื่อเปิดกลับมา
 const SHOW_EXTRA_CARDS = false;
 
 const state = ref("loading"); // "loading" | "error" | "content"
@@ -17,7 +19,6 @@ const errorMessage = ref("ไม่สามารถโหลดข้อมู
 
 const current = ref({ pm25: "-", datetime_th: "-", status: "" });
 const currentWeather = ref({ temp_c: null, humidity_pct: null, wind_speed_kmh: null });
-const bestTime = ref({ time: "-", pm25: "-" });
 const dailySummary = ref({ daily_avg_pm25: null, explanation: "" });
 const forecast = ref([]);
 const highPollutionRisk = ref(false);
@@ -28,8 +29,13 @@ const dataQuality = ref({ target_stale: false, target_age_hours: 0 });
 const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
 const riskScoreConfig = ref(null);
 
-// statusClass/severityVar ย้ายไป pm25Levels.js (โมดูลกลาง ใช้ร่วมกับ MapView.vue) — import ไว้บนสุด
+const pickerOpen = ref(false);
+// index ของแท่งที่แตะในกราฟ (null = ยังไม่เลือก) — แทน title= tooltip เดิมที่ใช้ไม่ได้บนหน้าจอทัช
+const selectedIdx = ref(null);
 
+// statusClass/severityVar/PM25_LEVELS อยู่ใน pm25Levels.js (โมดูลกลาง ใช้ร่วมกับ MapView.vue)
+
+// ชื่อคลาสตั้ง --hero-bg/--hero-ink ของการ์ดหลัก (tint ต่อระดับ) — ดูบล็อก .aqi-* ใน <style>
 function bodyClassFor(status) {
   if (status === "ดีมาก") return "aqi-excellent";
   if (status === "ดี") return "aqi-good";
@@ -38,8 +44,7 @@ function bodyClassFor(status) {
   return "aqi-bad";
 }
 
-// ไอคอนหน้าคน (ชุดเดียวกับ Lucide ทั้งการ์ด แทน emoji เดิม) ไล่ระดับความรุนแรงจากยิ้มกว้าง
-// ไปหน้าบึ้ง ให้เข้าชุดกับ thermometer/droplet/wind ด้านล่างการ์ด
+// ไอคอนหน้าคน (ชุดเดียวกับ Lucide ทั้งการ์ด) ไล่ระดับความรุนแรงจากยิ้มกว้างไปหน้าบึ้ง
 function moodIconFor(status) {
   if (status === "ดีมาก") return Laugh;
   if (status === "ดี") return Smile;
@@ -49,24 +54,25 @@ function moodIconFor(status) {
 }
 
 function barColor(pm25) {
-  const v = severityVar(pm25);
-  return `linear-gradient(180deg, var(${v}) 0%, color-mix(in srgb, var(${v}) 55%, white) 100%)`;
+  return `var(${severityVar(pm25)})`;
 }
 // ช่วงความเชื่อมั่น (ขอบบน P95 conformal) วาดเป็นส่วนต่อขยายโปร่งแสงของแท่งเดียวกัน (สีเดียวกับ
-// .bar เอง ที่ ~28% opacity) แทน tick-cap/dot-line เดิมที่ลอยแยกจากแท่งเหมือนหนวดแมลง — ส่วนขยายนี้
-// อยู่ชั้นล่าง (z-index ต่ำกว่า .bar) ครอบคลุม 0→pm25_hi เต็ม แต่ถูกแท่งทึบด้านบนบังส่วนล่างไว้หมด
-// เหลือให้เห็นแค่ส่วนที่ "เกิน" จุดพยากรณ์ขึ้นไปถึงขอบบนจริงๆ — ไม่ต้องคำนวณตำแหน่งซ้อนเอง
+// .bar เอง ที่ ~28% opacity) อยู่ชั้นล่างของแท่งทึบ ครอบคลุม 0→pm25_hi เต็ม แท่งทึบบังส่วนล่างไว้
+// เหลือให้เห็นแค่ส่วนที่ "เกิน" จุดพยากรณ์ขึ้นไปถึงขอบบนจริงๆ
 function barRangeColor(pm25) {
-  const v = severityVar(pm25);
-  return `color-mix(in srgb, var(${v}) 28%, transparent)`;
+  return `color-mix(in srgb, var(${severityVar(pm25)}) 28%, transparent)`;
 }
 
-// ตำแหน่ง % จากขอบล่างของ bar-track สำหรับช่วงความเชื่อมั่น (P05-P95 หลัง conformal) — ใช้ maxPm
-// เดียวกับที่คำนวณความสูงแท่งหลัก ให้อยู่สเกลเดียวกันเป๊ะ
+// ตำแหน่ง % จากขอบล่างของ bar-track — ใช้ maxPm เดียวกับความสูงแท่งหลัก ให้อยู่สเกลเดียวกันเป๊ะ
 function pctOf(value) {
   return (value / maxPm.value) * 100;
 }
 
+function modelLabel(modelUsed) {
+  if (String(modelUsed).startsWith("xgboost")) return "XGBoost";
+  if (modelUsed === "naive_fallback") return "ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)";
+  return "LightGBM";
+}
 function modelColor(modelUsed) {
   if (String(modelUsed).startsWith("xgboost")) return "var(--model-xgboost)";
   if (modelUsed === "naive_fallback") return "var(--model-fallback)";
@@ -74,8 +80,8 @@ function modelColor(modelUsed) {
 }
 
 const pageClass = computed(() => bodyClassFor(current.value.status));
-// รวม pm25_hi (ขอบบนช่วงความเชื่อมั่น) เข้าไปตอนหาค่าสูงสุดด้วย ไม่งั้นเส้น error bar จะโผล่พ้น
-// กราฟไปตอนช่วงกว้าง (horizon ไกลๆ) — ไม่ใช่แค่ point.pm25 เหมือนเดิม
+// รวม pm25_hi (ขอบบนช่วงความเชื่อมั่น) เข้าไปตอนหาค่าสูงสุดด้วย ไม่งั้นส่วนต่อขยายจะโผล่พ้นกราฟตอน
+// ช่วงกว้าง (horizon ไกลๆ) — 37.5 คือเพดานต่ำสุดเพื่อให้เส้นเกณฑ์อยู่ในกราฟเสมอ
 const maxPm = computed(() =>
   Math.max(...forecast.value.flatMap((f) => [f.pm25, f.pm25_hi ?? f.pm25]), 37.5)
 );
@@ -85,33 +91,38 @@ const dailyAvgDisplay = computed(() =>
     : "-"
 );
 const dailyTextDisplay = computed(() => dailySummary.value.explanation || "กำลังเตรียมข้อมูลสำหรับวันนี้");
-const fallbackHorizonsText = computed(() => fallbackHorizons.value.map((h) => `t+${h}`).join(", "));
+// horizon (1..24) -> เวลานาฬิกาของจุดนั้นใน forecast[] (ผู้ใช้ไม่ต้องแปล "t+N" เอง)
+const fallbackTimesText = computed(() =>
+  fallbackHorizons.value.map((h) => forecast.value[h - 1]?.time).filter(Boolean).join(", ")
+);
 
-// ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) ย้ายไป notifications.js แล้ว เพราะกระดิ่งแจ้งเตือน
-// ใน AppHeader.vue ต้องใช้ข้อความเดียวกันเป๊ะ ไม่ให้สองที่ไม่ตรงกัน
+// ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) อยู่ใน notifications.js เพราะกระดิ่งแจ้งเตือนใน
+// AppHeader.vue ต้องใช้ข้อความเดียวกันเป๊ะ ไม่ให้สองที่ไม่ตรงกัน
 const warningMessage = computed(() => buildWarningMessage(riskGroup.value));
 
-// 3 ช่วงเวลาที่อากาศดีที่สุด เรียงจากดีสุดไปน้อยสุด — คำนวณสดจาก forecast[] ที่มีอยู่แล้ว
-// กรองเฉพาะ 06:00-20:00 (ช่วงที่ใช้งานจริงได้) ก่อน sort เหมือน best_time ฝั่ง backend
-// (app.py get_forecast()) กัน suggest ช่วงดึกที่ไม่มีประโยชน์ในทางปฏิบัติ — fallback ไป forecast
-// ทั้งหมดถ้า active hours ว่างเปล่าจริงๆ
+const markerPct = computed(() => scaleMarkerPct(current.value.pm25));
+const currentAdvice = computed(() => adviceForStatus(current.value.status));
+const updatedLabel = computed(() =>
+  current.value.datetime_th && current.value.datetime_th !== "-" ? formatCardTime(current.value.datetime_th) : ""
+);
+const activeLevelIndex = computed(() => PM25_LEVELS.findIndex((l) => l.status === current.value.status));
+
+// 3 ช่วงเวลาที่อากาศดีที่สุด เรียงจากดีสุดไปน้อยสุด — คำนวณสดจาก forecast[] กรองเฉพาะ 06:00-20:00
+// (ช่วงที่ใช้งานจริงได้) ก่อน sort เหมือน best_time ฝั่ง backend — fallback ไป forecast ทั้งหมดถ้าว่าง
 const topBestTimes = computed(() => {
   const activeHours = forecast.value.filter((f) => f.hour_thai >= 6 && f.hour_thai <= 20);
   const pool = activeHours.length > 0 ? activeHours : forecast.value;
   return [...pool].sort((a, b) => a.pm25 - b.pm25).slice(0, 3);
 });
 
-// Personalized Risk Score (proposal) — ผสาน pm25 ปัจจุบัน + risk_group (จาก session) + activity
-// (เลือกสดหน้าเว็บ, ดู riskScoreState ใน riskScore.js) เป็นคะแนนเดียว 0-100 สูตร/ตัวเลข offset
-// ทั้งหมดมาจาก riskScoreConfig ที่ backend ส่งมา (app.py compute_risk_score()) ที่นี่แค่เรียก mirror
-// function เดียวกัน ไม่มี business constant ซ้ำ
+// Personalized Risk Score (proposal) — ผสาน pm25 ปัจจุบัน + risk_group + activity (เลือกสดหน้าเว็บ)
+// เป็นคะแนนเดียว 0-100 สูตร/offset ทั้งหมดมาจาก riskScoreConfig ที่ backend ส่งมา
 const currentRiskScore = computed(() =>
   computeRiskScore(current.value.pm25, riskScoreConfig.value, riskScoreState.activity)
 );
 const currentRiskAdvice = computed(() => riskScoreAdvice(currentRiskScore.value.level));
 
-// เหมือน topBestTimes แต่ personalize ตามกิจกรรมที่เลือก (sort ด้วยคะแนนความเสี่ยงแทน pm25 ดิบ) —
-// กรอง 06:00-20:00 เดียวกันเสมอ
+// เหมือน topBestTimes แต่ personalize ตามกิจกรรมที่เลือก (sort ด้วยคะแนนความเสี่ยงแทน pm25 ดิบ)
 const bestActivityTimes = computed(() => {
   if (!riskScoreConfig.value) return [];
   const activeHours = forecast.value.filter((f) => f.hour_thai >= 6 && f.hour_thai <= 20);
@@ -122,13 +133,15 @@ const bestActivityTimes = computed(() => {
     .slice(0, 3);
 });
 
+const selectedPoint = computed(() => (selectedIdx.value == null ? null : forecast.value[selectedIdx.value] || null));
+
 async function loadForecast() {
   state.value = "loading";
+  selectedIdx.value = null;
   try {
     const data = await fetchForecast();
     current.value = data.current;
     currentWeather.value = data.current_weather || {};
-    bestTime.value = data.best_time;
     dailySummary.value = data.daily_summary || {};
     forecast.value = data.forecast;
     highPollutionRisk.value = data.high_pollution_risk;
@@ -145,7 +158,7 @@ async function loadForecast() {
   }
 }
 
-// สลับจังหวัดจาก dropdown ใน AppHeader.vue -> provinceState.selected เปลี่ยน -> โหลดพยากรณ์ใหม่
+// สลับจังหวัดจาก ProvincePickerSheet -> provinceState.selected เปลี่ยน -> โหลดพยากรณ์ใหม่
 watch(() => provinceState.selected, loadForecast);
 
 onMounted(loadForecast);
@@ -154,790 +167,673 @@ defineExpose({ loadForecast });
 
 <template>
   <div class="forecast-page" :class="pageClass">
-    <div class="haze-decor"><span></span><span></span><span></span><span></span></div>
-
     <div class="wrap">
-      <div class="title-row">
-        <h1><span class="title-main">พยากรณ์ PM2.5</span><span class="title-sub"> - จังหวัด{{ provinceInfo.th || "..." }}{{ provinceInfo.is_zero_shot ? " (zero-shot)" : "" }}</span></h1>
-        <select
-          class="province-select"
-          :value="provinceState.selected"
-          @change="selectProvince($event.target.value)"
-          aria-label="เลือกจังหวัด"
-        >
-          <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
-            {{ p.province_th }}{{ p.is_zero_shot ? " (zero-shot)" : "" }}
-          </option>
-        </select>
+      <div class="top-row">
+        <button type="button" class="province-chip" aria-haspopup="dialog" @click="pickerOpen = true">
+          <MapPin :size="18" :stroke-width="2" aria-hidden="true" />
+          <span class="province-chip-name">{{ provinceInfo.th || "..." }}</span>
+          <span v-if="provinceInfo.is_zero_shot" class="zs-badge">zero-shot</span>
+          <ChevronDown :size="16" :stroke-width="2" aria-hidden="true" />
+        </button>
+        <span class="page-title">พยากรณ์ PM2.5</span>
       </div>
-      <!--<div class="subtitle">
-        <span class="live-dot"></span>
-        ข้อมูลจาก OpenAQ + Open-Meteo, พยากรณ์ล่วงหน้า 24 ชั่วโมงด้วยระบบ Dynamic Routing
-        (เลือกจาก LightGBM / XGBoost pooled model อัตโนมัติตาม horizon) ·
-        <router-link to="/compare">ดูความแม่นยำจริง →</router-link>
-      </div> -->
 
       <!-- Loading skeleton -->
-      <div v-if="state === 'loading'">
-        <div class="card">
-          <div class="current-row">
-            <div class="skeleton skeleton-value"></div>
-            <div class="skeleton skeleton-badge"></div>
-          </div>
-          <div class="skeleton skeleton-line"></div>
-        </div>
-        <div class="card">
-          <div class="skeleton skeleton-line" style="width: 220px"></div>
-        </div>
-        <div class="card">
-          <div class="skeleton skeleton-chart"></div>
-        </div>
+      <div v-if="state === 'loading'" class="stack">
+        <div class="skeleton skeleton-hero"></div>
+        <div class="card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line" style="width: 60%"></div></div>
+        <div class="card"><div class="skeleton skeleton-chart"></div></div>
       </div>
 
       <!-- Error state -->
       <div v-else-if="state === 'error'" class="card error-box">
         <p>{{ errorMessage }}</p>
-        <button class="retry-btn" @click="loadForecast">ลองอีกครั้ง</button>
+        <button type="button" class="retry-btn" @click="loadForecast">ลองอีกครั้ง</button>
       </div>
 
       <!-- Content -->
-      <div v-else>
-        <div v-if="highPollutionRisk" class="warning-box">
-          ⚠️ {{ warningMessage }}
-        </div>
-
-        <div v-if="dataQuality.target_stale" class="warning-box">
-          ⚠️ ข้อมูลล่าสุดของสถานีตรวจวัดในจังหวัดนี้เก่ากว่า {{ Math.round(dataQuality.target_age_hours) }} ชั่วโมง (สถานีอาจขัดข้อง) ค่าที่แสดงอาจไม่ตรงกับสถานการณ์ปัจจุบัน
-        </div>
-
-        <div v-if="fallbackHorizons.length > 0" class="info-box">
-          ℹ️ ข้อมูล input ไม่สมบูรณ์ในบางช่วงเวลา ระบบ Circuit Breaker จึงใช้ค่าพยากรณ์แบบคงที่ (ความเชื่อมั่นต่ำ) ชั่วคราวสำหรับ {{ fallbackHorizonsText }}
-        </div>
-
-        <div class="dashboard-grid">
-          <div class="grid-col-main card">
-            <div class="current-info">
-              <div class="current-row">
-                <div class="mood-badge" :class="statusClass(current.status)">
-                  <component :is="moodIconFor(current.status)" :size="30" :stroke-width="2" />
-                </div>
-                <div class="pm-main">
-                  <div class="label-muted">PM2.5 ล่าสุดรายชั่วโมง (ไม่ใช่ค่าเฉลี่ย 24 ชม. แบบ AQI ทางการ)</div>
-                  <div class="pm-value-row">
-                    <span class="pm-value">{{ current.pm25 }}</span>
-                    <span class="pm-unit">µg/m³</span>
-                  </div>
-                </div>
-                <span class="status-chip" :class="statusClass(current.status)">{{ current.status }}</span>
-              </div>
-              <div class="updated-at">อัปเดตล่าสุด: {{ current.datetime_th }}</div>
+      <div v-else class="layout">
+        <div class="col-primary">
+          <div v-if="highPollutionRisk" class="banner banner-warn" role="alert">
+            <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
+            <div>
+              <div class="banner-title">ช่วงนี้ฝุ่นอยู่ในระดับสูง</div>
+              <div class="banner-text">{{ warningMessage }}</div>
             </div>
+          </div>
+
+          <div v-if="dataQuality.target_stale" class="banner banner-warn" role="alert">
+            <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">
+              ข้อมูลล่าสุดของสถานีตรวจวัดในจังหวัดนี้เก่ากว่า {{ Math.round(dataQuality.target_age_hours) }} ชั่วโมง
+              (สถานีอาจขัดข้อง) ค่าที่แสดงอาจไม่ตรงกับสถานการณ์ปัจจุบัน
+            </div>
+          </div>
+
+          <div v-if="dataQuality.input_imputed" class="banner banner-info">
+          <Info :size="22" :stroke-width="2" aria-hidden="true" />
+          <div class="banner-text">
+            สถานีตรวจวัดในจังหวัดนี้ขาดการรายงานประมาณ {{ dataQuality.input_imputed.k_hours }} ชั่วโมง
+            ค่าที่แสดงเป็นค่าประมาณจากจังหวัดข้างเคียง (ค่าที่วัดได้ล่าสุด {{ dataQuality.input_imputed.last_observed_pm25 }} µg/m³
+            เมื่อ {{ formatCardTime(dataQuality.input_imputed.last_observed_datetime_th) }}) ช่วงความเชื่อมั่นจึงกว้างกว่าปกติ
+          </div>
+        </div>
+
+        <div v-if="dataQuality.series_source === 'stale_cache' || dataQuality.weather_source === 'climatology'" class="banner banner-info">
+            <Info :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">
+              <template v-if="dataQuality.series_source === 'stale_cache'">
+                ระบบเชื่อมต่อแหล่งข้อมูลฝุ่นไม่ได้ชั่วคราว จึงใช้ข้อมูลที่บันทึกไว้ล่าสุด (เมื่อประมาณ {{ Math.max(1, Math.round(dataQuality.series_age_hours)) }} ชั่วโมงก่อน)
+              </template>
+              <template v-if="dataQuality.weather_source === 'climatology'">
+                ระบบดึงสภาพอากาศล่าสุดไม่ได้ จึงใช้ค่าเฉลี่ยตามฤดูกาลของจังหวัดนี้แทน ความแม่นยำอาจลดลงเล็กน้อย
+              </template>
+            </div>
+          </div>
+
+        <div v-if="fallbackHorizons.length > 0" class="banner banner-info">
+            <Info :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">
+              ข้อมูลบางช่วงไม่ครบ ระบบจึงใช้ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)
+              <template v-if="fallbackTimesText"> ที่เวลา {{ fallbackTimesText }} น.</template>
+            </div>
+          </div>
+
+          <!-- Hero: ค่า PM2.5 ปัจจุบัน -->
+          <section class="hero" aria-label="PM2.5 ตอนนี้">
+            <div class="hero-head">
+              <span class="hero-label">PM2.5 ตอนนี้<span v-if="dataQuality.input_imputed" class="estimate-tag">ค่าประมาณ</span></span>
+              <span v-if="updatedLabel" class="hero-updated">อัปเดต {{ updatedLabel }}</span>
+            </div>
+            <div class="pm-value-row">
+              <span class="pm-value">{{ current.pm25 }}</span>
+              <span class="pm-unit">µg/m³</span>
+            </div>
+            <div class="level-chip" :class="statusClass(current.status)">
+              <component :is="moodIconFor(current.status)" :size="28" :stroke-width="2" class="level-icon" />
+              <span class="level-text">{{ current.status }}</span>
+            </div>
+            <div class="scale" aria-hidden="true">
+              <div class="scale-track">
+                <span
+                  v-for="(l, i) in PM25_LEVELS"
+                  :key="l.status"
+                  class="scale-seg"
+                  :class="{ 'scale-seg-active': i === activeLevelIndex }"
+                  :style="{ background: `var(${l.cssVar})` }"
+                ></span>
+                <span class="scale-marker" :style="{ left: markerPct + '%' }"></span>
+              </div>
+              <div class="scale-ends"><span>ดีมาก</span><span>มีผลกระทบ</span></div>
+            </div>
+            <p class="hero-advice">{{ currentAdvice }}</p>
+            <p class="hero-note">ค่ารายชั่วโมงล่าสุด ไม่ใช่ค่าเฉลี่ย 24 ชม. แบบ AQI ทางการ</p>
 
             <div v-if="currentWeather.temp_c != null" class="stat-tiles">
               <div class="stat-tile">
-                <Thermometer class="stat-tile-icon icon-temp" :size="20" :stroke-width="2" />
+                <Thermometer :size="20" :stroke-width="2" aria-hidden="true" />
                 <div class="stat-tile-value">{{ currentWeather.temp_c }}°C</div>
-                <div class="stat-tile-label eyebrow">อุณหภูมิ</div>
+                <div class="stat-tile-label">อุณหภูมิ</div>
               </div>
               <div class="stat-tile">
-                <Droplet class="stat-tile-icon icon-humidity" :size="20" :stroke-width="2" />
+                <Droplet :size="20" :stroke-width="2" aria-hidden="true" />
                 <div class="stat-tile-value">{{ currentWeather.humidity_pct }}%</div>
-                <div class="stat-tile-label eyebrow">ความชื้น</div>
+                <div class="stat-tile-label">ความชื้น</div>
               </div>
               <div class="stat-tile">
-                <Wind class="stat-tile-icon icon-wind" :size="20" :stroke-width="2" />
-                <div class="stat-tile-value">{{ currentWeather.wind_speed_kmh }} km/h</div>
-                <div class="stat-tile-label eyebrow">ความเร็วลม</div>
+                <Wind :size="20" :stroke-width="2" aria-hidden="true" />
+                <div class="stat-tile-value">{{ currentWeather.wind_speed_kmh }}</div>
+                <div class="stat-tile-label">กม./ชม. · ลม</div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div v-if="SHOW_EXTRA_CARDS" class="grid-col-side">
-            <div class="card">
-              <div class="label-muted">📋 สรุปวันนี้ (ค่าเฉลี่ยพยากรณ์ 24 ชม., อัปเดตตอน 06:00 น.)</div>
-              <div class="daily-summary-value">
-                {{ dailyAvgDisplay }}<span class="daily-summary-unit"> µg/m³</span>
-              </div>
-              <div class="daily-summary-text">{{ dailyTextDisplay }}</div>
+          <!-- ช่วงเวลาที่ควรออกไปข้างนอก -->
+          <section v-if="SHOW_EXTRA_CARDS" class="card">
+            <div class="card-head">
+              <h2>ช่วงที่ควรออกไปข้างนอก</h2>
+              <span class="card-head-sub">24 ชม. ข้างหน้า</span>
             </div>
-
-            <div class="card">
-              <div class="label-muted">🌤️ ช่วงเวลาที่อากาศดีที่สุดในอีก 24 ชม.</div>
-              <div class="best-times-list">
-                <div class="best-time-row" v-for="(point, i) in topBestTimes" :key="point.time">
-                  <span class="rank-badge" :class="`rank-${i + 1}`">{{ i + 1 }}</span>
-                  <span class="best-time-time">{{ point.time }}</span>
-                  <span class="best-time-pm">{{ point.pm25 }} µg/m³</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="card">
-              <div class="label-muted">🎯 คะแนนความเสี่ยงส่วนบุคคล</div>
-              <div class="label-muted activity-select-caption">เลือกความหนักของกิจกรรมกลางแจ้งที่วางแผนจะทำ</div>
-              <div class="activity-selector">
-                <button
-                  v-for="level in ACTIVITY_LEVELS"
-                  :key="level"
-                  type="button"
-                  class="activity-btn"
-                  :class="{ active: riskScoreState.activity === level }"
-                  @click="setActivity(level)"
-                >{{ level }}</button>
-              </div>
-              <div class="label-muted risk-score-caption">คะแนนความเสี่ยงสำหรับกิจกรรมนี้ (0 = เสี่ยงน้อยที่สุด, 100 = เสี่ยงมากที่สุด)</div>
-              <div class="risk-score-row">
-                <span class="risk-score-value-wrap">
-                  <span class="risk-score-value" :class="statusClass(currentRiskScore.level)">{{ currentRiskScore.score }}</span>
-                  <span class="risk-score-unit">/100</span>
+            <ol class="best-list">
+              <li v-for="(point, i) in topBestTimes" :key="point.time" class="best-row">
+                <span class="rank-badge" :class="`rank-${i + 1}`">{{ i + 1 }}</span>
+                <span class="best-time">{{ point.time }} น.</span>
+                <span class="best-pm">
+                  <span class="dot" :style="{ background: barColor(point.pm25) }"></span>{{ point.pm25 }}
+                  <span class="best-unit">µg/m³</span>
                 </span>
-                <span class="risk-level-tag">
-                  <span class="risk-level-label">ความเสี่ยงของคุณ</span>
-                  <span class="status-chip" :class="statusClass(currentRiskScore.level)">{{ currentRiskScore.level }}</span>
-                </span>
-              </div>
-              <div class="daily-summary-text risk-score-advice">{{ currentRiskAdvice }}</div>
-              <div class="label-muted risk-score-sublabel">ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด</div>
-              <div class="best-times-list">
-                <div class="best-time-row" v-for="(point, i) in bestActivityTimes" :key="point.time">
-                  <span class="rank-badge" :class="`rank-${i + 1}`">{{ i + 1 }}</span>
-                  <span class="best-time-time">{{ point.time }}</span>
-                  <span class="best-time-pm">{{ point.riskScore }} คะแนน</span>
-                </div>
-              </div>
-            </div>
-          </div>
+              </li>
+            </ol>
+          </section>
         </div>
 
-        <div class="card">
-          <div class="chart-header">
-            <div class="chart-title"> พยากรณ์ PM2.5 รายชั่วโมง (24 ชม. ข้างหน้า) <span class="chart-subtitle">ส่วนจางด้านบนคือขอบบนของช่วงความเชื่อมั่น ~90%</span></div>
-            <div class="chart-legend">
-              <span><span class="dot" style="background: var(--model-lightgbm)"></span>LightGBM</span>
-              <span><span class="dot" style="background: var(--model-xgboost)"></span>XGBoost</span>
-              <span><span class="dot" style="background: var(--model-fallback)"></span>Fallback (ความเชื่อมั่นต่ำ)</span>
-            </div>
-          </div>
-          <div class="bars">
-            <div class="bar-col" v-for="point in forecast" :key="point.time">
-              <div class="bar-value">{{ point.pm25 }}</div>
-              <div class="bar-track">
-                <!-- ช่วงความเชื่อมั่น ~90% (P05-P95 หลัง conformal calibration) วาดเป็นส่วนขยายโปร่งแสง
-                     ของแท่งเดียวกัน สูงถึง pm25_hi เต็ม แต่แท่งทึบด้านหน้า (.bar) บังส่วนล่างไว้หมด
-                     เหลือให้เห็นแค่ส่วนเกินจากจุดพยากรณ์ขึ้นไปถึงขอบบนจริง (ไม่แสดง pm25_lo แยก
-                     เพราะอยู่ใต้แท่งทึบเสมอ ไม่มีอะไรให้เห็นเพิ่ม — ค่าเต็มยังอยู่ใน tooltip) ซ่อนไปเอง
-                     ถ้า pm25_hi ไม่มีมาใน response (backward compatible) -->
-                <div
-                  v-if="point.pm25_hi != null"
-                  class="bar-range-cap"
-                  :style="{ height: pctOf(point.pm25_hi) + '%', background: barRangeColor(point.pm25) }"
-                ></div>
-                <div
-                  class="bar"
-                  :style="{ height: pctOf(point.pm25) + '%', background: barColor(point.pm25) }"
-                  :title="`${point.time}: ${point.pm25} µg/m³ (ช่วง ${point.pm25_lo}-${point.pm25_hi}) (${point.model_used})`"
-                ></div>
+        <div class="col-secondary">
+          <!-- กราฟรายชั่วโมง -->
+          <section class="card chart-card">
+            <div class="card-head chart-head">
+              <div>
+                <h2>พยากรณ์รายชั่วโมง</h2>
+                <p class="chart-sub">ส่วนจางเหนือแท่งคือขอบบนของช่วงความเชื่อมั่น ~90%</p>
               </div>
-              <div class="model-dot" :style="{ background: modelColor(point.model_used) }" :title="point.model_used"></div>
-              <div class="bar-label">{{ point.time }}</div>
             </div>
-          </div>
+            <div class="bars" role="group" aria-label="พยากรณ์ PM2.5 รายชั่วโมง 24 ชั่วโมงข้างหน้า">
+              <button
+                v-for="(point, i) in forecast"
+                :key="point.time"
+                type="button"
+                class="bar-col"
+                :class="{ selected: selectedIdx === i }"
+                :aria-pressed="selectedIdx === i"
+                :aria-label="`${point.time} น. ${point.pm25} ไมโครกรัมต่อลูกบาศก์เมตร`"
+                @click="selectedIdx = selectedIdx === i ? null : i"
+              >
+                <span class="bar-value">{{ Math.round(point.pm25) }}</span>
+                <span class="bar-track">
+                  <span class="thr-line" :style="{ bottom: pctOf(37.5) + '%' }"></span>
+                  <span
+                    v-if="point.pm25_hi != null"
+                    class="bar-range-cap"
+                    :style="{ height: pctOf(point.pm25_hi) + '%', background: barRangeColor(point.pm25) }"
+                  ></span>
+                  <span class="bar" :style="{ height: pctOf(point.pm25) + '%', background: barColor(point.pm25) }"></span>
+                </span>
+                <span class="bar-label">{{ point.time }}</span>
+                <span v-if="point.model_used === 'naive_fallback'" class="fallback-mark" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="chart-foot">
+              <span class="thr-legend"><span class="thr-swatch"></span>37.5 µg/m³ เกณฑ์เริ่มมีผลต่อสุขภาพ</span>
+              <span class="scroll-hint">เลื่อนดู →</span>
+            </div>
+            <div class="bar-detail" aria-live="polite">
+              <template v-if="selectedPoint">
+                <div class="bar-detail-time">{{ selectedPoint.time }} น.</div>
+                <div class="bar-detail-main">
+                  <span class="bar-detail-value">{{ selectedPoint.pm25 }}</span>
+                  <span class="best-unit">µg/m³</span>
+                </div>
+                <div class="bar-detail-meta">
+                  ช่วงความเชื่อมั่น ~90%: {{ selectedPoint.pm25_lo }}–{{ selectedPoint.pm25_hi }} µg/m³
+                </div>
+                <div class="bar-detail-meta">
+                  <span class="dot" :style="{ background: modelColor(selectedPoint.model_used) }"></span>
+                  {{ modelLabel(selectedPoint.model_used) }}
+                </div>
+              </template>
+              <div v-else class="bar-detail-empty">แตะแท่งเพื่อดูรายละเอียดของชั่วโมงนั้น</div>
+            </div>
+          </section>
+
+          <!-- ความเสี่ยงส่วนบุคคล -->
+          <section v-if="SHOW_EXTRA_CARDS" class="card">
+            <h2>ความเสี่ยงของคุณ</h2>
+            <p class="card-caption">เลือกความหนักของกิจกรรมกลางแจ้งที่วางแผนจะทำ</p>
+            <div class="segmented" role="group" aria-label="ความหนักของกิจกรรม">
+              <button
+                v-for="level in ACTIVITY_LEVELS"
+                :key="level"
+                type="button"
+                class="segmented-btn"
+                :class="{ active: riskScoreState.activity === level }"
+                :aria-pressed="riskScoreState.activity === level"
+                @click="setActivity(level)"
+              >{{ level }}</button>
+            </div>
+            <div class="risk-row">
+              <span class="risk-score">
+                <span class="risk-score-value">{{ currentRiskScore.score ?? "-" }}</span>
+                <span class="risk-score-unit">/100</span>
+              </span>
+              <span class="risk-tag">
+                <span class="risk-tag-label">ระดับความเสี่ยงของคุณ</span>
+                <span class="risk-chip" :class="statusClass(currentRiskScore.level)">
+                  <span class="dot"></span>{{ currentRiskScore.level || "-" }}
+                </span>
+              </span>
+            </div>
+            <p class="risk-advice">{{ currentRiskAdvice }}</p>
+            <template v-if="bestActivityTimes.length">
+              <div class="risk-sublabel">ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด</div>
+              <ol class="best-list">
+                <li v-for="(point, i) in bestActivityTimes" :key="point.time" class="best-row">
+                  <span class="rank-badge" :class="`rank-${i + 1}`">{{ i + 1 }}</span>
+                  <span class="best-time">{{ point.time }} น.</span>
+                  <span class="best-pm">{{ point.riskScore }} <span class="best-unit">คะแนน</span></span>
+                </li>
+              </ol>
+            </template>
+          </section>
+
+          <!-- สรุปวันนี้ -->
+          <section v-if="SHOW_EXTRA_CARDS" class="card">
+            <div class="summary-eyebrow">
+              <Sparkles :size="18" :stroke-width="2" aria-hidden="true" />
+              <span>สรุปวันนี้ · อัปเดต 06:00 น.</span>
+            </div>
+            <div class="summary-value">
+              {{ dailyAvgDisplay }}<span class="summary-unit"> µg/m³ ค่าเฉลี่ยพยากรณ์ 24 ชม.</span>
+            </div>
+            <p class="summary-text">{{ dailyTextDisplay }}</p>
+          </section>
         </div>
       </div>
     </div>
+
+    <ProvincePickerSheet
+      :open="pickerOpen"
+      :selected="provinceState.selected"
+      @select="selectProvince"
+      @close="pickerOpen = false"
+    />
   </div>
 </template>
 
 <style scoped>
 .forecast-page {
-  --sky-top: #6b7f96;
-  --sky-mid: #9db4c9;
-  --sky-bottom: #c9d9e6;
-  --page-text: #0f172a;
-  --page-text-muted: rgba(15, 23, 42, 0.7);
-
-  --card-bg: rgba(255, 255, 255, 0.65);
-  --card-border: rgba(255, 255, 255, 0.4);
-  --text: #0f172a;
-  --muted: #64748b;
-  --border: rgba(255, 255, 255, 0.3);
+  /* โทเคนกลางของหน้า — พื้นเรียบ ไม่มี gradient/blur (อ่านง่ายกลางแดด) การ์ดหลักเท่านั้นที่เปลี่ยนสีตามระดับฝุ่น */
+  --ground: #f6f4ef;
+  --card: #ffffff;
+  --ink: #16181d;
+  --muted: #565c66;
+  --line: #e6e1d6;
+  --track: #ece8de;
+  --chip-bg: rgba(255, 255, 255, 0.72);
+  --accent: #2563eb;
 
   --excellent: #3b82f6;
   --good: #22c55e;
   --moderate: #eab308;
   --unhealthy: #f97316;
   --bad: #ef4444;
-  --accent: #3b82f6;
 
   --model-lightgbm: #6366f1;
   --model-xgboost: #10b981;
   --model-fallback: #ec4899;
 
+  --hero-bg: #faefc1;
+  --hero-ink: #4f3b00;
+
+  --warn-bg: #fff0d6;
+  --warn-line: #f0be73;
+  --warn-ink: #6b3a00;
+  --info-bg: #e4edfb;
+  --info-line: #b9cdf2;
+  --info-ink: #1e3a8a;
+
   min-height: 100vh;
-  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-bottom) 100%);
-  transition: background 1.2s ease;
-  color: var(--text);
-  padding: 100px 16px 48px;
-  position: relative;
-  overflow-x: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
 }
-@media (prefers-color-scheme: dark) {
-  .forecast-page {
-    --card-bg: rgba(22, 25, 30, 0.55);
-    --card-border: rgba(255, 255, 255, 0.1);
-    --text: #f8fafc;
-    --muted: #94a3b8;
-    --border: rgba(255, 255, 255, 0.1);
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] .forecast-page {
+    --ground: #0e1013;
+    --card: #171a1f;
+    --ink: #f3f4f6;
+    --muted: #a3aab5;
+    --line: #272b33;
+    --track: #232830;
+    --chip-bg: rgba(255, 255, 255, 0.09);
+    --accent: #60a5fa;
 
     --model-lightgbm: #818cf8;
     --model-xgboost: #34d399;
     --model-fallback: #f472b6;
+
+    --warn-bg: #2e2110;
+    --warn-line: #5c4220;
+    --warn-ink: #ffd9a0;
+    --info-bg: #14233f;
+    --info-line: #26406d;
+    --info-ink: #c3d8ff;
   }
-}
 
-.forecast-page.aqi-excellent {
-  --sky-top: #1d68b3; --sky-mid: #5fb3ec; --sky-bottom: #eaf7ff;
-  --page-text: #0a2c47; --page-text-muted: rgba(10, 44, 71, 0.7);
-}
-.forecast-page.aqi-good {
-  --sky-top: #2f7fd1; --sky-mid: #79c2f0; --sky-bottom: #e3f4fd;
-  --page-text: #0d2b45; --page-text-muted: rgba(13, 43, 69, 0.7);
-}
-.forecast-page.aqi-moderate {
-  --sky-top: #d9b52b; --sky-mid: #eed685; --sky-bottom: #faf3d5;
-  --page-text: #453a0a; --page-text-muted: rgba(69, 58, 10, 0.7);
-}
-.forecast-page.aqi-unhealthy {
-  --sky-top: #d98d2b; --sky-mid: #eab766; --sky-bottom: #f7e6c4;
-  --page-text: #4a2f0a; --page-text-muted: rgba(74, 47, 10, 0.7);
-}
-.forecast-page.aqi-bad {
-  --sky-top: #4a3220; --sky-mid: #7a5238; --sky-bottom: #241812;
-  --page-text: #f5e9de; --page-text-muted: rgba(245, 233, 222, 0.75);
-}
 
-/* ก้อนหมอก/ไอฝุ่นลอยเบาๆ เป็นฉากหลัง */
-.haze-decor {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 0;
-}
-.haze-decor span {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(30px);
-  background: rgba(255, 255, 255, 0.35);
-  animation: float 20s ease-in-out infinite;
-}
-.haze-decor span:nth-child(1) { width: 220px; height: 220px; top: 8%;  left: -60px; animation-duration: 22s; }
-.haze-decor span:nth-child(2) { width: 160px; height: 160px; top: 30%; right: -40px; animation-duration: 26s; animation-delay: -4s; }
-.haze-decor span:nth-child(3) { width: 260px; height: 260px; top: 65%; left: 10%; animation-duration: 30s; animation-delay: -10s; }
-.haze-decor span:nth-child(4) { width: 140px; height: 140px; top: 80%; right: 15%; animation-duration: 18s; animation-delay: -6s; }
-@keyframes float {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(24px, -18px); }
-}
+/* tint การ์ดหลักตามระดับ (ตัวหนังสือเข้มบน tint อ่อน / อ่อนบน tint เข้มใน dark) ผ่าน AA ทุกระดับ */
+.forecast-page.aqi-excellent { --hero-bg: #e3edfd; --hero-ink: #1e3a8a; }
+.forecast-page.aqi-good      { --hero-bg: #dff4e6; --hero-ink: #14532d; }
+.forecast-page.aqi-moderate  { --hero-bg: #faefc1; --hero-ink: #4f3b00; }
+.forecast-page.aqi-unhealthy { --hero-bg: #fce4ce; --hero-ink: #6e2a00; }
+.forecast-page.aqi-bad       { --hero-bg: #fadada; --hero-ink: #7f1d1d; }
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] .forecast-page.aqi-excellent { --hero-bg: #14233f; --hero-ink: #c3d8ff; }
+  :root[data-theme="dark"] .forecast-page.aqi-good { --hero-bg: #12291b; --hero-ink: #bdebcb; }
+  :root[data-theme="dark"] .forecast-page.aqi-moderate { --hero-bg: #2b2410; --hero-ink: #f5de8a; }
+  :root[data-theme="dark"] .forecast-page.aqi-unhealthy { --hero-bg: #33200f; --hero-ink: #ffc999; }
+  :root[data-theme="dark"] .forecast-page.aqi-bad { --hero-bg: #351516; --hero-ink: #ffb8b8; }
 
-.wrap { max-width: 1180px; margin: 0 auto; position: relative; z-index: 1; }
 
-.title-row {
+.wrap { max-width: 1080px; margin: 0 auto; }
+
+.top-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-h1 {
-  font-size: 1.9rem;
-  font-weight: 800;
-  margin: 0;
-}
-/* พื้นหลังทึบชัดเจน ไม่ใช้ --card-bg แบบโปร่งแสง (ตรงนี้วางบนพื้นหลัง gradient sky ของหน้าตรงๆ
-   ไม่ได้อยู่ใน .card ที่มี blur ช่วย โปร่งแสงแล้วสีจะกลืนกับพื้นหลังฟ้า อ่านยาก) */
-.province-select {
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  background: rgba(255, 255, 255, 0.95);
-  color: #0f172a;
-  font-weight: 600;
-  font-size: 0.85rem;
-  padding: 6px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-.province-select option { background: #ffffff; color: #0f172a; }
-@media (prefers-color-scheme: dark) {
-  .province-select {
-    background: rgba(15, 23, 42, 0.92);
-    color: #f1f5f9;
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  .province-select option { background: #1e293b; color: #f1f5f9; }
-}
-.title-main { color: var(--page-text); }
-.title-sub { color: var(--page-text-muted); font-weight: 600; font-size: 1.1rem; }
-@media (max-width: 600px) {
-  h1 { font-size: 1.4rem; }
-  .title-sub { font-size: 0.85rem; display: block; }
-  /* header กลายเป็น 2 แถวคงที่บนจอแคบ (ดู AppHeader.vue) ต้องเผื่อ padding-top เพิ่มไม่งั้นเนื้อหา
-     ด้านบนโดนบัง */
-  .forecast-page { padding-top: 148px; }
-}
-
-.subtitle {
-  color: var(--page-text-muted);
-  font-size: 0.85rem;
-  margin-bottom: 20px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.subtitle :deep(a) { color: var(--accent); text-decoration: none; font-weight: 600; }
-.subtitle :deep(a):hover { text-decoration: underline; }
-.live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--good);
-  flex-shrink: 0;
-  animation: pulse-dot 2s ease-in-out infinite;
-}
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.4); }
-  50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(22, 163, 74, 0); }
-}
-
-/* Hero (การ์ด PM2.5 ปัจจุบัน เต็มความกว้าง) ต่อด้วยแถวการ์ดรอง 3 ใบเท่ากัน — แทนเลย์เอาต์ 2 คอลัมน์เดิม
-   (หลักซ้าย 1.6fr / รองขวา 1fr ซ้อนกัน 3 การ์ด) ที่ทำให้คอลัมน์รองสูงเกินคอลัมน์หลักไปมากหลังเพิ่ม
-   การ์ด Personalized Risk Score เป็นใบที่ 3 (CHANGELOG 66) — เลย์เอาต์ใหม่นี้ทุกคอลัมน์สูงตามเนื้อหา
-   ตัวเองเสมอ ไม่มีทางเกิดปัญหาสูงไม่เท่ากันแบบเดิมได้อีก */
-.dashboard-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 16px;
 }
-.dashboard-grid .card { margin-bottom: 0; }
-.grid-col-main {
-  display: flex;
-  align-items: center;
-  gap: 32px;
-  flex-wrap: wrap;
-}
-.grid-col-side {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
-  align-items: stretch;
-}
-.grid-col-side > .card {
-  height: 100%;
-}
-.grid-col-side > .card:nth-child(1) {
-  grid-column: 1;
-  grid-row: 1;
-}
-.grid-col-side > .card:nth-child(2) {
-  grid-column: 1;
-  grid-row: 2;
-}
-.grid-col-side > .card:nth-child(3) {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
-@media (max-width: 880px) {
-  .grid-col-side { grid-template-columns: 1fr; }
-  .grid-col-side > .card:nth-child(1),
-  .grid-col-side > .card:nth-child(2),
-  .grid-col-side > .card:nth-child(3) {
-    grid-column: auto;
-    grid-row: auto;
-  }
-  .grid-col-main { flex-direction: column; align-items: stretch; }
-}
+.page-title { color: var(--muted); font-weight: 600; font-size: 0.95rem; }
+/* มือถือ: header ด้านบนมี brand อยู่แล้ว ไม่ต้องซ้ำหัวข้อหน้าอีก */
+@media (max-width: 720px) { .page-title { display: none; } }
 
-.card {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
-  border-radius: 24px;
-  padding: 24px;
-  margin-bottom: 20px;
-  transition: box-shadow 0.3s ease, transform 0.3s ease;
-}
-.card:hover {
-  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.12), 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--card-border));
-  transform: translateY(-2px);
-}
-
-
-.current-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-.current-row {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-.mood-badge {
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, currentColor 16%, transparent);
-  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
-  transition: background 0.4s ease, border-color 0.4s ease;
-}
-.pm-main { min-width: 0; }
-.label-muted {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
-.eyebrow {
-  text-transform: uppercase;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-.pm-value-row {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-.pm-value {
-  font-size: 3.6rem;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.02em;
-}
-.pm-unit {
-  font-size: 1rem;
-  font-weight: 500;
-  color: var(--muted);
-}
-.status-chip {
+.province-chip {
   display: inline-flex;
   align-items: center;
-  white-space: nowrap;
-  padding: 7px 16px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px 0 12px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.province-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.zs-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-size: 0.85rem;
-  font-weight: 700;
-  background: color-mix(in srgb, currentColor 20%, var(--card-bg));
-  border: 1px solid color-mix(in srgb, currentColor 38%, transparent);
-  margin-left: auto;
-}
-.status-excellent { color: var(--excellent); }
-.status-good { color: var(--good); }
-.status-moderate { color: var(--moderate); }
-.status-unhealthy { color: var(--unhealthy); }
-.status-bad { color: var(--bad); }
-
-.updated-at {
+  background: var(--track);
   color: var(--muted);
-  font-size: 0.8rem;
-  margin-top: 8px;
 }
 
-.stat-tiles {
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.layout { display: flex; flex-direction: column; gap: 16px; }
+.col-primary, .col-secondary { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* เดสก์ท็อป: ซ้าย = ค่าปัจจุบัน+ช่วงที่ควรออก / ขวา = กราฟ+ความเสี่ยง+สรุป */
+@media (min-width: 960px) {
+  .layout { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 20px; align-items: start; }
+}
+
+/* banners */
+.banner {
   display: flex;
-  flex-shrink: 0;
-  padding-left: 28px;
-  border-left: 1px solid var(--border);
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid;
+  line-height: 1.55;
 }
-@media (max-width: 880px) {
-  .stat-tiles {
-    padding-left: 0;
-    border-left: none;
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-    width: 100%;
-  }
+.banner > svg { flex-shrink: 0; margin-top: 1px; }
+.banner-warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-ink); }
+.banner-info { background: var(--info-bg); border-color: var(--info-line); color: var(--info-ink); }
+.banner-title { font-weight: 600; font-size: 0.95rem; line-height: 1.4; }
+.banner-text { font-size: 0.9rem; }
+
+/* hero */
+.hero {
+  background: var(--hero-bg);
+  color: var(--hero-ink);
+  border-radius: 32px;
+  padding: 24px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: background 0.4s ease, color 0.4s ease;
 }
+.hero-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
+.hero-label { font-weight: 600; }
+.hero-updated { opacity: 0.85; }
+.estimate-tag {
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.pm-value-row { display: flex; align-items: flex-end; gap: 8px; line-height: 1; }
+.pm-value {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 6rem;
+  letter-spacing: -0.02em;
+}
+.pm-unit { font-size: 1rem; padding-bottom: 14px; opacity: 0.85; }
+.level-chip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 10px;
+  padding: 8px 16px 8px 10px;
+  border-radius: 24px;
+  background: var(--chip-bg);
+  color: var(--hero-ink);
+}
+.level-icon { flex-shrink: 0; }
+.status-excellent .level-icon { color: var(--excellent); }
+.status-good .level-icon { color: var(--good); }
+.status-moderate .level-icon { color: var(--moderate); }
+.status-unhealthy .level-icon { color: var(--unhealthy); }
+.status-bad .level-icon { color: var(--bad); }
+.level-text { font-size: 1.05rem; font-weight: 600; }
+
+.scale-track { position: relative; display: flex; gap: 4px; padding: 4px 0; }
+.scale-seg { flex: 1; height: 8px; border-radius: 4px; opacity: 0.35; }
+.scale-seg-active { opacity: 1; }
+.scale-marker {
+  position: absolute;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 3px solid var(--hero-ink);
+  transition: left 0.5s ease;
+}
+.scale-ends { display: flex; justify-content: space-between; font-size: 0.75rem; opacity: 0.85; margin-top: 4px; }
+
+.hero-advice { margin: 0; font-size: 0.95rem; line-height: 1.55; }
+.hero-note { margin: -6px 0 0; font-size: 0.75rem; opacity: 0.75; }
+
+.stat-tiles { display: flex; gap: 8px; padding-top: 4px; }
 .stat-tile {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
   gap: 4px;
-  padding: 0 16px;
-  text-align: center;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--chip-bg);
 }
-.stat-tile:not(:first-child) {
-  border-left: 1px solid var(--border);
-}
-.stat-tile-icon { flex-shrink: 0; }
-.icon-temp { color: #ef4444; }
-.icon-humidity { color: #3b82f6; }
-.icon-wind { color: #22c55e; }
-.stat-tile-value { font-size: 1.1rem; font-weight: 700; margin-top: 2px; }
-.stat-tile-label { color: var(--muted); font-size: 0.72rem; margin-top: 2px; }
+.stat-tile-value { font-size: 1.1rem; font-weight: 600; }
+.stat-tile-label { font-size: 0.75rem; opacity: 0.85; }
 
-@media (max-width: 480px) {
-  .pm-value { font-size: 2.6rem; }
-  .mood-badge { width: 48px; height: 48px; }
-  .status-chip { padding: 5px 12px; font-size: 0.78rem; margin-left: 0; }
-  .stat-tile-value { font-size: 0.95rem; }
-  .stat-tile-label { font-size: 0.62rem; }
+/* การ์ดทั่วไป */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 20px;
 }
+.card h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-bottom: 8px; }
+.card-head-sub { font-size: 0.8rem; color: var(--muted); }
+.card-caption { margin: 4px 0 12px; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
 
-.daily-summary-value {
-  font-size: 1.6rem;
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-.daily-summary-unit { font-size: 0.95rem; font-weight: 400; color: var(--muted); }
-.daily-summary-text {
-  font-size: 0.92rem;
-  line-height: 1.6;
-  color: var(--text);
-}
-
-.best-times-list {
-  display: flex;
-  gap: 8px;
-  flex-wrap: nowrap;
-}
-.best-time-row {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.95rem;
-  text-align: center;
-}
-.best-time-time,
-.best-time-pm {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-.rank-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  font-size: 0.75rem;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-.rank-badge.rank-1 { background: var(--accent); color: #fff; }
-.rank-badge.rank-2,
-.rank-badge.rank-3 { background: transparent; color: var(--text); border: 1.5px solid var(--border); }
-.best-time-time { font-weight: 600; }
-.best-time-pm { color: var(--muted); font-size: 0.85rem; }
-
-.activity-selector {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.activity-btn {
-  flex: 1;
-  padding: 8px 0;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-}
-.activity-btn:hover:not(.active) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.activity-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.activity-select-caption {
-  margin-bottom: 8px;
-}
-.risk-score-caption {
-  line-height: 1.4;
-}
-.risk-score-row {
+/* รายการอันดับ (ช่วงที่ควรออก / เหมาะกับกิจกรรม) */
+.best-list { list-style: none; margin: 0; padding: 0; }
+.best-row {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
 }
-.risk-score-value-wrap {
-  display: flex;
-  align-items: baseline;
-  gap: 3px;
-}
-.risk-score-value {
-  font-size: 2.4rem;
-  font-weight: 800;
-  line-height: 1;
-}
-.risk-score-unit {
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--muted);
-}
-/* label เล็กๆ นอก chip (ไม่ยัดเข้าไปในคำเดียวกับ chip กันข้อความล้น/ตัดคำแปลกๆ บนจอเล็ก) แยกให้ชัดว่า
-   ระดับนี้คือความเสี่ยงเฉพาะบุคคล ไม่ใช่ระดับ PM2.5 ดิบแบบการ์ดปัจจุบันด้านบน (ใช้คำ/สีชุดเดียวกัน
-   เพราะ reuse statusClass() เดิม แต่ความหมายคนละแกน อาจดูเหมือนขัดแย้งกันถ้าไม่มี label นี้กำกับ) */
-.risk-level-tag {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-  margin-left: auto;
-}
-.risk-level-label {
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.risk-score-advice {
-  margin-top: 8px;
-  margin-bottom: 4px;
-}
-.risk-score-sublabel {
-  margin-top: 16px;
-}
-
-.chart-header {
-  display: flex;
+.rank-badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 14px;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  flex-shrink: 0;
 }
-.chart-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  margin-bottom: 0;
-}
-.chart-subtitle {
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--muted);
-  margin-left: 4px;
-}
+.rank-1 { background: #e9b949; color: #3b2a00; }
+.rank-2 { background: #c9cdd3; color: #22262c; }
+.rank-3 { background: #d9a377; color: #3b1f08; }
+.best-time { flex: 1; font-size: 1.05rem; font-weight: 600; }
+.best-pm { display: inline-flex; align-items: center; font-size: 0.95rem; }
+.best-unit { color: var(--muted); font-size: 0.8rem; margin-left: 4px; }
 
+/* กราฟ */
+.chart-head { padding-bottom: 12px; }
+.chart-sub { margin: 2px 0 0; font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+.chart-card { padding-left: 0; padding-right: 0; }
+.chart-card .card-head, .chart-card .chart-foot, .chart-card .bar-detail { padding-left: 20px; padding-right: 20px; }
 .bars {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
-  height: 220px;
   overflow-x: auto;
-  padding-bottom: 4px;
+  scroll-snap-type: x proximity;
+  padding: 0 12px 4px;
+  -webkit-overflow-scrolling: touch;
 }
 .bar-col {
-  flex: 1 0 20px;
+  flex: 0 0 38px;
+  scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   align-items: center;
-  height: 100%;
-  min-width: 20px;
+  gap: 6px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+  position: relative;
 }
-.bar-value {
-  font-size: 0.65rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-  white-space: nowrap;
-}
+.bar-col.selected { background: var(--track); }
+.bar-col:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bar-value { font-size: 0.75rem; font-weight: 600; }
 .bar-track {
-  flex: 1 1 auto;
+  position: relative;
   width: 100%;
+  height: 150px;
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  position: relative;
 }
-.bar-range-cap {
+.bar, .bar-range-cap {
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  margin-left: -11px;
+  bottom: 0;
+  border-radius: 8px 8px 4px 4px;
+  transition: height 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.bar-range-cap { pointer-events: none; }
+.thr-line {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  border-radius: 8px 8px 0 0;
+  border-top: 1.5px dashed var(--muted);
+  opacity: 0.6;
   pointer-events: none;
-  z-index: 1;
-  transition: height 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.bar {
-  position: relative;
-  z-index: 2;
-  width: 100%;
-  border-radius: 8px 8px 0 0;
-  min-height: 2px;
-  transition: height 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+.bar-label { font-size: 0.7rem; color: var(--muted); }
+.fallback-mark {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--model-fallback);
 }
-.bar:hover {
-  opacity: 0.8;
-}
-.bar-label {
-  font-size: 0.6rem;
+
+.chart-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
-  margin-top: 6px;
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
+}
+.thr-legend { display: inline-flex; align-items: center; gap: 6px; }
+.thr-swatch { width: 18px; border-top: 1.5px dashed var(--muted); }
+
+.bar-detail {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  min-height: 92px;
+}
+.bar-detail-time { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+.bar-detail-main { display: flex; align-items: baseline; gap: 6px; margin: 2px 0 6px; }
+.bar-detail-value { font-family: var(--font-display); font-weight: 600; font-size: 1.8rem; line-height: 1.1; }
+.bar-detail-meta { display: flex; align-items: center; font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
+.bar-detail-empty { font-size: 0.9rem; color: var(--muted); padding-top: 8px; }
+
+/* ความเสี่ยงส่วนบุคคล */
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 16px;
+  background: var(--track);
+  margin-bottom: 16px;
+}
+.segmented-btn {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.segmented-btn.active { background: var(--ink); color: var(--card); }
+.segmented-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.risk-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.risk-score { display: inline-flex; align-items: baseline; gap: 4px; }
+.risk-score-value { font-family: var(--font-display); font-weight: 600; font-size: 2.75rem; line-height: 1; }
+.risk-score-unit { color: var(--muted); font-size: 0.95rem; }
+.risk-tag { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.risk-tag-label { font-size: 0.7rem; font-weight: 600; color: var(--muted); }
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: var(--track);
+  font-size: 0.9rem;
+  font-weight: 600;
   white-space: nowrap;
 }
-.model-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  margin-top: 6px;
-  flex-shrink: 0;
-}
+.risk-chip .dot { margin-right: 8px; }
+.risk-chip.status-excellent .dot { background: var(--excellent); }
+.risk-chip.status-good .dot { background: var(--good); }
+.risk-chip.status-moderate .dot { background: var(--moderate); }
+.risk-chip.status-unhealthy .dot { background: var(--unhealthy); }
+.risk-chip.status-bad .dot { background: var(--bad); }
+.risk-advice { margin: 12px 0 0; font-size: 0.92rem; line-height: 1.55; color: var(--muted); }
+.risk-sublabel { margin: 16px 0 4px; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 
-.chart-legend {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-  font-size: 0.72rem;
-  color: var(--muted);
-}
-.chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
-.chart-legend .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-
-.info-box {
-  background: rgba(37, 99, 235, 0.12);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(37, 99, 235, 0.35);
-  color: var(--text);
-  border-radius: 14px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
+/* สรุปวันนี้ */
+.summary-eyebrow { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.8rem; font-weight: 500; }
+.summary-value { font-family: var(--font-display); font-weight: 600; font-size: 2rem; line-height: 1.2; margin: 8px 0; }
+.summary-unit { font-family: var(--font-sans); font-weight: 400; font-size: 0.85rem; color: var(--muted); }
+.summary-text { margin: 0; font-size: 0.95rem; line-height: 1.6; }
 
 /* loading skeleton */
 .skeleton {
-  background: linear-gradient(90deg, var(--border) 25%, transparent 37%, var(--border) 63%);
+  background: linear-gradient(90deg, var(--line) 25%, transparent 37%, var(--line) 63%);
   background-size: 400% 100%;
   animation: shimmer 1.4s ease infinite;
   border-radius: 8px;
@@ -946,34 +842,29 @@ h1 {
   0% { background-position: 100% 50%; }
   100% { background-position: 0 50%; }
 }
-.skeleton-value { width: 120px; height: 48px; }
-.skeleton-badge { width: 90px; height: 28px; border-radius: 999px; }
-.skeleton-line { width: 180px; height: 14px; margin-top: 8px; }
-.skeleton-chart { width: 100%; height: 160px; }
+.skeleton-hero { height: 340px; border-radius: 32px; }
+.skeleton-line { width: 220px; height: 16px; margin: 6px 0; }
+.skeleton-chart { width: 100%; height: 200px; }
 
 /* error state */
 .error-box { text-align: center; padding: 32px 20px; }
-.error-box p { color: var(--muted); margin-bottom: 16px; }
+.error-box p { color: var(--muted); margin: 0 0 16px; }
 .retry-btn {
+  min-height: 44px;
   background: var(--accent);
   color: #fff;
   border: none;
-  padding: 10px 22px;
-  border-radius: 8px;
-  font-size: 0.9rem;
+  padding: 0 24px;
+  border-radius: 22px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
 }
 .retry-btn:hover { opacity: 0.9; }
 
-.warning-box {
-  background: rgba(220, 38, 38, 0.16);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(220, 38, 38, 0.45);
-  color: var(--text);
-  border-radius: 14px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
-  font-size: 0.85rem;
-  line-height: 1.5;
+@media (prefers-reduced-motion: reduce) {
+  .hero, .scale-marker, .bar, .bar-range-cap { transition: none; }
+  .skeleton { animation: none; }
 }
 </style>

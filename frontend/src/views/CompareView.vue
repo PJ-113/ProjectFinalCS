@@ -562,12 +562,12 @@ watch(() => provinceState.selected, () => {
   min-height: 100vh;
   background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-bottom) 100%);
   color: var(--text);
-  padding: 100px 16px 48px;
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 48px);
   position: relative;
   overflow-x: hidden;
 }
-@media (prefers-color-scheme: dark) {
-  .compare-page {
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] .compare-page {
     --card-bg: rgba(22, 25, 30, 0.55);
     --card-border: rgba(255, 255, 255, 0.1);
     --text: #f8fafc;
@@ -575,7 +575,7 @@ watch(() => provinceState.selected, () => {
     --border: rgba(255, 255, 255, 0.1);
     --select-bg: rgba(0, 0, 0, 0.35);
   }
-}
+
 
 .haze-decor {
   position: fixed;
@@ -633,14 +633,14 @@ h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 .province-select option { background: #ffffff; color: #0f172a; }
-@media (prefers-color-scheme: dark) {
-  .province-select {
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] .province-select {
     background: rgba(15, 23, 42, 0.92);
     color: #f1f5f9;
     border-color: rgba(255, 255, 255, 0.2);
   }
-  .province-select option { background: #1e293b; color: #f1f5f9; }
-}
+  :root[data-theme="dark"] .province-select option { background: #1e293b; color: #f1f5f9; }
+
 
 .card {
   background: var(--card-bg);
@@ -698,12 +698,6 @@ h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
   .hero-row { gap: 12px; }
   .hero-icon { width: 48px; height: 48px; }
   .hero-label { font-size: 1.3rem; }
-}
-
-@media (max-width: 600px) {
-  /* header กลายเป็น 2 แถวคงที่บนจอแคบ (ดู AppHeader.vue) ต้องเผื่อ padding-top เพิ่มไม่งั้นเนื้อหา
-     ด้านบนโดนบัง */
-  .compare-page { padding-top: 148px; }
 }
 
 .section-title {

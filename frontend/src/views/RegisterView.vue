@@ -1,10 +1,14 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ChevronDown, TriangleAlert } from '@lucide/vue'
 import { register } from '../auth'
 import { provinceState } from '../provinces'
+import ProvincePickerSheet from '../components/ProvincePickerSheet.vue'
 
 const RISK_GROUPS = ['ทั่วไป', 'เด็ก-ผู้สูงอายุ', 'มีโรคประจำตัว']
+// ป้ายบนปุ่ม segmented แบบย่อให้พอดีจอ 390px — ค่าที่ส่ง backend ยังเป็น RISK_GROUPS เดิมทุกตัว
+const RISK_GROUP_LABEL = { 'มีโรคประจำตัว': 'โรคประจำตัว' }
 
 const router = useRouter()
 
@@ -16,9 +20,13 @@ const age = ref('')
 const homeProvince = ref('')
 const errorMessage = ref('')
 const submitting = ref(false)
+const pickerOpen = ref(false)
 
 const passwordMismatch = computed(
   () => confirmPassword.value.length > 0 && password.value !== confirmPassword.value,
+)
+const homeProvinceName = computed(
+  () => provinceState.list.find((p) => p.province_en === homeProvince.value)?.province_th || '',
 )
 
 async function handleSubmit() {
@@ -47,188 +55,231 @@ async function handleSubmit() {
 
 <template>
   <div class="auth-page">
-    <form class="auth-card" @submit.prevent="handleSubmit">
-      <h1>สมัครสมาชิก</h1>
+    <div class="wrap">
+      <div class="intro">
+        <h1>สมัครสมาชิก</h1>
+        <p class="lead">ใช้เวลาไม่ถึงนาที ข้อมูลที่ไม่บังคับตั้งทีหลังได้ในหน้าโปรไฟล์</p>
+      </div>
 
-      <label>
-        อีเมล
-        <input v-model="email" type="email" required autocomplete="email" />
-      </label>
+      <form class="card form" @submit.prevent="handleSubmit">
+        <label class="field">
+          <span class="field-label">อีเมล</span>
+          <input v-model="email" type="email" required autocomplete="email" placeholder="name@example.com" />
+        </label>
 
-      <label>
-        รหัสผ่าน (อย่างน้อย 8 ตัวอักษร)
-        <input v-model="password" type="password" required minlength="8" autocomplete="new-password" />
-      </label>
+        <label class="field">
+          <span class="field-label">รหัสผ่าน</span>
+          <input v-model="password" type="password" required minlength="8" autocomplete="new-password" />
+          <span class="hint">อย่างน้อย 8 ตัวอักษร</span>
+        </label>
 
-      <label>
-        ยืนยันรหัสผ่าน
-        <input v-model="confirmPassword" type="password" required autocomplete="new-password" />
-      </label>
+        <label class="field">
+          <span class="field-label">ยืนยันรหัสผ่าน</span>
+          <input
+            v-model="confirmPassword"
+            type="password"
+            required
+            autocomplete="new-password"
+            :class="{ invalid: passwordMismatch }"
+            :aria-invalid="passwordMismatch"
+          />
+          <span v-if="passwordMismatch" class="hint hint-error" role="alert">รหัสผ่านไม่ตรงกัน</span>
+        </label>
 
-      <label>
-        กลุ่มความเสี่ยง (ไม่บังคับ)
-        <select v-model="riskGroup">
-          <option v-for="g in RISK_GROUPS" :key="g" :value="g">{{ g }}</option>
-        </select>
-      </label>
+        <div class="field" role="radiogroup" aria-label="กลุ่มความเสี่ยง">
+          <span class="field-label">กลุ่มความเสี่ยง <span class="optional">(ไม่บังคับ)</span></span>
+          <div class="segmented">
+            <button
+              v-for="g in RISK_GROUPS"
+              :key="g"
+              type="button"
+              role="radio"
+              class="segmented-btn"
+              :class="{ active: riskGroup === g }"
+              :aria-checked="riskGroup === g"
+              @click="riskGroup = g"
+            >{{ RISK_GROUP_LABEL[g] || g }}</button>
+          </div>
+        </div>
 
-      <label>
-        อายุ (ไม่บังคับ)
-        <input v-model="age" type="number" min="1" max="120" />
-      </label>
+        <label class="field">
+          <span class="field-label">อายุ <span class="optional">(ไม่บังคับ)</span></span>
+          <input v-model="age" type="number" min="1" max="120" inputmode="numeric" placeholder="เช่น 35" />
+        </label>
 
-      <label>
-        จังหวัดหลัก (ไม่บังคับ — ตั้งทีหลังในหน้าโปรไฟล์ได้ ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้)
-        <select v-model="homeProvince">
-          <option value="">-- ไม่ระบุ --</option>
-          <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
-            {{ p.province_th }}{{ p.is_zero_shot ? ' (zero-shot)' : '' }}
-          </option>
-        </select>
-      </label>
+        <div class="field">
+          <span class="field-label" id="reg-home-province-label">
+            จังหวัดหลัก <span class="optional">(ไม่บังคับ)</span>
+          </span>
+          <button
+            type="button"
+            class="field-btn"
+            aria-haspopup="dialog"
+            aria-labelledby="reg-home-province-label"
+            @click="pickerOpen = true"
+          >
+            <span :class="{ placeholder: !homeProvinceName }">{{ homeProvinceName || 'เลือกจังหวัด' }}</span>
+            <ChevronDown :size="20" :stroke-width="2" aria-hidden="true" />
+          </button>
+          <span class="hint">ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้ ตั้งทีหลังได้</span>
+        </div>
 
-      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
+        <p v-if="errorMessage" class="msg msg-error" role="alert">
+          <TriangleAlert :size="18" :stroke-width="2" aria-hidden="true" />{{ errorMessage }}
+        </p>
 
-      <button type="submit" :disabled="submitting">{{ submitting ? 'กำลังสมัคร...' : 'สมัครสมาชิก' }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="submitting">
+          {{ submitting ? 'กำลังสมัคร...' : 'สมัครสมาชิก' }}
+        </button>
+      </form>
 
       <p class="switch-link">
         มีบัญชีอยู่แล้ว? <router-link to="/login">เข้าสู่ระบบ</router-link>
       </p>
-    </form>
+    </div>
+
+    <ProvincePickerSheet
+      :open="pickerOpen"
+      :selected="homeProvince"
+      allow-none
+      @select="homeProvince = $event"
+      @close="pickerOpen = false"
+    />
   </div>
 </template>
 
 <style scoped>
+/* โทเคนสีธีมใหม่มาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่/โปรไฟล์) */
 .auth-page {
   min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--auth-bg);
-  padding: 100px 16px 24px;
-  position: relative;
-  overflow: hidden;
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
+  background: var(--ground);
+  color: var(--ink);
 }
 
-.auth-page::before {
-  content: "";
-  position: absolute;
-  top: -10%;
-  left: -10%;
-  width: 50vw;
-  height: 50vw;
-  background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, rgba(255,255,255,0) 70%);
-  border-radius: 50%;
-  z-index: 0;
-}
-
-.auth-card {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  max-width: 400px;
-  background: var(--auth-card-bg);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--auth-border);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border-radius: 20px;
-  padding: 32px;
+.wrap {
+  max-width: 440px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  color: var(--auth-text);
 }
 
-h1 {
-  font-size: 1.6rem;
-  font-weight: 700;
-  margin: 0 0 8px;
-  text-align: center;
+.intro { padding: 8px 4px 0; }
+h1 { font-size: 1.9rem; font-weight: 700; line-height: 1.25; margin: 0; }
+.lead { margin: 4px 0 0; font-size: 0.95rem; line-height: 1.55; color: var(--muted); }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 20px;
+}
+.form { display: flex; flex-direction: column; gap: 16px; }
+
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field-label { font-size: 0.9rem; font-weight: 600; color: var(--ink); }
+.optional { font-weight: 400; color: var(--muted); }
+.hint { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+.hint-error { color: var(--danger); }
+
+input {
+  min-height: 52px;
+  padding: 0 16px;
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1rem; /* >=16px กัน iOS zoom เข้าช่องพิมพ์ */
+}
+input.invalid { border-color: var(--danger); }
+input:focus-visible,
+.field-btn:focus-visible,
+.segmented-btn:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-label {
+.field-btn {
+  min-height: 52px;
+  padding: 0 16px;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: var(--auth-muted);
-}
-
-input,
-select {
-  padding: 12px 16px;
-  border: 1px solid var(--auth-border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.5);
-  color: var(--auth-text);
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
   font-size: 1rem;
-  transition: all 0.2s ease;
+  text-align: left;
+  cursor: pointer;
 }
+.field-btn .placeholder { color: var(--muted); }
 
-input:focus, select:focus {
-  outline: none;
-  border-color: var(--auth-accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
-  background: var(--auth-card-bg);
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 16px;
+  background: var(--track);
 }
-
-@media (prefers-color-scheme: dark) {
-  input, select { background: rgba(0, 0, 0, 0.2); }
-  input:focus, select:focus { background: rgba(0, 0, 0, 0.4); }
-}
-
-button[type='submit'] {
-  margin-top: 8px;
-  padding: 12px;
-  border: none;
+.segmented-btn {
+  flex: 1;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--auth-accent), var(--auth-accent-hover));
-  color: #fff;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.segmented-btn.active { background: var(--ink); color: var(--card); }
+
+.msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.msg > svg { flex-shrink: 0; margin-top: 2px; }
+.msg-error { background: var(--warn-bg); color: var(--danger); border: 1px solid var(--danger-line); }
+
+.btn {
+  min-height: 52px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 26px;
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--card);
+  font-family: inherit;
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s ease;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
+.btn:disabled { opacity: 0.6; cursor: default; }
 
-button[type='submit']:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5);
-}
+.switch-link { text-align: center; margin: 0; padding: 4px 0; font-size: 0.95rem; color: var(--muted); }
+.switch-link a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.switch-link a:hover { text-decoration: underline; }
 
-button[type='submit']:disabled {
-  opacity: 0.7;
-  cursor: default;
-  transform: none;
-  box-shadow: none;
-}
-
-.error-text {
-  color: var(--auth-error);
-  font-size: 0.9rem;
-  background: rgba(239, 68, 68, 0.1);
-  padding: 10px;
-  border-radius: 8px;
-  margin: 0;
-  text-align: center;
-}
-
-.switch-link {
-  text-align: center;
-  font-size: 0.9rem;
-  color: var(--auth-muted);
-  margin: 8px 0 0;
-}
-
-.switch-link a {
-  color: var(--auth-accent);
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.switch-link a:hover {
-  text-decoration: underline;
+/* เดสก์ท็อป: จัดกล่องฟอร์มให้อยู่กึ่งกลางหน้าจอทั้งแนวตั้งและแนวนอน (margin: auto ใน flex column —
+   ถ้าเนื้อหาสูงกว่าจอจะตกลงเป็นชิดบนเองโดยไม่ถูกตัด) มือถือคงชิดบนตามเดิม */
+@media (min-width: 721px) {
+  .auth-page { display: flex; flex-direction: column; }
+  .wrap { margin: auto; width: 100%; }
 }
 </style>

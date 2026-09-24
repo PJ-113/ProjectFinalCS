@@ -52,3 +52,9 @@ data/fire_wide_candidate_features_*.csv
 # log ชั่วคราวจากการรันสคริปต์
 models/_log_*.txt
 data/_log_*.txt
+
+# telemetry ความหน่วงของ reading ล่าสุด (สะสมต่อเนื่อง ไม่ commit — ดู scripts/summarize_target_latency.py)
+models/target_latency_scheduler_log.csv
+models/target_data_latency_log.csv
+# cache ซีรีส์ OpenAQ ล่าสุดที่ดึงสำเร็จ (ทางสำรองรอดการรีสตาร์ต — CHANGELOG 172)
+runtime_cache/

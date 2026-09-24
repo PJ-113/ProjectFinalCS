@@ -11,8 +11,8 @@
   --auth-error: #ef4444;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+  :root[data-theme="dark"] {
     --auth-bg: #0f172a;
     --auth-card-bg: rgba(30, 41, 59, 0.6);
     --auth-text: #f1f5f9;
@@ -22,4 +22,4 @@
     --auth-border: rgba(255, 255, 255, 0.1);
     --auth-error: #f87171;
   }
-}
+

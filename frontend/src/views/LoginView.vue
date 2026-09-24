@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { TriangleAlert } from '@lucide/vue'
 import { login } from '../auth'
 
 const route = useRoute()
@@ -27,161 +28,125 @@ async function handleSubmit() {
 
 <template>
   <div class="auth-page">
-    <form class="auth-card" @submit.prevent="handleSubmit">
-      <h1>เข้าสู่ระบบ</h1>
+    <div class="wrap">
+      <div class="intro">
+        <h1>เข้าสู่ระบบ</h1>
+        <p class="lead">รับการแจ้งเตือนฝุ่นของจังหวัดหลัก และปรับคำแนะนำให้ตรงกับกลุ่มเสี่ยงของคุณ</p>
+      </div>
 
-      <label>
-        อีเมล
-        <input v-model="email" type="email" required autocomplete="email" />
-      </label>
+      <form class="card form" @submit.prevent="handleSubmit">
+        <label class="field">
+          <span class="field-label">อีเมล</span>
+          <input v-model="email" type="email" required autocomplete="email" placeholder="name@example.com" />
+        </label>
 
-      <label>
-        รหัสผ่าน
-        <input v-model="password" type="password" required autocomplete="current-password" />
-      </label>
+        <label class="field">
+          <span class="field-label">รหัสผ่าน</span>
+          <input v-model="password" type="password" required autocomplete="current-password" />
+        </label>
 
-      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
+        <p v-if="errorMessage" class="msg msg-error" role="alert">
+          <TriangleAlert :size="18" :stroke-width="2" aria-hidden="true" />{{ errorMessage }}
+        </p>
 
-      <button type="submit" :disabled="submitting">{{ submitting ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ' }}</button>
+        <button type="submit" class="btn btn-primary" :disabled="submitting">
+          {{ submitting ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ' }}
+        </button>
+      </form>
 
       <p class="switch-link">
         ยังไม่มีบัญชี? <router-link to="/register">สมัครสมาชิก</router-link>
       </p>
-    </form>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* โทเคนสีธีมใหม่มาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่/โปรไฟล์) */
 .auth-page {
   min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--auth-bg);
-  padding: 100px 16px 24px;
-  position: relative;
-  overflow: hidden;
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
+  background: var(--ground);
+  color: var(--ink);
 }
 
-/* Subtle background glowing orb effect */
-.auth-page::before {
-  content: "";
-  position: absolute;
-  top: -10%;
-  left: -10%;
-  width: 50vw;
-  height: 50vw;
-  background: radial-gradient(circle, rgba(59,130,246,0.15) 0%, rgba(255,255,255,0) 70%);
-  border-radius: 50%;
-  z-index: 0;
-}
-
-.auth-card {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  max-width: 400px;
-  background: var(--auth-card-bg);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid var(--auth-border);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
-  border-radius: 20px;
-  padding: 32px;
+.wrap {
+  max-width: 440px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  color: var(--auth-text);
 }
 
-h1 {
-  font-size: 1.6rem;
-  font-weight: 700;
-  margin: 0 0 8px;
-  text-align: center;
-}
+.intro { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px 0; }
+h1 { font-size: 1.9rem; font-weight: 700; line-height: 1.25; margin: 0; }
+.lead { margin: 0; font-size: 0.95rem; line-height: 1.55; color: var(--muted); }
 
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: var(--auth-muted);
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 20px;
 }
+.form { display: flex; flex-direction: column; gap: 16px; }
+
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field-label { font-size: 0.9rem; font-weight: 600; color: var(--ink); }
 
 input {
-  padding: 12px 16px;
-  border: 1px solid var(--auth-border);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.5);
-  color: var(--auth-text);
-  font-size: 1rem;
-  transition: all 0.2s ease;
+  min-height: 52px;
+  padding: 0 16px;
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1rem; /* >=16px กัน iOS zoom เข้าช่องพิมพ์ */
+}
+input:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
-input:focus {
-  outline: none;
-  border-color: var(--auth-accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
-  background: var(--auth-card-bg);
+.msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
+.msg > svg { flex-shrink: 0; margin-top: 2px; }
+.msg-error { background: var(--warn-bg); color: var(--danger); border: 1px solid var(--danger-line); }
 
-@media (prefers-color-scheme: dark) {
-  input { background: rgba(0, 0, 0, 0.2); }
-  input:focus { background: rgba(0, 0, 0, 0.4); }
-}
-
-button[type='submit'] {
-  margin-top: 8px;
-  padding: 12px;
-  border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--auth-accent), var(--auth-accent-hover));
-  color: #fff;
+.btn {
+  min-height: 52px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 26px;
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--card);
+  font-family: inherit;
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s ease;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
+.btn:disabled { opacity: 0.6; cursor: default; }
 
-button[type='submit']:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5);
-}
+.switch-link { text-align: center; margin: 0; padding: 4px 0; font-size: 0.95rem; color: var(--muted); }
+.switch-link a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.switch-link a:hover { text-decoration: underline; }
 
-button[type='submit']:disabled {
-  opacity: 0.7;
-  cursor: default;
-  transform: none;
-  box-shadow: none;
-}
-
-.error-text {
-  color: var(--auth-error);
-  font-size: 0.9rem;
-  background: rgba(239, 68, 68, 0.1);
-  padding: 10px;
-  border-radius: 8px;
-  margin: 0;
-  text-align: center;
-}
-
-.switch-link {
-  text-align: center;
-  font-size: 0.9rem;
-  color: var(--auth-muted);
-  margin: 8px 0 0;
-}
-
-.switch-link a {
-  color: var(--auth-accent);
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.switch-link a:hover {
-  text-decoration: underline;
+/* เดสก์ท็อป: จัดกล่องฟอร์มให้อยู่กึ่งกลางหน้าจอทั้งแนวตั้งและแนวนอน (margin: auto ใน flex column —
+   ถ้าเนื้อหาสูงกว่าจอจะตกลงเป็นชิดบนเองโดยไม่ถูกตัด) มือถือคงชิดบนตามเดิม */
+@media (min-width: 721px) {
+  .auth-page { display: flex; flex-direction: column; }
+  .wrap { margin: auto; width: 100%; }
 }
 </style>
