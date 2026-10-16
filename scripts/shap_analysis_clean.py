@@ -16,7 +16,7 @@ SHAP analysis (proposal 4.1.3 / 5.3.4) — เดิมทำกับโมเ�
 2. Meteorological plausibility check: ตั้งสมมติฐานทิศทางไว้ก่อนต่อ feature อุตุนิยมวิทยาหลัก
    (precipitation, pressure, wind_speed) แล้วเช็คว่า SHAP value จริงไปทิศทางเดียวกับสมมติฐานไหม
 3. get_shap_explanation(): ฟังก์ชัน reusable สำหรับอธิบายค่าพยากรณ์ "จุดเดียว" ตามโมเดลที่
-   Dynamic Routing เลือกใช้จริง (model_used ใน app.py: "lightgbm_pooled"/"xgboost_pooled"/
+   Dynamic Routing เลือกใช้จริง (model_used ใน app.py: "lightgbm_pooled_v3"/"xgboost_pooled_v3"/
    "naive_fallback") — import ได้โดยไม่ trigger batch analysis
 
 ยังไม่ integrate เข้า app.py/get_forecast() — เป็นขั้นตอนแยกต่างหากทีหลัง
@@ -68,7 +68,7 @@ FEATURE_COLS = _lgb_package["feature_cols"]
 assert FEATURE_COLS == _xgb_package["feature_cols"], \
     "feature_cols ของ LightGBM กับ XGBoost ต้องตรงกันเป๊ะ (เทรนจาก FEATURE_COLS เดียวกันใน train_multiprovince_models.py)"
 
-MODEL_PACKAGES = {"lightgbm_pooled": _lgb_package, "xgboost_pooled": _xgb_package}
+MODEL_PACKAGES = {"lightgbm_pooled_v3": _lgb_package, "xgboost_pooled_v3": _xgb_package}
 
 # cache explainer ต่อ (model_name, horizon) เพราะสร้าง TreeExplainer ใหม่ทุกครั้งไม่จำเป็น
 _EXPLAINER_CACHE = {}
@@ -93,7 +93,7 @@ def _load_test_split():
 def get_shap_explanation(model_used, horizon, feature_row):
     """คืนอิทธิพลของแต่ละ feature ต่อค่าพยากรณ์ P50 ณ จุดเดียว (feature_row) โดยใช้ SHAP explainer
     ของโมเดลที่ Dynamic Routing เลือกใช้จริง (model_used จาก select_model() ใน app.py:
-    "lightgbm_pooled"/"xgboost_pooled"/"naive_fallback")
+    "lightgbm_pooled_v3"/"xgboost_pooled_v3"/"naive_fallback")
 
     feature_row: DataFrame แถวเดียว มีคอลัมน์ตรงกับ FEATURE_COLS (รูปแบบเดียวกับที่
     build_feature_row() ใน app.py คืนกลับมา)
@@ -156,7 +156,7 @@ def _run_batch_analysis():
     test = _load_test_split()
     print(f"test rows (split เดียวกับ task A/D): {len(test)}")
 
-    shap_values_by_horizon = {"lightgbm_pooled": {}, "xgboost_pooled": {}}
+    shap_values_by_horizon = {"lightgbm_pooled_v3": {}, "xgboost_pooled_v3": {}}
     top_features_rows = []
 
     for model_name, package in MODEL_PACKAGES.items():
@@ -197,8 +197,8 @@ def _run_batch_analysis():
 
     print("\n=== เทียบ top features LightGBM vs XGBoost ต่อ horizon ===")
     for h in REP_HORIZONS:
-        lgb_top = set(top_df[(top_df.model_name == "lightgbm_pooled") & (top_df.horizon == h)]["feature"])
-        xgb_top = set(top_df[(top_df.model_name == "xgboost_pooled") & (top_df.horizon == h)]["feature"])
+        lgb_top = set(top_df[(top_df.model_name == "lightgbm_pooled_v3") & (top_df.horizon == h)]["feature"])
+        xgb_top = set(top_df[(top_df.model_name == "xgboost_pooled_v3") & (top_df.horizon == h)]["feature"])
         overlap = lgb_top & xgb_top
         print(f"\nt+{h}: overlap {len(overlap)}/{TOP_N} -> {sorted(overlap)}")
         print(f"   LightGBM only: {sorted(lgb_top - xgb_top)}")
@@ -207,7 +207,7 @@ def _run_batch_analysis():
     # self-test: get_shap_explanation() ต้องให้ค่าเรียงลำดับตรงกับ mean_abs_shap ของ batch
     print("\n=== self-test: get_shap_explanation() เทียบ naive_fallback -> None ===")
     sample_row = test.dropna(subset=["pm25_t+1"])[FEATURE_COLS].iloc[[-1]]
-    for model_name in ("lightgbm_pooled", "xgboost_pooled"):
+    for model_name in ("lightgbm_pooled_v3", "xgboost_pooled_v3"):
         pairs = get_shap_explanation(model_name, 1, sample_row)
         top3 = [f"{feat}={val:+.3f}" for feat, val in pairs[:3]]
         print(f"  {model_name} t+1 (จุดตัวอย่างสุดท้ายใน test set): top3 = {top3}")

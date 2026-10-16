@@ -1,0 +1,91 @@
+@startuml PM25_Forecast_ERDiagram
+' ============================================================================
+' ER Diagram — ระบบพยากรณ์ PM2.5 ล่วงหน้า 24 ชม. 20 จังหวัดภาคตะวันออกเฉียงเหนือ
+' PM2.5 24-Hour Forecast & Health Advisory System (20 Isaan provinces)
+'
+' หมายเหตุ: diagram นี้สะท้อนสคีมาจริงที่ยืนยันจาก CREATE TABLE และ migration ใน app.py
+'          (init_db, migrate_daily_nlg_risk_group, migrate_province_column,
+'          migrate_prediction_interval_columns, migrate_users_home_province)
+'          ไม่ใช่สคีมาจากข้อเสนอโครงงานเดิม (docs/database_schema.md) ซึ่งไม่ตรงกับของจริงอีกต่อไป
+'          (ไม่รวมคอลัมน์ role จาก migrate_users_role — เป็นกลไกภายในสำหรับผู้ดูแลระบบ
+'          ซึ่งไม่ได้อยู่ใน scope ของเล่มนี้ เช่นเดียวกับที่ไม่แสดง use case ของ Admin)
+'          ไม่มีความสัมพันธ์แบบ Foreign Key ระดับฐานข้อมูลเลยสักคู่ เส้นประที่แสดงคือความสัมพันธ์
+'          เชิงตรรกะที่เกิดจริงในโค้ด: PREDICTION_LOG <-> NOTIFICATION_LOG join กันตอน query จริง
+'          (/api/notifications: predicted_at_utc = recorded_at_utc + province) ส่วน PREDICTION_LOG
+'          <-> DAILY_NLG_LOG ไม่มี query ร่วมกัน แต่มาจาก forecast ชุดเดียวกันในคำขอเดียวกัน
+'          USERS ไม่เกี่ยวข้องกับตารางใดเลยแม้แต่ทางอ้อม จึงปล่อยโดดเดี่ยวตามจริง
+' Render: VSCode PlantUML extension / plantuml.com / `plantuml er_diagram.puml`
+' ============================================================================
+
+skinparam defaultFontName "Tahoma"
+skinparam shadowing false
+skinparam linetype ortho
+skinparam class {
+  BackgroundColor #ffffff
+  BorderColor #c9b26a
+  HeaderBackgroundColor #f3e7c4
+  FontColor #2b3744
+}
+
+entity "USERS" as users {
+  * id : SERIAL <<PK>>
+  --
+  email : TEXT <<unique>>
+  password_hash : TEXT
+  risk_group : TEXT
+  age : INTEGER
+  created_at : TEXT
+  home_province : TEXT (nullable)
+}
+
+entity "PREDICTION_LOG" as prediction_log {
+  * id : SERIAL <<PK>>
+  --
+  predicted_at_utc : TEXT
+  target_time_utc : TEXT
+  horizon : INTEGER
+  predicted_pm25 : FLOAT
+  actual_pm25 : FLOAT
+  model_used : TEXT
+  source : TEXT
+  actual_pm25_calibrated : FLOAT
+  province : TEXT
+  pm25_lo : FLOAT (nullable)
+  pm25_hi : FLOAT (nullable)
+  ..
+  UNIQUE (predicted_at_utc, horizon, province)
+}
+
+entity "DAILY_NLG_LOG" as daily_nlg_log {
+  * id : SERIAL <<PK>>
+  --
+  date_thai : TEXT
+  daily_avg_pm25 : FLOAT
+  explanation_text : TEXT
+  used_fallback : BOOLEAN
+  generated_at_utc : TEXT
+  risk_group : TEXT
+  province : TEXT
+  ..
+  UNIQUE (date_thai, risk_group, province)
+}
+
+entity "NOTIFICATION_LOG" as notification_log {
+  * id : SERIAL <<PK>>
+  --
+  recorded_at_utc : TEXT
+  latest_pm25 : FLOAT
+  province : TEXT
+  ..
+  UNIQUE (recorded_at_utc, province)
+}
+
+' ไม่มี Foreign Key ระดับฐานข้อมูลเลยสักคู่ เส้นประด้านล่างคือความสัมพันธ์เชิงตรรกะที่เกิดจริง
+' ในโค้ด (รายละเอียดอยู่ในหมายเหตุหัวไฟล์) ใช้เส้นสไตล์เดียวกันทั้งหมดตามธรรมเนียม ER diagram ทั่วไป
+prediction_log ..> notification_log
+prediction_log ..> daily_nlg_log
+
+' จัดวางตำแหน่งให้อยู่ใกล้กันเฉยๆ เพื่อความสวยงามของผังภาพ ไม่ใช่ความสัมพันธ์เชิงโครงสร้าง
+users -[hidden]right- prediction_log
+
+@enduml

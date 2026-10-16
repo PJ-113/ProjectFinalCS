@@ -62,6 +62,20 @@ export async function fetchForecast() {
   }
 }
 
+// เบากว่า fetchForecast() มาก — ไม่ผ่าน feature engineering/model inference/log ใดๆ แค่ค่า PM2.5
+// ล่าสุดของจังหวัดเดียว ใช้สำหรับ poll รีเฟรชการ์ด "ปัจจุบัน" เป็นระยะโดยไม่ยิง /api/forecast ซ้ำถี่ๆ
+// ไม่ throw และไม่แตะ notificationState (ตัวแปรร่วมกับกระดิ่ง/แบนเนอร์เตือน) — คืน null เงียบๆ เมื่อพลาด
+// ให้ caller (ForecastView) ตัดสินใจเองว่าจะคงค่าเดิมไว้หรือทำอะไรต่อ
+export async function fetchCurrentPm25(province) {
+  try {
+    const res = await fetch(`/api/current_pm25?province=${province}`)
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
 // เหมือน fetchForecast() แต่สำหรับ "จังหวัดหลัก" ของ user (home_province) แยกต่างหาก — ใช้
 // /api/notifications/status แทน /api/forecast เพราะถูกกว่ามาก (อ่านจาก notification_log/
 // prediction_log ล่าสุด ไม่เรียก live API/inference ซ้ำ) เหมาะกับกระดิ่งที่แค่ต้องรู้สถานะเสี่ยง
@@ -178,9 +192,46 @@ export function summarizeHistoryItem(item) {
   return { headline, ranges, note }
 }
 
+// เปิดไว้ชั่วคราวเพื่อโชว์อาจารย์ (ผู้ใช้สั่ง 2026-10-04) — ของจริงตอนนี้ว่างเปล่าเพราะ PM2.5 ยังไม่เคย
+// ถึงเกณฑ์แจ้งเตือนในข้อมูลที่มี (ตรวจ DB แล้ว ไม่ใช่บั๊ก) ตั้ง false เพื่อกลับไปดึงข้อมูลจริงจาก API
+// เหมือนเดิม — กระทบทั้ง dropdown กระดิ่งใน AppHeader.vue และหน้า /notifications เพราะทั้งคู่อ่านจาก
+// notificationHistory.items ตัวเดียวกัน
+const SAMPLE_NOTIFICATION_HISTORY = true
+
+function hoursAgo(h) {
+  return new Date(Date.now() - h * 3600000)
+}
+function daysAgo(d, hour) {
+  const dt = new Date()
+  dt.setDate(dt.getDate() - d)
+  dt.setHours(hour, 0, 0, 0)
+  return dt
+}
+function fmtThaiDateTime(date) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`
+}
+
+// รูปแบบเดียวกับที่ /api/notifications ส่งจริง (recorded_at_th/latest_pm25/risk_horizons/
+// fallback_horizons) ครอบคลุมทุกเคสที่ summarizeHistoryItem() แตกกิ่งจริง (เสี่ยงตลอด 24 ชม.,
+// เสี่ยงบางช่วง, ฝุ่นสูง ณ ตอนนั้น, ข้อมูลไม่ครบ/ใช้ค่าพยากรณ์ชั่วคราว)
+function sampleHistoryItems() {
+  return [
+    { recorded_at_th: fmtThaiDateTime(hoursAgo(2)), latest_pm25: 45.2, risk_horizons: Array.from({ length: 24 }, (_, i) => i + 1), fallback_horizons: [] },
+    { recorded_at_th: fmtThaiDateTime(hoursAgo(5)), latest_pm25: 38.1, risk_horizons: [13, 14, 15, 16, 20, 21], fallback_horizons: [] },
+    { recorded_at_th: fmtThaiDateTime(daysAgo(1, 14)), latest_pm25: 52.0, risk_horizons: [], fallback_horizons: [] },
+    { recorded_at_th: fmtThaiDateTime(daysAgo(3, 7)), latest_pm25: 40.5, risk_horizons: [1, 2, 3], fallback_horizons: [1, 2, 3] },
+  ]
+}
+
 // province: ไม่ส่งมา = ใช้ provinceState.selected เหมือนเดิม (guest/ยังไม่ตั้งจังหวัดหลัก) — ส่งมา
 // เพื่อให้ตรงกับจังหวัดที่กระดิ่ง (badge สถานะ) กำลังเฝ้าอยู่จริง เวลามี home_province (AppHeader.vue)
 export async function fetchNotificationHistory(limit = 5, province = provinceState.selected) {
+  if (SAMPLE_NOTIFICATION_HISTORY) {
+    notificationHistory.items = sampleHistoryItems().slice(0, limit)
+    notificationHistory.status = 'ready'
+    return
+  }
   notificationHistory.status = 'loading'
   try {
     const res = await fetch(`/api/notifications?limit=${limit}&province=${province}`)

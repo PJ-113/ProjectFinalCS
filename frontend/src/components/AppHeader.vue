@@ -91,9 +91,9 @@ const historyItems = computed(() =>
       <router-link to="/" class="brand">
         PM2.5 Forecast
       </router-link>
-      <router-link to="/" class="nav-link nav-tab desktop-only">พยากรณ์</router-link>
-      <router-link v-if="SHOW_COMPARE && isAdmin()" to="/compare" class="nav-link nav-tab desktop-only">เปรียบเทียบ</router-link>
-      <router-link v-if="SHOW_MAP" to="/map" class="nav-link nav-tab desktop-only">แผนที่</router-link>
+      <router-link to="/" class="nav-link nav-tab desktop-only">Dashboard</router-link>
+      <router-link v-if="SHOW_COMPARE && isAdmin()" to="/compare" class="nav-link nav-tab desktop-only">Compare</router-link>
+      <router-link v-if="SHOW_MAP" to="/map" class="nav-link nav-tab desktop-only">Maps</router-link>
     </nav>
     <nav v-if="SHOW_EXTRA_FEATURES" class="app-header-auth">
       <button

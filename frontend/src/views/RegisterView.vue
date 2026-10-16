@@ -121,7 +121,7 @@ async function handleSubmit() {
             <span :class="{ placeholder: !homeProvinceName }">{{ homeProvinceName || 'เลือกจังหวัด' }}</span>
             <ChevronDown :size="20" :stroke-width="2" aria-hidden="true" />
           </button>
-          <span class="hint">ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้ ตั้งทีหลังได้</span>
+          <!--<span class="hint">ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้ ตั้งทีหลังได้</span>-->
         </div>
 
         <p v-if="errorMessage" class="msg msg-error" role="alert">

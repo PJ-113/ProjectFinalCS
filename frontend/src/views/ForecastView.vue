@@ -1,18 +1,49 @@
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import {
   Laugh, Smile, Meh, Frown, Angry, Thermometer, Droplet, Wind,
   MapPin, ChevronDown, TriangleAlert, Info, Sparkles,
 } from "@lucide/vue";
-import { fetchForecast, buildWarningMessage, formatCardTime } from "../notifications";
+import { fetchForecast, fetchCurrentPm25, buildWarningMessage, formatCardTime } from "../notifications";
 import { riskScoreState, setActivity, ACTIVITY_LEVELS, computeRiskScore, riskScoreAdvice } from "../riskScore";
 import { provinceState, selectProvince } from "../provinces";
 import { statusClass, severityVar, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
 import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
 
-// ซ่อนการ์ดช่วงที่ควรออกไปข้างนอก / ความเสี่ยงส่วนบุคคล / สรุปวันนี้ไว้ก่อน (ผู้ใช้สั่ง 2026-09-24) —
-// โค้ดและ logic ยังอยู่ครบ แค่เปลี่ยนเป็น true เพื่อเปิดกลับมา
-const SHOW_EXTRA_CARDS = false;
+// 3 การ์ดนี้กลับไปใช้ข้อมูลจริงจาก API แล้ว (ผู้ใช้สั่ง — เดิมเคยเปิดด้วยข้อมูลตัวอย่างคงที่ชั่วคราวเพื่อ
+// ถ่ายภาพ/โชว์เฉยๆ ตั้งแต่ 2026-10-02) ต้องการกลับไปโชว์ sample อีก: ตั้ง SAMPLE_EXTRA_CARDS_DATA = true
+// ต้องการซ่อนการ์ดทั้งหมด: ตั้ง SHOW_EXTRA_CARDS = false (โค้ด/logic ของจริงยังอยู่ครบไม่ถูกลบ)
+const SHOW_EXTRA_CARDS = true;
+const SAMPLE_EXTRA_CARDS_DATA = false;
+
+const SAMPLE_BEST_TIMES = [
+  { time: "05:00", pm25: 11 },
+  { time: "04:00", pm25: 19 },
+  { time: "18:00", pm25: 27 },
+];
+// ค่าตัวอย่างคำนวณจากสูตรจริง (compute_risk_score() ใน app.py) เอง ไม่ได้เดา — สมมติ PM2.5 ปัจจุบัน
+// 28 µg/m³, activity_offset (เบา=0/ปานกลาง=-5/หนัก=-10) แล้ว interpolate ข้าม RISK_SCORE_BREAKPOINTS
+// คะแนนยิ่งสูง = ยิ่งเสี่ยง (ไม่ใช่กลับกัน) จึงต้องเพิ่มขึ้นตามความหนักกิจกรรม ของเดิมคำนวณผิดทิศทาง
+// (เคยลดลงจากเบา→หนัก) แก้แล้วตามนี้
+const SAMPLE_RISK_TABLE = {
+  เบา: {
+    score: 45, level: "ปานกลาง", advice: "ความเสี่ยงปานกลาง ทำได้แต่ควรสังเกตอาการตนเอง",
+    times: [{ time: "05:00", riskScore: 13 }, { time: "04:00", riskScore: 17 }, { time: "06:00", riskScore: 22 }],
+  },
+  ปานกลาง: {
+    score: 53, level: "ปานกลาง", advice: "ความเสี่ยงปานกลาง ทำได้แต่ควรสังเกตอาการตนเอง",
+    times: [{ time: "05:00", riskScore: 20 }, { time: "04:00", riskScore: 26 }, { time: "06:00", riskScore: 32 }],
+  },
+  หนัก: {
+    score: 60, level: "เริ่มมีผลกระทบต่อสุขภาพ", advice: "ความเสี่ยงเริ่มสูง ควรลดความหนักหรือระยะเวลาของกิจกรรมนี้",
+    times: [{ time: "05:00", riskScore: 30 }, { time: "04:00", riskScore: 36 }, { time: "06:00", riskScore: 42 }],
+  },
+};
+const SAMPLE_DAILY = {
+  avg: 38.4,
+  text: "วันนี้ฝุ่น PM2.5 ในภาพรวมอยู่ในระดับปานกลาง ช่วงเช้ามืดอากาศดีที่สุด เหมาะสำหรับออกกำลังกายกลางแจ้ง " +
+    "ส่วนช่วงบ่ายถึงเย็นค่าฝุ่นมีแนวโน้มสูงขึ้นเล็กน้อย กลุ่มเสี่ยงควรเลี่ยงกิจกรรมหนักในช่วงดังกล่าว",
+};
 
 const state = ref("loading"); // "loading" | "error" | "content"
 const errorMessage = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
@@ -68,29 +99,21 @@ function pctOf(value) {
   return (value / maxPm.value) * 100;
 }
 
-function modelLabel(modelUsed) {
-  if (String(modelUsed).startsWith("xgboost")) return "XGBoost";
-  if (modelUsed === "naive_fallback") return "ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)";
-  return "LightGBM";
-}
-function modelColor(modelUsed) {
-  if (String(modelUsed).startsWith("xgboost")) return "var(--model-xgboost)";
-  if (modelUsed === "naive_fallback") return "var(--model-fallback)";
-  return "var(--model-lightgbm)";
-}
-
 const pageClass = computed(() => bodyClassFor(current.value.status));
 // รวม pm25_hi (ขอบบนช่วงความเชื่อมั่น) เข้าไปตอนหาค่าสูงสุดด้วย ไม่งั้นส่วนต่อขยายจะโผล่พ้นกราฟตอน
 // ช่วงกว้าง (horizon ไกลๆ) — 37.5 คือเพดานต่ำสุดเพื่อให้เส้นเกณฑ์อยู่ในกราฟเสมอ
 const maxPm = computed(() =>
   Math.max(...forecast.value.flatMap((f) => [f.pm25, f.pm25_hi ?? f.pm25]), 37.5)
 );
-const dailyAvgDisplay = computed(() =>
-  dailySummary.value.daily_avg_pm25 !== null && dailySummary.value.daily_avg_pm25 !== undefined
+const dailyAvgDisplay = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) return SAMPLE_DAILY.avg;
+  return dailySummary.value.daily_avg_pm25 !== null && dailySummary.value.daily_avg_pm25 !== undefined
     ? dailySummary.value.daily_avg_pm25
-    : "-"
+    : "-";
+});
+const dailyTextDisplay = computed(() =>
+  SAMPLE_EXTRA_CARDS_DATA ? SAMPLE_DAILY.text : dailySummary.value.explanation || "กำลังเตรียมข้อมูลสำหรับวันนี้"
 );
-const dailyTextDisplay = computed(() => dailySummary.value.explanation || "กำลังเตรียมข้อมูลสำหรับวันนี้");
 // horizon (1..24) -> เวลานาฬิกาของจุดนั้นใน forecast[] (ผู้ใช้ไม่ต้องแปล "t+N" เอง)
 const fallbackTimesText = computed(() =>
   fallbackHorizons.value.map((h) => forecast.value[h - 1]?.time).filter(Boolean).join(", ")
@@ -107,23 +130,35 @@ const updatedLabel = computed(() =>
 );
 const activeLevelIndex = computed(() => PM25_LEVELS.findIndex((l) => l.status === current.value.status));
 
-// 3 ช่วงเวลาที่อากาศดีที่สุด เรียงจากดีสุดไปน้อยสุด — คำนวณสดจาก forecast[] กรองเฉพาะ 06:00-20:00
-// (ช่วงที่ใช้งานจริงได้) ก่อน sort เหมือน best_time ฝั่ง backend — fallback ไป forecast ทั้งหมดถ้าว่าง
-const topBestTimes = computed(() => {
+// ช่วงเวลาที่อากาศดีที่สุด (ค่าเดียว ไม่ใช่ top-3 — ตัดสินใจ 2026-10-13 เพราะใกล้วันนำเสนอ ไม่อยากปรับ
+// เยอะตอนนี้ จะพิจารณารวมกับการ์ด bestActivityTimes อีกทีใน phase ถัดไป ดู future-todo-list) คำนวณสด
+// จาก forecast[] กรองเฉพาะ 06:00-20:00 (ช่วงที่ใช้งานจริงได้) ก่อน sort เหมือน best_time ฝั่ง backend —
+// fallback ไป forecast ทั้งหมดถ้าว่าง
+const topBestTime = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) return SAMPLE_BEST_TIMES[0] ?? null;
   const activeHours = forecast.value.filter((f) => f.hour_thai >= 6 && f.hour_thai <= 20);
   const pool = activeHours.length > 0 ? activeHours : forecast.value;
-  return [...pool].sort((a, b) => a.pm25 - b.pm25).slice(0, 3);
+  return [...pool].sort((a, b) => a.pm25 - b.pm25)[0] ?? null;
 });
 
 // Personalized Risk Score (proposal) — ผสาน pm25 ปัจจุบัน + risk_group + activity (เลือกสดหน้าเว็บ)
 // เป็นคะแนนเดียว 0-100 สูตร/offset ทั้งหมดมาจาก riskScoreConfig ที่ backend ส่งมา
-const currentRiskScore = computed(() =>
-  computeRiskScore(current.value.pm25, riskScoreConfig.value, riskScoreState.activity)
+const currentRiskScore = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) {
+    const row = SAMPLE_RISK_TABLE[riskScoreState.activity] ?? SAMPLE_RISK_TABLE["ปานกลาง"];
+    return { score: row.score, level: row.level, effective_pm25: null };
+  }
+  return computeRiskScore(current.value.pm25, riskScoreConfig.value, riskScoreState.activity);
+});
+const currentRiskAdvice = computed(() =>
+  SAMPLE_EXTRA_CARDS_DATA
+    ? (SAMPLE_RISK_TABLE[riskScoreState.activity] ?? SAMPLE_RISK_TABLE["ปานกลาง"]).advice
+    : riskScoreAdvice(currentRiskScore.value.level)
 );
-const currentRiskAdvice = computed(() => riskScoreAdvice(currentRiskScore.value.level));
 
 // เหมือน topBestTimes แต่ personalize ตามกิจกรรมที่เลือก (sort ด้วยคะแนนความเสี่ยงแทน pm25 ดิบ)
 const bestActivityTimes = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) return (SAMPLE_RISK_TABLE[riskScoreState.activity] ?? SAMPLE_RISK_TABLE["ปานกลาง"]).times;
   if (!riskScoreConfig.value) return [];
   const activeHours = forecast.value.filter((f) => f.hour_thai >= 6 && f.hour_thai <= 20);
   const pool = activeHours.length > 0 ? activeHours : forecast.value;
@@ -162,6 +197,30 @@ async function loadForecast() {
 watch(() => provinceState.selected, loadForecast);
 
 onMounted(loadForecast);
+
+// รีเฟรชแค่การ์ด "ปัจจุบัน" เป็นระยะ แยกจาก loadForecast() ทั้งก้อน เพราะ /api/forecast หนัก (inference
+// 2 โมเดล + บางครั้ง Gemini) ใช้ /api/current_pm25 ที่เบากว่ามากแทน — อ่าน provinceState.selected สด
+// ทุกครั้งที่ tick จึงตามจังหวัดที่เลือกอยู่เสมอโดยไม่ต้อง clear/ตั้ง interval ใหม่ตอนสลับจังหวัดเอง
+const CURRENT_PM25_POLL_MS = 2 * 60 * 1000; // สั้นกว่า cache TTL ฝั่ง backend (5 นาที) พอเห็นค่าขยับ แต่ไม่ถี่เกิน
+let currentPm25IntervalId = null;
+
+async function refreshCurrentPm25() {
+  const province = provinceState.selected;
+  const data = await fetchCurrentPm25(province);
+  // เงียบๆ ข้ามถ้า fetch พลาด (data=null) หรือผู้ใช้สลับจังหวัดไปแล้วระหว่างรอ response (กัน race เขียนทับ
+  // ด้วยค่าของจังหวัดเก่า)
+  if (data && provinceState.selected === province) {
+    current.value = { pm25: data.pm25, datetime_th: data.datetime_th, status: data.status };
+  }
+}
+
+onMounted(() => {
+  currentPm25IntervalId = setInterval(refreshCurrentPm25, CURRENT_PM25_POLL_MS);
+});
+onUnmounted(() => {
+  if (currentPm25IntervalId) clearInterval(currentPm25IntervalId);
+});
+
 defineExpose({ loadForecast });
 </script>
 
@@ -219,10 +278,13 @@ defineExpose({ loadForecast });
           </div>
         </div>
 
-        <div v-if="dataQuality.series_source === 'stale_cache' || dataQuality.weather_source === 'climatology'" class="banner banner-info">
+        <div v-if="dataQuality.series_source === 'stale_cache' || dataQuality.series_source === 'dustboy' || dataQuality.weather_source === 'climatology'" class="banner banner-info">
             <Info :size="22" :stroke-width="2" aria-hidden="true" />
             <div class="banner-text">
-              <template v-if="dataQuality.series_source === 'stale_cache'">
+              <template v-if="dataQuality.series_source === 'dustboy'">
+                สถานีตรวจวัดหลักของจังหวัดนี้ขัดข้อง ระบบใช้ข้อมูลจากเครือข่ายเซนเซอร์ทางเลือก (Dustboy) เป็นการชั่วคราว ความแม่นยำอาจต่ำกว่าปกติ
+              </template>
+              <template v-else-if="dataQuality.series_source === 'stale_cache'">
                 ระบบเชื่อมต่อแหล่งข้อมูลฝุ่นไม่ได้ชั่วคราว จึงใช้ข้อมูลที่บันทึกไว้ล่าสุด (เมื่อประมาณ {{ Math.max(1, Math.round(dataQuality.series_age_hours)) }} ชั่วโมงก่อน)
               </template>
               <template v-if="dataQuality.weather_source === 'climatology'">
@@ -288,22 +350,19 @@ defineExpose({ loadForecast });
             </div>
           </section>
 
-          <!-- ช่วงเวลาที่ควรออกไปข้างนอก -->
+          <!-- ช่วงเวลาที่ฝุ่นต่ำที่สุด -->
           <section v-if="SHOW_EXTRA_CARDS" class="card">
             <div class="card-head">
-              <h2>ช่วงที่ควรออกไปข้างนอก</h2>
+              <h2>ช่วงเวลาที่ฝุ่นต่ำที่สุด</h2>
               <span class="card-head-sub">24 ชม. ข้างหน้า</span>
             </div>
-            <ol class="best-list">
-              <li v-for="(point, i) in topBestTimes" :key="point.time" class="best-row">
-                <span class="rank-badge" :class="`rank-${i + 1}`">{{ i + 1 }}</span>
-                <span class="best-time">{{ point.time }} น.</span>
-                <span class="best-pm">
-                  <span class="dot" :style="{ background: barColor(point.pm25) }"></span>{{ point.pm25 }}
-                  <span class="best-unit">µg/m³</span>
-                </span>
-              </li>
-            </ol>
+            <div v-if="topBestTime" class="best-single">
+              <span class="best-single-time">{{ topBestTime.time }} น.</span>
+              <span class="best-pm">
+                <span class="dot" :style="{ background: barColor(topBestTime.pm25) }"></span>{{ topBestTime.pm25 }}
+                <span class="best-unit">µg/m³</span>
+              </span>
+            </div>
           </section>
         </div>
 
@@ -313,7 +372,7 @@ defineExpose({ loadForecast });
             <div class="card-head chart-head">
               <div>
                 <h2>พยากรณ์รายชั่วโมง</h2>
-                <p class="chart-sub">ส่วนจางเหนือแท่งคือขอบบนของช่วงความเชื่อมั่น ~90%</p>
+                <!-- <p class="chart-sub">ส่วนจางเหนือแท่งคือขอบบนของช่วงความเชื่อมั่น ~90%</p> -->
               </div>
             </div>
             <div class="bars" role="group" aria-label="พยากรณ์ PM2.5 รายชั่วโมง 24 ชั่วโมงข้างหน้า">
@@ -353,20 +412,16 @@ defineExpose({ loadForecast });
                   <span class="best-unit">µg/m³</span>
                 </div>
                 <div class="bar-detail-meta">
-                  ช่วงความเชื่อมั่น ~90%: {{ selectedPoint.pm25_lo }}–{{ selectedPoint.pm25_hi }} µg/m³
-                </div>
-                <div class="bar-detail-meta">
-                  <span class="dot" :style="{ background: modelColor(selectedPoint.model_used) }"></span>
-                  {{ modelLabel(selectedPoint.model_used) }}
+                  คาดว่าค่าฝุ่น PM2.5 จะอยู่ระหว่าง {{ selectedPoint.pm25_lo }}–{{ selectedPoint.pm25_hi }} µg/m³
                 </div>
               </template>
               <div v-else class="bar-detail-empty">แตะแท่งเพื่อดูรายละเอียดของชั่วโมงนั้น</div>
             </div>
           </section>
 
-          <!-- ความเสี่ยงส่วนบุคคล -->
+          <!-- ความเสี่ยงตามกิจกรรมของคุณ -->
           <section v-if="SHOW_EXTRA_CARDS" class="card">
-            <h2>ความเสี่ยงของคุณ</h2>
+            <h2>ความเสี่ยงตามกิจกรรมของคุณ</h2>
             <p class="card-caption">เลือกความหนักของกิจกรรมกลางแจ้งที่วางแผนจะทำ</p>
             <div class="segmented" role="group" aria-label="ความหนักของกิจกรรม">
               <button
@@ -392,6 +447,7 @@ defineExpose({ loadForecast });
               </span>
             </div>
             <p class="risk-advice">{{ currentRiskAdvice }}</p>
+            <p class="disclaimer-text">คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์</p>
             <template v-if="bestActivityTimes.length">
               <div class="risk-sublabel">ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด</div>
               <ol class="best-list">
@@ -414,6 +470,7 @@ defineExpose({ loadForecast });
               {{ dailyAvgDisplay }}<span class="summary-unit"> µg/m³ ค่าเฉลี่ยพยากรณ์ 24 ชม.</span>
             </div>
             <p class="summary-text">{{ dailyTextDisplay }}</p>
+            <p class="disclaimer-text">คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์</p>
           </section>
         </div>
       </div>
@@ -430,15 +487,10 @@ defineExpose({ loadForecast });
 
 <style scoped>
 .forecast-page {
-  /* โทเคนกลางของหน้า — พื้นเรียบ ไม่มี gradient/blur (อ่านง่ายกลางแดด) การ์ดหลักเท่านั้นที่เปลี่ยนสีตามระดับฝุ่น */
-  --ground: #f6f4ef;
-  --card: #ffffff;
-  --ink: #16181d;
-  --muted: #565c66;
-  --line: #e6e1d6;
-  --track: #ece8de;
+  /* โทเคนกลางของหน้า (ground/card/ink/muted/line/track/accent/warn/info) มาจาก :root ใน
+     assets/main.css ที่โหลดทั้งแอปอยู่แล้ว (เดิมประกาศซ้ำไว้ในนี้ด้วย — เอาออกเพื่อกันสองที่ไม่ตรงกัน)
+     เหลือแค่โทเคนที่หน้านี้ใช้เฉพาะตัวเอง (สีระดับฝุ่น/โมเดล/การ์ดหลัก) */
   --chip-bg: rgba(255, 255, 255, 0.72);
-  --accent: #2563eb;
 
   --excellent: #3b82f6;
   --good: #22c55e;
@@ -446,46 +498,22 @@ defineExpose({ loadForecast });
   --unhealthy: #f97316;
   --bad: #ef4444;
 
-  --model-lightgbm: #6366f1;
-  --model-xgboost: #10b981;
   --model-fallback: #ec4899;
 
   --hero-bg: #faefc1;
   --hero-ink: #4f3b00;
-
-  --warn-bg: #fff0d6;
-  --warn-line: #f0be73;
-  --warn-ink: #6b3a00;
-  --info-bg: #e4edfb;
-  --info-line: #b9cdf2;
-  --info-ink: #1e3a8a;
 
   min-height: 100vh;
   background: var(--ground);
   color: var(--ink);
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
 }
-/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js): โทเคนกลาง (ground/card/ink/muted/line/track/
+   accent/warn/info) สลับค่าอัตโนมัติจาก main.css แล้ว เหลือแค่โทเคนเฉพาะหน้านี้ */
   :root[data-theme="dark"] .forecast-page {
-    --ground: #0e1013;
-    --card: #171a1f;
-    --ink: #f3f4f6;
-    --muted: #a3aab5;
-    --line: #272b33;
-    --track: #232830;
     --chip-bg: rgba(255, 255, 255, 0.09);
-    --accent: #60a5fa;
 
-    --model-lightgbm: #818cf8;
-    --model-xgboost: #34d399;
     --model-fallback: #f472b6;
-
-    --warn-bg: #2e2110;
-    --warn-line: #5c4220;
-    --warn-ink: #ffd9a0;
-    --info-bg: #14233f;
-    --info-line: #26406d;
-    --info-ink: #c3d8ff;
   }
 
 
@@ -683,6 +711,15 @@ defineExpose({ loadForecast });
 .best-time { flex: 1; font-size: 1.05rem; font-weight: 600; }
 .best-pm { display: inline-flex; align-items: center; font-size: 0.95rem; }
 .best-unit { color: var(--muted); font-size: 0.8rem; margin-left: 4px; }
+.best-single {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.best-single-time { font-size: 1.3rem; font-weight: 700; }
 
 /* กราฟ */
 .chart-head { padding-bottom: 12px; }
@@ -823,6 +860,7 @@ defineExpose({ loadForecast });
 .risk-chip.status-unhealthy .dot { background: var(--unhealthy); }
 .risk-chip.status-bad .dot { background: var(--bad); }
 .risk-advice { margin: 12px 0 0; font-size: 0.92rem; line-height: 1.55; color: var(--muted); }
+.disclaimer-text { margin: 8px 0 0; font-size: 0.78rem; line-height: 1.5; color: var(--muted); opacity: 0.85; }
 .risk-sublabel { margin: 16px 0 4px; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
 
 /* สรุปวันนี้ */

@@ -165,7 +165,9 @@ def main():
         return make_df(T)
     app.fetch_recent_pm25_openaq = fake_fetch
     real_fb = app.USE_INPUT_FALLBACK
+    real_dustboy = app.USE_DUSTBOY_LOEI
     app.USE_INPUT_FALLBACK = False  # T9 = ความหมายเดิม (strict ไม่ใช้ cache เก่า, ไม่ยิง /hours, ไม่เขียนไฟล์ cache); ทางสำรองทดสอบใน test_input_fallback.py
+    app.USE_DUSTBOY_LOEI = False  # "loei" ใช้เป็นจังหวัดตัวอย่างทั่วไปในเทสต์นี้เท่านั้น ไม่เกี่ยวกับ Dustboy จริง (ดู test_dustboy_fallback.py)
     app._SERIES_CACHE.clear()
     app.get_recent_series("loei")
     app.get_recent_series("loei")
@@ -185,6 +187,7 @@ def main():
     assert app.get_recent_series("loei", max_age_s=0) is None, "ไม่มี cache + ดึงไม่ได้ -> None (ไม่ raise)"
     app.fetch_recent_pm25_openaq = real_fetch
     app.USE_INPUT_FALLBACK = real_fb
+    app.USE_DUSTBOY_LOEI = real_dustboy
     app._SERIES_CACHE.clear()
     print("T9 ผ่าน: cache/strict/fallback ของ get_recent_series")
 

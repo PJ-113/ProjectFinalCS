@@ -3,6 +3,7 @@ import os
 import pickle
 import random
 import re
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -24,8 +25,11 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from sklearn.metrics import r2_score
 
-# SHAP explanation (scripts/shap_analysis.py) ปิดไว้ชั่วคราว — ยังผูกกับโครงสร้างโมเดลเก่า
-# ({horizon: model} ไม่ใช่ {horizon: {quantile: model}}) ดู generate_daily_nlg_explanation()
+# SHAP explanation (scripts/shap_analysis_clean.py) — โหลดโมเดล v3 ชุดเดียวกับที่ app.py ใช้งานจริงซ้ำอีกรอบ
+# ที่ module level (เพิ่มหน่วยความจำ ~731MB รวม LGB+XGB) เพื่อแลกกับการ reuse โค้ด TreeExplainer ที่ตรวจสอบ
+# แล้วว่าถูกต้องตรงกับ pooled v3 structure (models[h][quantile]) ไม่ต้องเขียนใหม่ซ้ำ
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
+from shap_analysis_clean import get_shap_explanation
 
 # ===== Config =====
 
@@ -56,6 +60,10 @@ FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fronte
 DEBUG = True  # ต้องอ่านจากตรงนี้ ไม่ใช่ app.debug เพราะ Flask ยังไม่ set app.debug จนกว่าจะเรียก app.run()
 SIGMA_CRITICAL = 0.3  # Dynamic Routing (proposal 4.1.6): missing_ratio เกินนี้ถือว่า input เสียหายหนัก ให้ fallback ไปพยากรณ์แบบ naive persistence (ดู select_model)
 EXPLORATION_RATE = 0.2  # โอกาสที่จะ "ลอง" โมเดลที่ยังไม่มีข้อมูลพอประเมิน R² แก้ปัญหา cold-start deadlock (ดู select_model)
+MIN_R2_PAIRS = 15  # ขั้นต่ำคู่ (predicted, actual) ก่อนเชื่อ Rolling R² ได้ (เดิม 5 — วัดจาก prediction_log จริงพบว่า
+# n<15 คู่ ทำให้ R² ผันผวนรุนแรง (สัดส่วน R²<-1 ลดจาก 53.7% ที่ n=5-9 เหลือ 12.2% ที่ n=15-19, ขนาดการ
+# เปลี่ยนแปลงต่อจุดเฉลี่ยลดจาก 8.29 เหลือ 0.11) และผลเลือกโมเดลที่ n=5 ไม่ตรงกับผลที่ n=24 ถึง 42.6% ของเวลา
+# ดู CHANGELOG และ scripts/check_rolling_r2_stability.py
 CONFORMAL_ALPHA = 0.10  # เป้าหมาย coverage 90% (ดู train_multiprovince_models.py) ใช้แค่ใน docstring/comment ไม่ได้ใช้คำนวณตรงนี้
 
 
@@ -82,6 +90,8 @@ OPENAQ_HEADERS = {"X-API-Key": OPENAQ_KEY}
 # NASA FIRMS MAP_KEY (fire_hotspot_count_100km_24h) — ไม่บังคับ: ไม่มี/ใช้ไม่ได้ -> feature = 0 + flag ใน data_quality
 # (แอปต้องไม่ล่มเพราะ FIRMS) ห้าม print/log คีย์นี้ และห้าม log URL/ข้อความ exception ของ requests (URL มีคีย์)
 FIRMS_KEY = _ENV.get("FIRMS_KEY")
+# CMU CCDC / Dustboy open API key (ทางสำรอง PM2.5 ชั่วคราวเฉพาะจังหวัดเลย ดู USE_DUSTBOY_LOEI) — ไม่บังคับ: ไม่มี -> ปิดฟีเจอร์เอง ห้าม print/log คีย์นี้
+DUSTBOY_KEY = _ENV.get("DUSTBOY_KEY")
 
 # PostgreSQL (ย้ายจาก sqlite แล้ว ดู CHANGELOG) — get_db_connection() เปิด connection ใหม่ทุกครั้งที่เรียก
 POSTGRES_HOST = _ENV["POSTGRES_HOST"]
@@ -148,7 +158,9 @@ CONFORMAL_QHAT = {
 # ปิดได้ทันทีที่ USE_TARGET_IMPUTATION=False (พฤติกรรมกลับเป็นเดิมทั้งหมด) ไฟล์ค่าสัมประสิทธิ์หาย/พัง -> ปิดเองพร้อม log (แอปไม่ล่ม)
 USE_TARGET_IMPUTATION = True
 IMPUTATION_CONFIG_PATH = "models/imputation_h_lite_20260924_204956.json"
-IMPUTATION_MIN_K = 2   # k = ชั่วโมงเต็มที่ reading ล่าสุดตามหลัง "ชั่วโมงที่เพิ่งจบ" (now-1h); k<2 = ความหน่วงปกติของ OpenAQ ไม่เติม (ค่านี้ยังไม่ได้วัดจริง — scripts/measure_target_data_latency.py)
+IMPUTATION_MIN_K = 3   # k = ชั่วโมงเต็มที่ reading ล่าสุดตามหลัง "ชั่วโมงที่เพิ่งจบ" (now-1h); k<3 = ความหน่วงปกติของ OpenAQ ไม่เติม
+# ค่านี้วัดจริงแล้ว (CHANGELOG 176): p99 ของ k ปกติ (เฉพาะแถว series_source=live) = 2 -> MIN_K = p99+1 = 3, 925 ตัวอย่าง 2026-09-24..27
+# วัดซ้ำ/ปรับได้ด้วย scripts/summarize_target_latency.py เมื่อพฤติกรรมความหน่วงของ OpenAQ เปลี่ยนไปอย่างมีนัยสำคัญ
 IMPUTATION_MAX_K = 48  # เกินนี้ยังไม่เคยทดสอบ -> คงพฤติกรรมเดิม (ข้อมูลเก่า + banner)
 
 # ===== ทางสำรองเมื่อดึง OpenAQ / Open-Meteo ไม่ได้ (CHANGELOG 172) =====
@@ -162,6 +174,18 @@ WEATHER_CACHE_MAX_AGE_H = 2         # ดึงไม่สำเร็จ -> �
 WEATHER_CLIMATOLOGY_PATH = "models/weather_climatology_20260924_211741.json"
 TARGET_FALLBACK_MAX_AGE_S = 6 * 3600  # OpenAQ ดึงจังหวัดเป้าหมายไม่ได้ -> ใช้ cache ได้ไม่เกินนี้ (เท่ากับที่เพื่อนบ้านใช้อยู่ ไม่ได้วัดแยก)
 SERIES_DISK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_cache")  # กัน cache หายเมื่อแอปรีสตาร์ต (gitignored)
+
+# ===== Dustboy (CMU CCDC) — ทางสำรอง PM2.5 "ชั่วคราว" เฉพาะจังหวัดเลย (CHANGELOG 175) =====
+# สถานี Air4Thai เดียวของเลยตายตั้งแต่ 2026-09-15 ไม่มีสถานี Air4Thai อื่นในจังหวัด (ใกล้สุด 84.6 กม.)
+# ผูกกับจังหวัดผ่าน field ใน registry (pm25_provider="dustboy", dustboy_web_id) ไม่ใช่ global switch ต่อจังหวัด —
+# revert = ลบ 2 field นั้นออกจาก registry (หรือปิด USE_DUSTBOY_LOEI ทันทีถ้ามีปัญหา ไม่ต้องแก้ registry)
+# **ไม่มี historical endpoint** (ตรวจแล้ว) คืนได้แค่ค่าปัจจุบันจุดเดียวต่อคำขอ จึงต้องสะสมประวัติเองจากศูนย์ผ่านการโพลรายชั่วโมง
+# (เหมือนสถานีเปิดใหม่) — ห้ามพยากรณ์จนกว่าจะสะสมได้อย่างน้อย DUSTBOY_MIN_HISTORY_HOURS ชั่วโมง กัน build_feature_row()
+# interpolate จากจุดเดียวเป็นค่าคงที่ซ้ำทุก lag/roll (ไม่ใช่ NaN จึงไม่ถูก compute_missing_ratio จับได้)
+USE_DUSTBOY_LOEI = True
+DUSTBOY_MIN_HISTORY_HOURS = 24
+DUSTBOY_CACHE_TTL_S = 1800  # Dustboy อัปเดตแค่รายชั่วโมง ไม่มีประโยชน์ที่จะดึงถี่กว่า TARGET_CACHE_TTL_S (5 นาที) ปกติ
+DUSTBOY_HISTORY_PATH = os.path.join(SERIES_DISK_CACHE_DIR, "dustboy_loei_history.csv")  # สะสมข้ามการรีสตาร์ต (gitignored)
 
 # กลุ่มเปราะบางเริ่มระวังเร็วกว่าคนทั่วไป ~1 ระดับ AQI (ตาม WHO/US EPA) ลด threshold 10 หน่วย
 # ให้เริ่มเตือนตั้งแต่ช่วง "ปานกลาง" แทนที่จะรอถึง "เริ่มมีผลกระทบต่อสุขภาพ" เหมือนคนทั่วไป —
@@ -242,7 +266,7 @@ def compute_missing_ratio(feature_row):
 def compute_rolling_r2(model_name, horizon, province, N=24):
     """R² แบบ rolling จาก N แถวล่าสุดของ (model_name, horizon, province) — query เดี่ยวสำหรับคู่เดียว
     ใช้แค่ diagnostics/test เท่านั้น hot path จริงใช้ fetch_rolling_r2_lookup() (query เดียวทั้ง
-    จังหวัดแทน 48 query — ดู CHANGELOG 86) คืน None ถ้าข้อมูลไม่พอ (< 5 คู่)"""
+    จังหวัดแทน 48 query — ดู CHANGELOG 86) คืน None ถ้าข้อมูลไม่พอ (< MIN_R2_PAIRS คู่)"""
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -257,7 +281,7 @@ def compute_rolling_r2(model_name, horizon, province, N=24):
     cur.close()
     conn.close()
 
-    if len(rows) < 5:
+    if len(rows) < MIN_R2_PAIRS:
         return None
 
     y_pred = [r[0] for r in rows]
@@ -296,7 +320,7 @@ def fetch_rolling_r2_lookup(province, N=24):
     for model_used in ROLLING_R2_MODELS:
         for h in range(1, 25):
             pairs = grouped.get((model_used, h), [])
-            if len(pairs) < 5:
+            if len(pairs) < MIN_R2_PAIRS:
                 lookup[(model_used, h)] = None
             else:
                 y_pred = [p[0] for p in pairs]
@@ -815,7 +839,7 @@ def _load_series_disk_cache():
             df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
             if df.empty:
                 continue
-            _SERIES_CACHE[p["province_en"]] = (time.monotonic() - age_s, df)
+            _SERIES_CACHE[p["province_en"]] = (time.monotonic() - age_s, df, "stale_cache")
             loaded += 1
         except Exception:
             continue
@@ -823,9 +847,81 @@ def _load_series_disk_cache():
         print(f"[openaq] โหลด cache จากไฟล์ {loaded} จังหวัด (ใช้เป็นทางสำรองเท่านั้น ไม่ถือว่าสด)")
 
 
+_DUSTBOY_BREAKER = _CircuitBreaker("dustboy", threshold=5, cooldown_s=60)
+
+
+def fetch_dustboy_current(web_id):
+    """ค่า PM2.5 ปัจจุบันจุดเดียวจาก Dustboy (CMU CCDC open API) -> (datetime_utc, pm25) — ไม่มี parameter เลือกสถานีที่ query
+    time (ตรวจแล้ว): endpoint คืนเฉพาะสถานีที่ "บันทึก" ไว้กับ API key ผ่านหน้าเว็บ (สูงสุด 10 จุด) เท่านั้น เจอสถานีที่ web_id
+    ไม่ตรงกับที่ร้องขอ -> raise (กันเผลอเอาค่าจังหวัดอื่นมาใช้); log_datetime เป็นเวลาไทย (UTC+7) ต้องแปลงเป็น UTC"""
+    if not DUSTBOY_KEY:
+        raise RuntimeError("ไม่มี DUSTBOY_KEY")
+    r = requests.get("https://open-api.cmuccdc.org/api/dustboy/station",
+                      headers={"Authorization": f"Bearer {DUSTBOY_KEY}"}, timeout=15)
+    r.raise_for_status()
+    results = r.json()
+    match = next((x for x in results if str(x.get("id")) == str(web_id)), None)
+    if match is None:
+        raise RuntimeError(f"ไม่พบสถานี Dustboy web_id={web_id} ในผลลัพธ์ (ตรวจว่าบันทึกไว้ในบัญชี API key แล้วหรือยัง)")
+    pm25 = match.get("pm25")
+    if pm25 is None:
+        raise RuntimeError("Dustboy ไม่มีค่า pm25 (field ว่าง)")
+    local = pd.Timestamp(match["log_datetime"], tz="Asia/Bangkok")
+    return local.tz_convert("UTC"), float(pm25)
+
+
+def _append_dustboy_reading(dt_utc, pm25):
+    """ต่อท้ายค่าที่อ่านได้ลง DUSTBOY_HISTORY_PATH (dedupe ตามเวลา, ตัดเก็บย้อนหลังไม่เกิน 72 ชม., เขียน tmp แล้ว replace)
+    คืน DataFrame ทั้งหมดหลังอัปเดต (ไม่ raise แม้เขียนไฟล์ไม่ได้ — คืนค่าที่มีในหน่วยความจำแทน)"""
+    new_row = pd.DataFrame({"datetime_utc": [dt_utc], "pm25": [pm25]})
+    try:
+        old = pd.read_csv(DUSTBOY_HISTORY_PATH) if os.path.exists(DUSTBOY_HISTORY_PATH) else pd.DataFrame(columns=["datetime_utc", "pm25"])
+        if not old.empty:
+            old["datetime_utc"] = pd.to_datetime(old["datetime_utc"], utc=True)
+    except Exception:
+        old = pd.DataFrame(columns=["datetime_utc", "pm25"])
+    df = pd.concat([old, new_row], ignore_index=True)
+    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
+    df = df.drop_duplicates(subset=["datetime_utc"], keep="last").sort_values("datetime_utc")
+    df = df[df["datetime_utc"] >= dt_utc - pd.Timedelta(hours=72)].reset_index(drop=True)
+    try:
+        os.makedirs(SERIES_DISK_CACHE_DIR, exist_ok=True)
+        tmp = DUSTBOY_HISTORY_PATH + ".tmp"
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, DUSTBOY_HISTORY_PATH)
+    except Exception:
+        pass
+    return df
+
+
+def get_dustboy_series(web_id):
+    """ดึงค่าปัจจุบันจาก Dustboy ผ่าน breaker แล้วสะสมเข้าประวัติที่เก็บไว้ -> (DataFrame[datetime_utc, pm25], "dustboy")
+    ประวัติสะสมยังไม่ถึง DUSTBOY_MIN_HISTORY_HOURS -> คืน DataFrame ว่าง (ไม่ raise — การเรียก API สำเร็จจริง แค่ข้อมูลยังไม่พอ)
+    เพื่อให้ไหลผ่าน get_recent_series()/get_forecast() เส้นทางเดิม ("ได้ df ว่าง" -> None -> DataUnavailableError -> 503)
+    แบบเดียวกับตอนสถานีเงียบสนิทจริงๆ ไม่ต้องเขียน safety check ใหม่ — กันไม่ให้ feature เพี้ยนจากประวัติสั้นเกินไป (ดู Context ในแผน)
+    ความล้มเหลวจริงของการเรียก API (network/http/parse) ยัง raise ตามปกติ เพื่อให้ breaker/stale_cache fallback ทำงาน"""
+    if not _DUSTBOY_BREAKER.allow():
+        raise RuntimeError("Dustboy circuit open")
+    try:
+        dt_utc, pm25 = fetch_dustboy_current(web_id)
+    except Exception:
+        _DUSTBOY_BREAKER.failure()
+        raise
+    _DUSTBOY_BREAKER.success()
+    df = _append_dustboy_reading(dt_utc, pm25)
+    span_h = (df["datetime_utc"].max() - df["datetime_utc"].min()) / pd.Timedelta(hours=1) if len(df) > 1 else 0.0
+    if len(df) < DUSTBOY_MIN_HISTORY_HOURS or span_h < DUSTBOY_MIN_HISTORY_HOURS - 1:
+        print(f"[dustboy] {web_id}: ประวัติสะสมยังไม่พอ ({len(df)} จุด, ครอบคลุม {span_h:.1f} ชม. ต้องการ >= {DUSTBOY_MIN_HISTORY_HOURS} ชม.)")
+        return pd.DataFrame(columns=["datetime_utc", "pm25"]), "dustboy"
+    return df, "dustboy"
+
+
 def fetch_series_from_openaq(meta):
     """ดึงซีรีส์ pm25 72 ชม. ของสถานี -> (DataFrame, source) โดย source = "live" (/measurements + offset) หรือ "hours_endpoint" (/hours ไม่มี offset)
-    /measurements พลาด -> ลอง /hours; ทั้งคู่พลาด -> raise (ข้อผิดพลาดของ /measurements) และนับเข้า breaker; breaker เปิดอยู่ -> raise ทันทีไม่ยิง request"""
+    /measurements พลาด -> ลอง /hours; ทั้งคู่พลาด -> raise (ข้อผิดพลาดของ /measurements) และนับเข้า breaker; breaker เปิดอยู่ -> raise ทันทีไม่ยิง request
+    provider="dustboy" ใน registry (ตอนนี้มีแค่เลย) -> ไปทาง Dustboy ทั้งหมด ไม่ผ่าน OpenAQ เลย (ดู get_dustboy_series)"""
+    if meta.get("pm25_provider") == "dustboy" and USE_DUSTBOY_LOEI:
+        return get_dustboy_series(meta["dustboy_web_id"])
     sensor_id = meta["sensor_id_pm25"]
     offset = int(meta.get("openaq_timestamp_offset_hours", 0)) if USE_TIMESTAMP_OFFSET else 0
     if not USE_INPUT_FALLBACK:
@@ -856,7 +952,7 @@ def get_recent_series(province, strict=False, max_age_s=SERIES_CACHE_TTL_S, info
         hit = _SERIES_CACHE.get(province)
     if hit is not None and now - hit[0] < max_age_s:
         if info is not None:
-            info.update({"source": "live", "age_hours": round((now - hit[0]) / 3600, 2)})
+            info.update({"source": hit[2] if len(hit) > 2 else "live", "age_hours": round((now - hit[0]) / 3600, 2)})
         return hit[1]
     try:
         df, source = fetch_series_from_openaq(PROVINCES_BY_SLUG[province])
@@ -873,7 +969,7 @@ def get_recent_series(province, strict=False, max_age_s=SERIES_CACHE_TTL_S, info
     if df is None or df.empty:
         df = None
     with _SERIES_LOCK:
-        _SERIES_CACHE[province] = (now, df)
+        _SERIES_CACHE[province] = (now, df, source)
     _save_series_to_disk(province, df)
     if info is not None:
         info.update({"source": source, "age_hours": 0.0})
@@ -1516,11 +1612,27 @@ except Exception as e:
     print(f"[nlg] Gemini client init failed ({e}); NLG จะ fallback ไป template เสมอจนกว่าจะตั้ง GEMINI_KEY")
     _gemini_client = None
 GEMINI_MODEL = "gemini-3.1-flash-lite"  # gemini-2.5-flash เลิกให้ API key ใหม่ใช้แล้ว — GA, free tier, เร็ว/ถูกสุด
-GEMINI_TIMEOUT_SECONDS = 5
+# โมเดลสำรอง เรียกแค่ตอนโมเดลหลักล้มเหลวครบ GEMINI_MAX_RETRIES ครั้ง (ดู _call_gemini()) — เพิ่มเข้ามาหลังเจอ
+# gemini-3.1-flash-lite โหลดสูงชั่วคราว (503) ยาวนานวันหนึ่ง (2026-10-12, CHANGELOG 181) ทดสอบจริงตอนนั้นว่า
+# gemini-3.5-flash-lite (GA เหมือนกัน ไม่มี -preview) ยังตอบไว (1.58s) และผ่าน validate_health_message() ปกติ
+# ขณะที่โมเดลหลักยัง 503 อยู่ — โมเดลคนละตัวมักมี quota/capacity แยกกัน ไม่โดนผลกระทบพร้อมกันเสมอไป
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+# วัดจาก scripts/measure_gemini_latency.py (2026-10-07, 23 คำขอสำเร็จ): p50=1.45s p90=2.66s p95=4.36s
+# p99=9.58s max=11.00s (ceil(p99)+1=11) — Gemini SDK เองก็บังคับ min server-side deadline 10s อยู่แล้ว
+# ค่า 5 เดิมตัดคำขอที่ยังปกติทิ้งบ่อยเกินไป ดู models/gemini_latency_measurement_20261007_192619.csv
+GEMINI_TIMEOUT_SECONDS = 11
 GEMINI_MAX_RETRIES = 3  # 429 (quota) backoff: รอ 1s, 2s, 4s
 # Gemini SDK บังคับ min server-side deadline 10s เอง จึงบังคับ timeout ฝั่ง client ผ่าน thread แยกแทน
 # (thread เดิมรันต่อเบื้องหลังจนจบ ไม่ถูก cancel แต่ caller ไม่ต้องรอ กัน get_forecast() ค้าง)
 _gemini_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gemini-nlg")
+
+# free tier RPM limit = 15 (= เฉลี่ยห่างกัน 4.0s/ครั้ง) — scripts/measure_gemini_latency.py ชนโควตา
+# จริงตอนทดสอบ (429 RESOURCE_EXHAUSTED) เพราะ scheduler เดิมเว้นแค่ 0.5s/จังหวัด ไม่พอกันโควตาเมื่อ
+# ทุกจังหวัดต้องสร้าง NLG รายวันพร้อมกันรอบแรกของวัน (หลัง 06:00 น.) จึง rate-limit ระดับ process
+# เองใน _call_gemini() กันชนโควตาไม่ว่าจะเรียกจากที่ไหน (scheduler หรือ live request ที่มาพร้อมกัน)
+GEMINI_MIN_CALL_SPACING_S = 4.5  # >4.0s (=60/15) เผื่อ margin
+_gemini_rate_lock = threading.Lock()
+_gemini_last_call_started_at = [0.0]
 
 # ชื่อ feature ทางเทคนิค -> คำอธิบายภาษาไทยที่คนทั่วไปเข้าใจ ใช้ตอนสร้าง prompt ส่งให้ Gemini
 _FEATURE_NAME_TH = {
@@ -1542,6 +1654,15 @@ _FEATURE_NAME_TH = {
     "month_sin": "ช่วงฤดูกาล",
     "month_cos": "ช่วงฤดูกาล",
     "dayofweek": "วันในสัปดาห์",
+    # ฟีเจอร์ v3 (CHANGELOG 149/75) ที่ dict นี้ยังไม่เคยมีคำแปล — ต้องมีครบ ไม่งั้นชื่อ field ภาษาอังกฤษ
+    # จะหลุดเข้า prompt ตรงๆ ขัดกับ _NLG_SYSTEM_PROMPT ที่ห้ามใช้ศัพท์เทคนิค
+    "wind_dir_sin": "ทิศทางลม",
+    "wind_dir_cos": "ทิศทางลม",
+    "pressure": "ความกดอากาศ",
+    "lat": "ตำแหน่งทางภูมิศาสตร์",
+    "lon": "ตำแหน่งทางภูมิศาสตร์",
+    "fire_hotspot_count_100km_24h": "จุดความร้อนจากไฟป่าในพื้นที่ใกล้เคียง",
+    "nb_trend_12h": "แนวโน้มฝุ่นของจังหวัดข้างเคียง",
 }
 
 # แต่ละ tone กำกับ "ต้องสอดคล้องกับระดับจริง" เสมอ กันข้อความย้อนแย้งในตัวเอง (เคยเกิดจริง: อากาศ
@@ -1568,7 +1689,8 @@ VALID_RISK_GROUPS = set(_USER_GROUP_TONE.keys())
 _NLG_SYSTEM_PROMPT = (
     "คุณเป็นผู้ช่วยอธิบายค่าพยากรณ์คุณภาพอากาศ PM2.5 ให้ประชาชนทั่วไปฟัง ตอบเป็นภาษาไทยเท่านั้น "
     "ความยาวไม่เกิน 2-3 ประโยค กระชับ เข้าใจง่าย ห้ามใช้ศัพท์เทคนิคหรือชื่อโมเดล/ฟีเจอร์ตรงๆ "
-    "(ห้ามพูดคำว่า SHAP, feature, lag, rolling, โมเดล) ให้อธิบายด้วยภาษาที่คนทั่วไปคุ้นเคยแทน"
+    "(ห้ามพูดคำว่า SHAP, feature, lag, rolling, โมเดล) ให้อธิบายด้วยภาษาที่คนทั่วไปคุ้นเคยแทน "
+    "ห้ามวินิจฉัยโรคหรือให้คำแนะนำเชิงคลินิกใดๆ ให้แนะนำเฉพาะการวางแผนกิจกรรมกลางแจ้งตามระดับฝุ่นเท่านั้น"
 )
 
 def _feature_name_th(feature_name):
@@ -1601,36 +1723,93 @@ def _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group="ท�
     )
 
 
+def _wait_for_gemini_rate_limit():
+    """บังคับระยะห่างขั้นต่ำ GEMINI_MIN_CALL_SPACING_S ระหว่างคำขอ Gemini แต่ละครั้งระดับ process
+    (ไม่ว่าจะมาจาก scheduler หรือ live request พร้อมกัน) กันชนโควตา free tier 15 RPM — ดูคอมเมนต์
+    ที่ GEMINI_MIN_CALL_SPACING_S"""
+    with _gemini_rate_lock:
+        now = time.monotonic()
+        wait = GEMINI_MIN_CALL_SPACING_S - (now - _gemini_last_call_started_at[0])
+        if wait > 0:
+            time.sleep(wait)
+        _gemini_last_call_started_at[0] = time.monotonic()
+
+
+def _parse_gemini_retry_delay_s(e):
+    """ดึง retryDelay (วินาที) จาก 429 error ของ Gemini — SDK ใส่ไว้ใน e.details['error']['details']
+    เป็น RetryInfo (google.rpc.RetryInfo, รูปแบบ '31s') คืน None ถ้า parse ไม่ได้ (response เปลี่ยนรูปแบบ/
+    ไม่มี field นี้) ให้ caller fallback ไป backoff คงที่เดิมแทน ไม่ raise ออกไป"""
+    try:
+        err = e.details.get("error", e.details)
+        for d in err.get("details", []):
+            if str(d.get("@type", "")).endswith("RetryInfo"):
+                return float(str(d["retryDelay"]).rstrip("s"))
+    except Exception:
+        pass
+    return None
+
+
+def _call_single_gemini_attempt(model, prompt):
+    """ยิง Gemini โมเดลใดโมเดลหนึ่งครั้งเดียว (ไม่มี retry ในตัว) คืน (text, error) — error เป็น None ถ้า
+    สำเร็จ มิฉะนั้นเป็น exception ที่เกิดขึ้นจริง (FutureTimeoutError ถ้าเกิน GEMINI_TIMEOUT_SECONDS) ให้
+    caller ตัดสินใจเรื่อง retry/fallback เอง ใช้ร่วมกันทั้งโมเดลหลักและโมเดลสำรอง"""
+    future = _gemini_executor.submit(
+        _gemini_client.models.generate_content,
+        model=model,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(system_instruction=_NLG_SYSTEM_PROMPT),
+    )
+    try:
+        response = future.result(timeout=GEMINI_TIMEOUT_SECONDS)
+        return (response.text or "").strip(), None
+    except Exception as e:
+        return None, e
+
+
 def _call_gemini(prompt):
-    """เรียก Gemini พร้อม client-side timeout (ดู _gemini_executor) + retry backoff เฉพาะ 429
-    คืน None ถ้าไม่สำเร็จไม่ว่าสาเหตุใด ให้ผู้เรียก fallback ไป template ได้ทันที"""
+    """เรียก Gemini โมเดลหลักพร้อม client-side timeout + retry backoff เฉพาะ 429/503 ถ้าล้มเหลวทุกช่องทาง
+    (รวม error ที่ไม่ retry และ timeout) จะลองโมเดลสำรอง (GEMINI_FALLBACK_MODEL) อีก 1 ครั้งก่อนคืน None
+    ให้ caller fallback ไป template — โมเดลสำรองเพิ่มเข้ามาหลังเจอโมเดลหลักโหลดสูงยาวนาน (CHANGELOG 181/182)"""
     if _gemini_client is None:
         return None
+
     delay = 1
     for attempt in range(GEMINI_MAX_RETRIES):
-        future = _gemini_executor.submit(
-            _gemini_client.models.generate_content,
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(system_instruction=_NLG_SYSTEM_PROMPT),
-        )
-        try:
-            response = future.result(timeout=GEMINI_TIMEOUT_SECONDS)
-            return (response.text or "").strip()
-        except FutureTimeoutError:
-            print(f"[nlg] Gemini call exceeded {GEMINI_TIMEOUT_SECONDS}s timeout, falling back to template")
-            return None
-        except genai_errors.APIError as e:
-            if e.code == 429 and attempt < GEMINI_MAX_RETRIES - 1:
-                print(f"[nlg] Gemini 429 (quota), retry {attempt + 1}/{GEMINI_MAX_RETRIES} in {delay}s")
-                time.sleep(delay)
+        _wait_for_gemini_rate_limit()
+        text, e = _call_single_gemini_attempt(GEMINI_MODEL, prompt)
+        if e is None:
+            return text
+        if isinstance(e, FutureTimeoutError):
+            print(f"[nlg] Gemini call exceeded {GEMINI_TIMEOUT_SECONDS}s timeout")
+            break
+        if isinstance(e, genai_errors.APIError):
+            # 429 = เกินโควตา RPM, 503 = โมเดลโหลดสูงชั่วคราว ("try again later" ตรงๆ จาก Gemini เอง — เจอ
+            # จริงตอนวัด latency 2026-10-12 14/30 ครั้ง) ทั้งคู่เป็น error ชั่วคราวที่ retry แล้วมีโอกาสสำเร็จ
+            if e.code in (429, 503) and attempt < GEMINI_MAX_RETRIES - 1:
+                # retryDelay จริงจาก Gemini (เห็นจริง 18-31s ตอนทดสอบ 429) ยาวกว่า backoff คงที่เดิม (1/2/4s)
+                # มาก — รีทรายด้วย backoff สั้นจะชนซ้ำไปเรื่อยๆ ไม่มีทางสำเร็จ ใช้ค่าจริงถ้า parse ได้ (503 ไม่มี
+                # RetryInfo ใน response จึง parse ไม่ได้เสมอ ใช้ backoff คงที่แทนซึ่งก็เหมาะสมอยู่แล้วสำหรับ 503)
+                retry_delay = _parse_gemini_retry_delay_s(e)
+                wait_s = retry_delay if retry_delay is not None else delay
+                source = "retryDelay จริง" if retry_delay is not None else "backoff เดิม (parse ไม่ได้)"
+                reason = "429 (quota)" if e.code == 429 else "503 (โมเดลโหลดสูงชั่วคราว)"
+                print(f"[nlg] Gemini {reason}, retry {attempt + 1}/{GEMINI_MAX_RETRIES} in {wait_s}s ({source})")
+                time.sleep(wait_s)
                 delay *= 2
                 continue
-            print(f"[nlg] Gemini API error (code={e.code}), falling back to template")
-            return None
-        except Exception as e:
-            print(f"[nlg] Gemini call failed ({type(e).__name__}), falling back to template")
-            return None
+            print(f"[nlg] Gemini API error (code={e.code})")
+        else:
+            print(f"[nlg] Gemini call failed ({type(e).__name__})")
+        break
+
+    # โมเดลหลักล้มเหลวทุกช่องทางแล้ว (timeout หรือ retry หมด) ลองโมเดลสำรอง 1 ครั้งก่อนยอมแพ้ไป template
+    print(f"[nlg] primary model ({GEMINI_MODEL}) failed, trying fallback model ({GEMINI_FALLBACK_MODEL})")
+    _wait_for_gemini_rate_limit()
+    text, e = _call_single_gemini_attempt(GEMINI_FALLBACK_MODEL, prompt)
+    if e is None:
+        print(f"[nlg] fallback model ({GEMINI_FALLBACK_MODEL}) succeeded")
+        return text
+    print(f"[nlg] fallback model also failed ({type(e).__name__}), falling back to template")
     return None
 
 
@@ -1679,17 +1858,28 @@ def save_daily_nlg_row(date_thai, risk_group, province, daily_avg_pm25, explanat
     conn.close()
 
 
-def generate_daily_nlg_explanation(forecast, feature_row, risk_group="ทั่วไป"):
+# horizon ตัวแทนสำหรับอธิบาย SHAP ของ NLG รายวัน — จุดกึ่งกลางของ 24 horizon ตรงกับที่
+# _build_daily_nlg_prompt() สื่อสารกับ Gemini อยู่แล้วว่า "ประเมินจากช่วงกลางวัน"
+REP_HORIZON_FOR_SHAP = 12
+
+
+def generate_daily_nlg_explanation(forecast, feature_row, model_used, risk_group="ทั่วไป"):
     """สร้างคำอธิบาย NLG แทนทั้งวัน จากค่าเฉลี่ยของ forecast[] ทั้ง 24 จุด validate ผ่าน
     validate_health_message() เสมอ ไม่ผ่าน/เรียก Gemini ไม่สำเร็จ fallback ไป _fallback_message()
     risk_group ปรับโทนผ่าน _USER_GROUP_TONE คืนค่า (daily_avg_pm25, explanation_text, used_fallback)
+    model_used: โมเดลที่ Dynamic Routing เลือกใช้จริงที่ horizon ตัวแทน (REP_HORIZON_FOR_SHAP) —
+    ใช้อธิบาย SHAP เท่านั้น ไม่กระทบค่าพยากรณ์/prompt ส่วนอื่น
     """
     daily_avg_pm25 = round(sum(f["pm25"] for f in forecast) / len(forecast), 1)
     status = pm25_status(daily_avg_pm25)
 
-    # SHAP ปิดไว้ชั่วคราว (ดูคอมเมนต์ตอนบนไฟล์ที่เคย import get_shap_explanation) — ส่ง None
-    # ไปตรงๆ, _format_shap_factor_lines() รองรับ None อยู่แล้ว (fallback เป็น "ไม่มีข้อมูลปัจจัยเพิ่มเติม")
-    shap_pairs = None
+    # SHAP เป็น best-effort: ต้องไม่ทำให้ NLG (และ /api/forecast ทั้งเส้น) พังถ้า TreeExplainer
+    # พลาดหรือช้าเกิน — fallback เป็น None เหมือนตอนที่ปิดไว้ (_format_shap_factor_lines รองรับ None อยู่แล้ว)
+    try:
+        shap_pairs = get_shap_explanation(model_used, REP_HORIZON_FOR_SHAP, feature_row)
+    except Exception as e:
+        print(f"[nlg-daily] SHAP explanation failed ({type(e).__name__}): {e}")
+        shap_pairs = None
 
     prompt = _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group)
     message_text = _call_gemini(prompt)
@@ -1708,11 +1898,13 @@ def generate_daily_nlg_explanation(forecast, feature_row, risk_group="ทั่�
     return daily_avg_pm25, final_message, used_fallback
 
 
-def maybe_generate_daily_nlg(forecast, feature_row, risk_group, province):
+def maybe_generate_daily_nlg(forecast, feature_row, risk_group, province, model_used):
     """เรียก generate_daily_nlg_explanation() ครั้งเดียวต่อวันต่อ (risk_group, province) ตั้งแต่
     06:00 น. เวลาไทยเป็นต้นไป (>= 6 กัน process ที่ไม่ได้รันตรงช่วง 06:00-06:59 พลาดไปทั้งวัน) ไม่
     raise exception ออกไป กัน /api/forecast พัง — เป็น lazy ตาม (risk_group, province) ที่มีคนขอ
     (กลุ่ม 'ทั่วไป' ถูก warm ทุกวันผ่าน scheduled_forecast_job())
+    model_used: โมเดลตัวแทนที่ horizon=REP_HORIZON_FOR_SHAP (ดู generate_daily_nlg_explanation) —
+    มาจาก forecast[REP_HORIZON_FOR_SHAP - 1]["model_used"] ที่ caller ส่งมา
     """
     thai_now = get_thai_now()
     if thai_now.hour < 6:
@@ -1723,7 +1915,9 @@ def maybe_generate_daily_nlg(forecast, feature_row, risk_group, province):
         return
 
     try:
-        daily_avg_pm25, explanation_text, used_fallback = generate_daily_nlg_explanation(forecast, feature_row, risk_group)
+        daily_avg_pm25, explanation_text, used_fallback = generate_daily_nlg_explanation(
+            forecast, feature_row, model_used, risk_group
+        )
         generated_at_utc = thai_now.tz_convert("UTC").isoformat()
         save_daily_nlg_row(date_thai, risk_group, province, daily_avg_pm25, explanation_text, used_fallback, generated_at_utc)
         print(f"[nlg-daily] generated for {date_thai} ({risk_group}, {province}): avg_pm25={daily_avg_pm25}, fallback={used_fallback}")
@@ -1778,7 +1972,10 @@ class DataUnavailableError(RuntimeError):
 def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     province_meta = PROVINCES_BY_SLUG[province]
     series_info = {}
-    df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
+    # Dustboy อัปเดตแค่รายชั่วโมง ไม่มีประโยชน์ที่จะดึงถี่กว่า TARGET_CACHE_TTL_S (5 นาที) ปกติ ปรับเฉพาะจุดนี้ (ไม่แก้ default ของ
+    # get_recent_series เอง เพื่อไม่กระทบ max_age_s=0/ค่าอื่นที่ผู้เรียกจุดอื่นตั้งใจส่งมาตรงๆ เช่นตอนทดสอบ)
+    target_max_age_s = DUSTBOY_CACHE_TTL_S if province_meta.get("pm25_provider") == "dustboy" and USE_DUSTBOY_LOEI else TARGET_CACHE_TTL_S
+    df_recent = get_recent_series(province, strict=True, max_age_s=target_max_age_s, info=series_info)
     if df_recent is None or df_recent.empty:
         raise DataUnavailableError(f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)")
     # เติมค่าช่วงที่สถานีเงียบ (ถ้าเข้าเงื่อนไข) — df_observed คือข้อมูลจริงล้วน ใช้กับ backfill_actuals()/อายุข้อมูลเสมอ ห้ามใช้ df ที่เติมแล้ว
@@ -1793,7 +1990,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     # สภาพอากาศพร้อมทางสำรอง (CHANGELOG 172): ค่าที่ดึงไว้ -> สด -> ค่าเก่า <=2 ชม. -> climatology; source != live เก็บไว้ใน data_quality
     current_weather, weather_info = get_current_weather(province_meta, at=reference_time)
     # ค่าจากทางสำรองที่ยังไม่ผ่านเกณฑ์ "เทียบเท่าของจริง": ซีรีส์ pm25 จาก cache เก่า / สภาพอากาศ climatology -> ไม่ log (กัน R² ของ routing ปน)
-    input_degraded = series_info.get("source") == "stale_cache" or weather_info["source"] == "climatology"
+    input_degraded = series_info.get("source") in ("stale_cache", "dustboy") or weather_info["source"] == "climatology"
     if USES_NEIGHBOR:
         neighbor = compute_neighbor_features(province, reference_time)
     else:
@@ -1876,7 +2073,10 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         log_notification_snapshot(latest_time.isoformat(), float(latest_pm25), province)
     backfill_actuals(df_observed, province)  # เติมค่าจริงให้ prediction เก่าจากข้อมูลที่เพิ่งดึง — ต้องเป็นข้อมูลจริงล้วนเสมอ
     if loggable:
-        maybe_generate_daily_nlg(forecast, X_now, risk_group, province)
+        # model_used ตัวแทนสำหรับอธิบาย SHAP ของ NLG รายวัน (ดู REP_HORIZON_FOR_SHAP) — forecast[]
+        # มี model_used ต่อ horizon อยู่แล้วจากลูปข้างบน ไม่ต้องเรียก select_model() ซ้ำ
+        rep_model_used = forecast[REP_HORIZON_FOR_SHAP - 1]["model_used"]
+        maybe_generate_daily_nlg(forecast, X_now, risk_group, province, rep_model_used)
 
     best_time = find_best_time(forecast)
 
@@ -2298,6 +2498,33 @@ def api_forecast():
         return jsonify({"error": str(e)}), 400
     except DataUnavailableError as e:
         return jsonify({"error": str(e), "data_unavailable": True}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/current_pm25", methods=["GET"])
+def api_current_pm25():
+    """ค่า PM2.5 ล่าสุดของจังหวัดเดียว แบบเบา — ไม่ทำ feature engineering/model inference/log ใดๆ เลย
+    มีไว้ให้ frontend poll รีเฟรช badge "ปัจจุบัน" เป็นระยะโดยไม่ต้องยิง /api/forecast (หนัก: inference
+    2 โมเดล + บางครั้ง Gemini) ใช้ TARGET_CACHE_TTL_S เดียวกับที่ get_forecast() ใช้จริง จึงมักได้จาก
+    cache ที่ /api/forecast อุ่นไว้แล้ว ไม่ยิง OpenAQ ซ้ำ ไม่ทำ imputation (ต่างจาก get_forecast()) เพราะ
+    endpoint นี้แค่โชว์ค่าที่สังเกตได้จริงล่าสุด ไม่ใช่ feature ป้อนโมเดล — กรณีหายากที่สถานีเงียบพอดี
+    (3-48 ชม.) ค่านี้กับ current ใน /api/forecast อาจต่างกันเล็กน้อยได้ (อันนี้ raw, อีกอันเติมค่า)"""
+    try:
+        province = resolve_province_from_request()
+        df = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S)
+        if df is None or df.empty:
+            return jsonify({"error": f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)",
+                             "data_unavailable": True}), 503
+        latest = df.iloc[-1]
+        latest_time_th = pd.Timestamp(latest["datetime_utc"]).tz_convert("Asia/Bangkok")
+        return jsonify({
+            "pm25": round(float(latest["pm25"]), 1),
+            "datetime_th": latest_time_th.strftime("%Y-%m-%d %H:%M"),
+            "status": pm25_status(latest["pm25"]),
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
