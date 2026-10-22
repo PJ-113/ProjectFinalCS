@@ -39,7 +39,11 @@ data/multiprovince_pm25_features_raw_*.csv
 Thumbs.db
 .DS_Store
 
-# ===== ไฟล์ใหญ่/ชั่วคราวที่ไม่ขึ้น git (ดู docs/MODEL_FILES.md) =====
+# ===== เอกสารภายใน/บันทึกการทำงาน — เก็บไว้บนเครื่องเท่านั้น ไม่ขึ้น repo =====
+CLAUDE.md
+CHANGELOG.md
+
+# ===== ไฟล์ใหญ่/ชั่วคราวที่ไม่ขึ้น git (ดู README.md หัวข้อ "ไฟล์โมเดลที่ไม่ได้อยู่ใน git") =====
 # โมเดล pooled ใหม่ (เกิน 100MB ต่อไฟล์) — ไฟล์เก่าที่ track อยู่แล้วไม่กระทบ
 models/*multiprovince*.pkl
 models/shap_values_by_horizon_*.pkl
