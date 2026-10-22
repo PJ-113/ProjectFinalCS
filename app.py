@@ -1711,6 +1711,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
     if df_recent is None or df_recent.empty:
         raise DataUnavailableError(f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)")
+    df_observed = df_recent  # ข้อมูลจริงล้วน (ก่อนเติมค่า) — ใช้กับ backfill_actuals()/อายุข้อมูลเสมอ ห้ามใช้ df_recent หลัง impute
     imputed_info = None
     if IMPUTATION_CFG is not None:
         df_recent, imputed_info = impute_target_series(province, df_recent)
