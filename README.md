@@ -68,9 +68,30 @@ requirements.txt       # Python dependencies
 frontend/              # Vue 3 SPA + PWA (build ด้วย Vite)
 models/                # โมเดล .pkl (LightGBM/XGBoost pooled) + ตาราง conformal calibration
 data/                  # ชุดข้อมูลเทรน (.csv) + ทะเบียนจังหวัด (province_station_registry.json)
-scripts/               # สคริปต์เทรน/วิเคราะห์/ทดสอบ (แต่ละไฟล์รันเดี่ยวได้ ดูดัชนีที่ scripts/README.md)
+scripts/               # สคริปต์เทรน/วิเคราะห์/ทดสอบ (แต่ละไฟล์รันเดี่ยวได้ ดูสคริปต์สำคัญด้านล่าง)
 figures/                # กราฟ/ภาพผลการทดลอง (ส่วนใหญ่ไม่ได้ขึ้น git — regenerate ได้จาก scripts/)
 ```
+
+## สคริปต์สำคัญ (`scripts/`)
+
+`scripts/` มีสคริปต์ one-off (ทดลอง/ตรวจสอบ) อีกจำนวนมากที่ไม่ได้ลงไว้ที่นี่ — รายการด้านล่างคือไฟล์ที่จำเป็นต่อการรัน
+
+**Pipeline เตรียมข้อมูล + เทรนโมเดล** (รันตามลำดับถ้าต้องสร้างโมเดลใหม่ ดูหัวข้อ "ถ้าไฟล์หาย" ด้านล่าง):
+- `province_registry.py` — สร้าง registry 20 จังหวัด (query OpenAQ v3 โดยตรง)
+- `build_raw_dataset_multiprovince.py` → `augment_raw_dataset_with_spatial_lag_k1.py` → `compute_fire_hotspot_feature.py` → `compute_neighbor_trend_feature.py` — 4 ขั้นตอนเตรียมข้อมูล (เรียกรวมด้วย `rebuild_dataset_clean.py`)
+- `verify_clean_dataset_alignment.py` — ตรวจสอบ timestamp alignment หลัง rebuild
+- `annotate_registry_timestamp_offset.py` — วัด/เขียน offset เวลาของแต่ละสถานีลง registry
+- `train_multiprovince_models.py` — **สคริปต์เทรนหลัก** (LightGBM+XGBoost pooled v3, source of truth ของ `FEATURE_COLS`/`DATA_PATH`/split ที่สคริปต์อื่นโหลดผ่าน `importlib`)
+
+**ประเมินผล/ใช้งานจริงใน `app.py`**:
+- `shap_analysis_clean.py` — **ถูก `app.py` import ตรง** สำหรับคำอธิบาย SHAP
+- `backtest_recent_multiprovince.py`, `eval_zeroshot_multiprovince.py`, `eval_zeroshot_real_provinces_clean.py` — ประเมินผล/zero-shot
+- `validate_features_timeblocked_cv.py` — วิธีมาตรฐานของโปรเจกต์สำหรับตัดสินใจเพิ่ม/ตัดฟีเจอร์
+- `experiment_imputation_accuracy.py`, `export_imputation_h_lite.py` — สูตร/config การเติมค่าสถานีเงียบ (H-lite)
+- `summarize_target_latency.py` — คำนวณค่าคงที่ `IMPUTATION_MIN_K` จาก latency log จริง
+- `promote_admin.py` — ops utility สร้าง admin user
+
+**เทส** (รันมือ ไม่มี pytest): ไฟล์ `test_*.py` ทั้งหมด 14 ไฟล์
 
 ## ไฟล์โมเดลที่ไม่ได้อยู่ใน git
 
@@ -95,8 +116,8 @@ python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).h
 
 ### ที่เก็บสำรอง
 
-- GitHub Release (repo เป็น private): https://github.com/PJ-113/ProjectFinalCS/releases/tag/model-v3-20260919_203455 — อัปโหลดเมื่อ 2026-09-21 ขนาดตรงกับต้นฉบับ
-  ดาวน์โหลดด้วย `gh release download model-v3-20260919_203455 --repo PJ-113/ProjectFinalCS --dir models` (ต้อง login ด้วยบัญชีที่มีสิทธิ์)
+- GitHub Release : https://github.com/PJ-113/ProjectFinalCS/releases/tag/model-v3-20260919_203455 — อัปโหลดเมื่อ 2026-09-21 ขนาดตรงกับต้นฉบับ
+  ดาวน์โหลดด้วย `gh release download model-v3-20260919_203455 --repo PJ-113/ProjectFinalCS --dir models`
 
 ### ถ้าไฟล์หาย
 

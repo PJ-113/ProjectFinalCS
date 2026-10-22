@@ -877,7 +877,6 @@ IMPUTATION_FEATURES = ["x0", "nb_now", "dnb", "nb_0", "j", "log1p_j", "hour_sin"
 
 
 def _load_imputation_config():
-    """อ่านค่าสัมประสิทธิ์ Ridge-lite + จุดสลับ + ตาราง q(k,h) จาก JSON (สร้างโดย scripts/export_imputation_h_lite.py) ผิดพลาด -> None (ปิดฟีเจอร์)"""
     if not USE_TARGET_IMPUTATION:
         return None
     try:
@@ -1068,7 +1067,7 @@ def migrate_province_column():
         )
         existing = {r[0] for r in cur.fetchall()}
         if new_constraint_name not in existing:
-            for name in existing:  # ลบ unique constraint เก่า (ไม่รวม province) — ชื่อมาจาก
+            for name in existing:  # ลบ unique constraint เก่า (ไม่รวม province) 
                 cur.execute(f"ALTER TABLE {table} DROP CONSTRAINT {name}")  # pg_constraint catalog เอง ไม่ใช่ input ภายนอก
             new_cols = ", ".join(unique_cols + ["province"])
             cur.execute(f"ALTER TABLE {table} ADD CONSTRAINT {new_constraint_name} UNIQUE ({new_cols})")
@@ -1346,8 +1345,6 @@ def _mentioned_levels(message_text):
 
 
 def _mentions_generic_caution_below(message_text, actual_idx):
-    """True ถ้าข้อความมีคำเตือนทั่วไปที่ floor สูงกว่าระดับจริง (เช่น เตือน "หลีกเลี่ยงกิจกรรมกลางแจ้ง"
-    ทั้งที่ระดับจริงคือ "ดีมาก" ซึ่งต่ำกว่า floor "ปานกลาง")"""
     for floor_level_name, keywords in _GENERIC_CAUTION_KEYWORDS:
         floor_idx = _level_index(floor_level_name)
         if floor_idx <= actual_idx:
@@ -1410,7 +1407,7 @@ GEMINI_MIN_CALL_SPACING_S = 4.5  # >4.0s (=60/15) เผื่อ margin
 _gemini_rate_lock = threading.Lock()
 _gemini_last_call_started_at = [0.0]
 
-# ชื่อ feature ทางเทคนิค -> คำอธิบายภาษาไทยที่คนทั่วไปเข้าใจ ใช้ตอนสร้าง prompt ส่งให้ Gemini
+# ชื่อ feature ทางเทคนิค  คำอธิบายภาษาไทยที่คนทั่วไปเข้าใจ ใช้ตอนสร้าง prompt ส่งให้ Gemini
 _FEATURE_NAME_TH = {
     "pm25_lag_1": "ค่าฝุ่นเมื่อชั่วโมงที่แล้ว",
     "pm25_lag_3": "ค่าฝุ่นเมื่อ 3 ชั่วโมงก่อน",
@@ -1576,7 +1573,7 @@ def _call_gemini(prompt):
 
 
 # ===== NLG รายวัน (สรุปทั้งวันแทนรายชั่วโมง) =====
-# สร้างคำอธิบายแค่ 1 ครั้ง/วันตอน 06:00 น. เวลาไทย จากค่าเฉลี่ยพยากรณ์ 24 ชม. เก็บใน daily_nlg_log กัน generate ซ้ำ
+
 
 def get_thai_now():
     """เวลาไทย (Asia/Bangkok) — แยกฟังก์ชันให้ test monkeypatch ได้ ห้ามใช้วันที่ฝั่ง UTC ตรงๆ
@@ -1620,8 +1617,6 @@ def save_daily_nlg_row(date_thai, risk_group, province, daily_avg_pm25, explanat
     conn.close()
 
 
-# horizon ตัวแทนสำหรับอธิบาย SHAP ของ NLG รายวัน — จุดกึ่งกลางของ 24 horizon ตรงกับที่
-# _build_daily_nlg_prompt() สื่อสารกับ Gemini อยู่แล้วว่า "ประเมินจากช่วงกลางวัน"
 REP_HORIZON_FOR_SHAP = 12
 
 
@@ -1676,8 +1671,6 @@ def maybe_generate_daily_nlg(forecast, feature_row, risk_group, province, model_
 
 
 def get_today_daily_nlg(risk_group, province):
-    """อ่าน NLG รายวันของวันนี้ (ไม่เรียก Gemini ใหม่ — สร้างจริงที่ maybe_generate_daily_nlg() เท่านั้น)
-    คืน placeholder แทน error ถ้ายังไม่มีแถวของวันนี้"""
     date_thai = get_thai_now().strftime("%Y-%m-%d")
     row = get_daily_nlg_row(date_thai, risk_group, province)
     if row is None:
@@ -1699,9 +1692,6 @@ MIN_LIVE_FOR_SUMMARY = 5
 
 
 def summarize_errors(all_errors, live_errors):
-    """ใช้ error จาก live เท่านั้นถ้ามีพอ (>= MIN_LIVE_FOR_SUMMARY) กัน MAE/bias ดูดีเกินจริงจาก
-    backfill (optimistic กว่า live จริง) ไม่พอให้ fallback ไปรวม backfill (basis='mixed')
-    คืนค่า (mae, bias, n_used, basis)"""
     if len(live_errors) >= MIN_LIVE_FOR_SUMMARY:
         errs, basis = live_errors, "live"
     else:
@@ -1725,18 +1715,15 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
     if df_recent is None or df_recent.empty:
         raise DataUnavailableError(f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)")
-    # เติมค่าช่วงที่สถานีเงียบ (ถ้าเข้าเงื่อนไข) — df_observed คือข้อมูลจริงล้วน ใช้กับ backfill_actuals()/อายุข้อมูลเสมอ ห้ามใช้ df ที่เติมแล้ว
-    df_observed = df_recent
     imputed_info = None
     if IMPUTATION_CFG is not None:
         df_recent, imputed_info = impute_target_series(province, df_recent)
     imputed = imputed_info is not None
 
-    # feature เพื่อนบ้าน + จุดความร้อน (CHANGELOG 141/149) — เวลาอ้างอิงเดียวกับที่ใช้คิด lag; คำนวณ/ดึงเฉพาะเมื่อโมเดลที่โหลดใช้ feature นั้นจริง
+    # feature เพื่อนบ้าน + จุดความร้อน — เวลาอ้างอิงเดียวกับที่ใช้คิด lag; คำนวณ/ดึงเฉพาะเมื่อโมเดลที่โหลดใช้ feature นั้นจริง
     reference_time = df_recent["datetime_utc"].max()
-    # สภาพอากาศพร้อมทางสำรอง (CHANGELOG 172): ค่าที่ดึงไว้ -> สด -> ค่าเก่า <=2 ชม. -> climatology; source != live เก็บไว้ใน data_quality
+    # สภาพอากาศพร้อมทางสำรอง : ค่าที่ดึงไว้ -> สด -> ค่าเก่า <=2 ชม. -> climatology; source != live เก็บไว้ใน data_quality
     current_weather, weather_info = get_current_weather(province_meta, at=reference_time)
-    # ค่าจากทางสำรองที่ยังไม่ผ่านเกณฑ์ "เทียบเท่าของจริง": ซีรีส์ pm25 จาก cache เก่า / สภาพอากาศ climatology -> ไม่ log (กัน R² ของ routing ปน)
     input_degraded = series_info.get("source") == "stale_cache" or weather_info["source"] == "climatology"
     if USES_NEIGHBOR:
         neighbor = compute_neighbor_features(province, reference_time)
@@ -2226,9 +2213,7 @@ def api_current_pm25():
         return jsonify({"error": str(e)}), 500
 
 
-# notification_log อาจมีช่องว่างเยอะถ้า scheduler ไม่ได้รันต่อเนื่อง (ปกติใน dev) — ดึง "ดิบ" แค่เท่า limit
-# ที่ขอมาจะพลาดรอบเสี่ยงที่อยู่ไกลออกไปในแง่จำนวนแถวแต่ไม่ไกลในแง่วันที่ สแกนย้อนไกลกว่านั้นพอประมาณแทน
-# (ดู api_notifications())
+
 NOTIF_SCAN_WINDOW = 500
 
 
@@ -2242,9 +2227,7 @@ def api_notifications():
 
         conn = get_db_connection()
         cur = conn.cursor()
-        # ดึง "ดิบ" มา NOTIF_SCAN_WINDOW แถวเสมอ ไม่ใช่แค่เท่า limit — notification_log อาจมีช่องว่างเยอะ
-        # ถ้า scheduler ไม่ได้รันต่อเนื่อง (ปกติใน dev) ดึงแค่เท่า limit จะพลาดรอบเสี่ยงที่อยู่ไกลออกไปในแง่
-        # จำนวนแถวแต่ไม่ไกลในแง่วันที่ กรองความเสี่ยงทีหลังแล้วค่อยตัดเหลือ limit จริงก่อนส่งกลับ
+     
         cur.execute(
             "SELECT recorded_at_utc, latest_pm25 FROM notification_log WHERE province = %s "
             "ORDER BY recorded_at_utc DESC LIMIT %s",
@@ -2361,7 +2344,7 @@ def api_comparison():
         conn = get_db_connection()
         cur = conn.cursor()
         # ไม่มี calibration อีกต่อไป — actual_pm25_calibrated เท่ากับ actual_pm25 เสมอสำหรับแถวใหม่
-        # (ดู backfill_actuals()) COALESCE ไว้เผื่อแถวที่ยังไม่ผ่าน backfill
+        
         calibrated_expr = "COALESCE(actual_pm25_calibrated, actual_pm25)"
         if model == "all":
             cur.execute(
