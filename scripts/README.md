@@ -1,6 +1,6 @@
 # scripts/ — ดัชนีไฟล์
 
-มี 170 ไฟล์ `.py` ใน `scripts/` สะสมมาตลอดการพัฒนาโปรเจกต์ (ไม่มีไลบรารีร่วม แต่ละไฟล์คือ entry point เดี่ยวๆ ตาม CLAUDE.md — ลด 5 ไฟล์จาก 175 เดิมเมื่อ 2026-10-22 โดยลบ `shap_analysis.py`/`shap_analysis_nbtrend.py`/`backfill_xgboost.py`/`retrain_weighted.py`/`train_xgb_prophet.py` ที่ CLAUDE.md/CHANGELOG ยืนยันแล้วว่าถูกแทนที่ด้วย `_clean`/`_v2` ไปเรียบร้อย — ไม่มีสคริปต์อื่นเหลือ import ไฟล์เหล่านี้) ไฟล์นี้เป็นดัชนีช่วยหา — **ไม่มีการย้าย/เปลี่ยนชื่อไฟล์ที่เหลือ** เพราะ ~90+ ไฟล์ผูก path กันแบบ hardcode ผ่าน `importlib.util.spec_from_file_location` + `os.path.join(_ROOT, "scripts", ...)` และ `app.py:29` เองก็ `sys.path.insert` ไปที่ `scripts/` ตรงๆ แบบ flat directory — การย้ายไฟล์เข้าโฟลเดอร์ย่อยจะพังเป็นลูกโซ่โดยไม่จำเป็น
+มี 143 ไฟล์ `.py` ใน `scripts/` สะสมมาตลอดการพัฒนาโปรเจกต์ (ไม่มีไลบรารีร่วม แต่ละไฟล์คือ entry point เดี่ยวๆ ตาม CLAUDE.md — ลดจาก 175 ไฟล์เดิมเมื่อ 2026-10-22 เป็น 2 รอบ: (1) ลบ `shap_analysis.py`/`shap_analysis_nbtrend.py`/`backfill_xgboost.py`/`retrain_weighted.py`/`train_xgb_prophet.py` ที่ CLAUDE.md/CHANGELOG ยืนยันแล้วว่าถูกแทนที่ด้วย `_clean`/`_v2`; (2) ไล่เช็ค `MODEL_TAG`/`DATA_PATH` จริงในโค้ดของทุกกลุ่มที่ชื่อคล้ายกัน (`_clean`/`_nbtrend`/`_firehotspot`/`_k1`/`_latest`) พบว่าทุกกลุ่มเป็น**รุ่นอัปเกรดที่แทนกันได้จริง ไม่ใช่การทดลองคนละสาย** — ของเก่าชี้ไป MODEL_TAG/dataset ที่เลิกใช้แล้ว (เช่น `_20260919_135655` ที่ CLAUDE.md ระบุว่าปนเปื้อนข้อมูลเวลาเพี้ยน) ของปัจจุบันมีแต่ `_clean.py` (หรือ `_k1.py` สำหรับ `augment_raw_dataset_with_spatial_lag`) ที่ชี้โมเดล/dataset ที่ deploy จริงตัวเดียว — ลบไปอีก 27 ไฟล์ ยืนยันด้วย grep ว่าไม่มีสคริปต์ที่เหลือ import ไฟล์ที่ลบไปเลย) ไฟล์นี้เป็นดัชนีช่วยหา — **ไม่มีการย้าย/เปลี่ยนชื่อไฟล์ที่เหลือ** เพราะหลายสิบไฟล์ผูก path กันแบบ hardcode ผ่าน `importlib.util.spec_from_file_location` + `os.path.join(_ROOT, "scripts", ...)` และ `app.py:29` เองก็ `sys.path.insert` ไปที่ `scripts/` ตรงๆ แบบ flat directory — การย้ายไฟล์เข้าโฟลเดอร์ย่อยจะพังเป็นลูกโซ่โดยไม่จำเป็น
 
 ## Core / production
 
@@ -56,33 +56,32 @@
 - `test_risk_group_e2e.py`
 - `test_risk_score.py`
 
-## Experiments / diagnostics (132 ไฟล์)
+## Experiments / diagnostics (105 ไฟล์)
 
 การทดลอง/ตรวจสอบแบบ one-off ตลอดการพัฒนา (ablation, validate, check, analyze ฯลฯ) — ผลลัพธ์ส่วนใหญ่ ไม่ได้ commit เข้า git (ตามธรรมเนียมเดิม ไม่ commit output ทุกไฟล์) จัดกลุ่มตาม prefix ชื่อไฟล์:
 
 > **คำเตือน**: กลุ่มที่ลงท้าย `_clean`/`_nbtrend`/`_firehotspot`/`_k1`/`_latest`/`_v2` ส่วนใหญ่เป็น **การทดลองคนละสาย** (ทดสอบฟีเจอร์/dataset คนละชุด) **ไม่ใช่รุ่นอัปเกรดที่แทนกันตรงไปตรงมา** (ยกเว้น `shap_analysis_clean.py` ที่ CLAUDE.md ฟันธงชัดว่าเป็นตัวที่ใช้จริง ตัวอื่นในกลุ่มเดียวกันห้าม import เข้า app.py) — ก่อนจะถือว่าไฟล์ไหน "เก่ากว่าเลิกใช้ได้" ให้เช็ค `git log -- scripts/<ไฟล์>` และ CHANGELOG.md ก่อนเสมอ อย่าสมมติจากชื่อไฟล์เพียงอย่างเดียว
 
-**`analyze_*`** (22): `analyze_alert_capability_per_province.py`, `analyze_amenity_density_vs_pm25_pattern.py`, `analyze_amenity_density_vs_pm25_pattern_clean.py`, `analyze_burning_season_backtest.py`, `analyze_burning_season_backtest_clean.py`, `analyze_burning_season_backtest_firehotspot.py`, `analyze_burning_season_backtest_k1.py`, `analyze_burning_season_backtest_latest.py`, `analyze_burning_season_backtest_nbtrend.py`, `analyze_dynamic_routing_live_behavior.py`, `analyze_elevation_vs_pm25_pattern.py`, `analyze_elevation_vs_pm25_pattern_clean.py`, `analyze_humidity_raw_correlation_clean.py`, `analyze_live_vs_backtest_by_horizon.py`, `analyze_rain_vs_error.py`, `analyze_real_gap_distribution.py`, `analyze_shock_events.py`, `analyze_spatial_correlation.py`, `analyze_spatial_correlation_clean.py`, `analyze_timestamp_shift_leakage.py`, `analyze_zeroshot_lopo_confounders.py`, `analyze_zeroshot_lopo_confounders_clean.py`
-**`eval_*`** (14): `eval_ensemble_vs_routing.py`, `eval_ensemble_vs_routing_clean.py`, `eval_ensemble_vs_routing_firehotspot.py`, `eval_ensemble_vs_routing_k1.py`, `eval_ensemble_vs_routing_nbtrend.py`, `eval_haze_season_backtest.py`, `eval_high_pollution.py`, `eval_xgb_bias_high_by_horizon.py`, `eval_xgb_posthoc_correction.py`, `eval_zeroshot_lopo_spatial_distance.py`, `eval_zeroshot_real_provinces.py`, `eval_zeroshot_real_provinces_firehotspot.py`, `eval_zeroshot_real_provinces_nbtrend.py`, `eval_zeroshot_spatial_distance.py`
+**`analyze_*`** (13): `analyze_alert_capability_per_province.py`, `analyze_amenity_density_vs_pm25_pattern_clean.py`, `analyze_burning_season_backtest_clean.py`, `analyze_dynamic_routing_live_behavior.py`, `analyze_elevation_vs_pm25_pattern_clean.py`, `analyze_humidity_raw_correlation_clean.py`, `analyze_live_vs_backtest_by_horizon.py`, `analyze_rain_vs_error.py`, `analyze_real_gap_distribution.py`, `analyze_shock_events.py`, `analyze_spatial_correlation_clean.py`, `analyze_timestamp_shift_leakage.py`, `analyze_zeroshot_lopo_confounders_clean.py`
 **`check_*`** (12): `check_air4thai_missing_rate.py`, `check_fallback_interval_coverage.py`, `check_firms_nrt_vs_sp.py`, `check_live_data_availability.py`, `check_live_feature_parity.py`, `check_loei_station_status.py`, `check_model_sensitivity_live_degradation.py`, `check_neighbor_staleness_sensitivity_clean.py`, `check_openaq_missing_rate_5y.py`, `check_openaq_timestamp_shift.py`, `check_quantile_heads_equal_width.py`, `check_rolling_r2_stability.py`
 **`validate_*`** (10): `validate_amenity_density_feature.py`, `validate_drop_neighbor_avg_cv.py`, `validate_drop_time_cyclical.py`, `validate_elevation_feature.py`, `validate_feature_refinements.py`, `validate_features_clean.py`, `validate_fire_hotspot_feature.py`, `validate_fire_wide_features_cv.py`, `validate_neighbor_trend_variants.py`, `validate_spatial_lag_feature.py`
-**`recalibrate_*`** (9): `recalibrate_conformal_by_volatility_k1.py`, `recalibrate_conformal_configs.py`, `recalibrate_conformal_configs_clean.py`, `recalibrate_conformal_configs_firehotspot.py`, `recalibrate_conformal_configs_k1.py`, `recalibrate_conformal_configs_nbtrend.py`, `recalibrate_conformal_per_province_global_severity_k1.py`, `recalibrate_conformal_per_province_severity_k1.py`, `recalibrate_conformal_per_severity.py`
+**`eval_*`** (7): `eval_ensemble_vs_routing_clean.py`, `eval_haze_season_backtest.py`, `eval_high_pollution.py`, `eval_xgb_bias_high_by_horizon.py`, `eval_xgb_posthoc_correction.py`, `eval_zeroshot_lopo_spatial_distance.py`, `eval_zeroshot_spatial_distance.py`
 **`experiment_*`** (7): `experiment_diurnal_nb_trend_cv.py`, `experiment_diurnal_nb_trend_hypothesis.py`, `experiment_imputation_downstream.py`, `experiment_imputation_interval_recalibration.py`, `experiment_weather_fallback.py`, `experiment_weather_horizon_oracle.py`, `experiment_weather_train_serve_skew.py`
 **`fetch_*`** (7): `fetch_extra_weather_isaan.py`, `fetch_firms_hotspots_isaan.py`, `fetch_firms_hotspots_wide.py`, `fetch_province_amenity_density.py`, `fetch_province_building_density.py`, `fetch_province_elevation.py`, `fetch_raw_pm25_isaan.py`
-**`ablation_*`** (6): `ablation_feature_groups.py`, `ablation_feature_groups_clean.py`, `ablation_feature_groups_nbtrend.py`, `ablation_individual_features.py`, `ablation_individual_features_clean.py`, `ablation_individual_features_nbtrend.py`
-**`compute_*`** (5): `compute_accuracy_mape.py`, `compute_accuracy_mape_clean.py`, `compute_accuracy_mape_nbtrend.py`, `compute_alert_capability_hourly.py`, `compute_dynamic_routing_table14_row.py`
 **`diagnose_*`** (5): `diagnose_amenity_density.py`, `diagnose_boundary_layer_height.py`, `diagnose_building_count_anomaly.py`, `diagnose_firms_hotspot_access.py`, `diagnose_mahasarakham_sensor_quality.py`
+**`recalibrate_*`** (5): `recalibrate_conformal_by_volatility_k1.py`, `recalibrate_conformal_configs_clean.py`, `recalibrate_conformal_per_province_global_severity_k1.py`, `recalibrate_conformal_per_province_severity_k1.py`, `recalibrate_conformal_per_severity.py`
 **`tune_*`** (5): `tune_fire_hotspot_hyperparams.py`, `tune_model_hyperparams_pooled.py`, `tune_quantile_heads_pooled.py`, `tune_sample_weight_pooled.py`, `tune_spatial_lag_k.py`
+**`compute_*`** (3): `compute_accuracy_mape_clean.py`, `compute_alert_capability_hourly.py`, `compute_dynamic_routing_table14_row.py`
 **`confirm_*`** (3): `confirm_fire_upwind_on_test.py`, `confirm_improvements_on_test.py`, `confirm_v3_on_test.py`
 **`plot_*`** (3): `plot_bias_comparison.py`, `plot_mae_comparison.py`, `plot_r2_3models.py`
 **`train_*`** (3): `train_baseline_lgb_v2.py`, `train_multiprovince_models_all20.py`, `train_xgb_prophet_v2.py`
+**`ablation_*`** (2): `ablation_feature_groups_clean.py`, `ablation_individual_features_clean.py`
 **`backtest_*`** (2): `backtest_dayahead_dust_episodes.py`, `backtest_dynamic_routing_offline.py`
 **`compare_*`** (2): `compare_model_vs_persistence_test.py`, `compare_raw_vs_interpolated.py`
 **`evaluate_*`** (2): `evaluate_2024_2026_retrain_window.py`, `evaluate_live_v2_vs_persistence.py`
 **`measure_*`** (2): `measure_gemini_latency.py`, `measure_target_data_latency.py`
 **`retrain_*`** (2): `retrain_weighted_v2.py`, `retrain_xgb_weighted.py`
 **`verify_*`** (2): `verify_app_feature_parity.py`, `verify_forecast_all_provinces.py`
-**`augment_*`** (1): `augment_raw_dataset_with_spatial_lag.py`
 **`backfill_*`** (1): `backfill_xgboost_v2.py`
 **`debug_*`** (1): `debug_prediction_log.py`
 **`dryrun_*`** (1): `dryrun_deploy_latest_model.py`

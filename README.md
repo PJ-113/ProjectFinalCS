@@ -69,7 +69,6 @@ frontend/              # Vue 3 SPA + PWA (build ด้วย Vite)
 models/                # โมเดล .pkl (LightGBM/XGBoost pooled) + ตาราง conformal calibration
 data/                  # ชุดข้อมูลเทรน (.csv) + ทะเบียนจังหวัด (province_station_registry.json)
 scripts/               # สคริปต์เทรน/วิเคราะห์/ทดสอบ (แต่ละไฟล์รันเดี่ยวได้ ดูดัชนีที่ scripts/README.md)
-notebooks/             # notebook สำรวจ (historical)
 CHANGELOG.md           # ประวัติการเปลี่ยนแปลง (ทำไม ไม่ใช่แค่อะไร)
 CLAUDE.md              # คู่มือสถาปัตยกรรม/ข้อควรระวังเชิงลึก
 ```
