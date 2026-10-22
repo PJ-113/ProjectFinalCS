@@ -42,10 +42,9 @@ MODEL_NAIVE = "naive_fallback"
 PROVINCE_REGISTRY_PATH = "data/province_station_registry.json"
 
 USE_TIMESTAMP_OFFSET = True
-OFFSET_FUTURE_TOLERANCE_H = 1  # หลังบวก offset แล้ว reading ล่าสุดล้ำอนาคตเกินนี้ = OpenAQ แก้ป้ายเวลาแล้ว offset จะแก้ซ้ำ -> ทิ้ง offset (ดู fetch_recent_pm25_openaq)
-DEFAULT_PROVINCE = "khonkaen"
+OFFSET_FUTURE_TOLERANCE_H = 1  
 HIGH_POLLUTION_THRESHOLD = 37.5  # ค่าเดียวกันทุกจังหวัด (มาตรฐาน คพ. ไม่ใช่ค่าที่ผูกกับโมเดล)
-# ต้องรัน `npm run build` ใน frontend/ ก่อน ถึงจะมีโฟลเดอร์นี้ (ดู CHANGELOG)
+# ต้องรัน `npm run build` ใน frontend/ ก่อน ถึงจะมีโฟลเดอร์นี้ 
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 DEBUG = True  # ต้องอ่านจากตรงนี้ ไม่ใช่ app.debug เพราะ Flask ยังไม่ set app.debug จนกว่าจะเรียก app.run()
 SIGMA_CRITICAL = 0.3
@@ -100,13 +99,6 @@ def get_db_connection():
 
 app = Flask(__name__)
 CORS(app)
-
-# Swagger UI แบบ interactive (ลอง endpoint ได้จริงจากเบราว์เซอร์) เข้าได้ที่ /apidocs/ — สเปกแยกไว้ที่
-# swagger_spec.py เพราะ route ในไฟล์นี้เยอะ ไม่อยากให้ YAML docstring ปนกับ logic ของแต่ละ route
-# คำเตือน: endpoint ที่เขียนข้อมูลจริง (เช่น /api/auth/register) ถ้ากด "Try it out" จะเขียนลง DB จริง
-from flasgger import Swagger
-from swagger_spec import SWAGGER_CONFIG, SWAGGER_TEMPLATE
-Swagger(app, config=SWAGGER_CONFIG, template=SWAGGER_TEMPLATE)
 
 app.config["SECRET_KEY"] = SECRET_KEY
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -318,8 +310,7 @@ def init_db():
         )
     """)
 
-    # NLG รายวัน (สร้าง 1 ครั้ง/วัน ตอน 06:00 น. เวลาไทย — ดู maybe_generate_daily_nlg()) date_thai
-    # เป็น "YYYY-MM-DD" เวลาไทยเสมอ ไม่ใช่ UTC (ดู get_thai_now())
+    # NLG รายวัน (สร้าง 1 ครั้ง/วัน ตอน 06:00 น. เวลาไทย)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS daily_nlg_log (
             id SERIAL PRIMARY KEY,
@@ -691,12 +682,12 @@ def get_current_weather(province_meta, at=None):
     raise err
 
 
-# ===== Live features ใหม่ของโมเดล v2: จังหวัดข้างเคียง + จุดความร้อน =====
+# ===== Live features ใหม่ของโมเดล : จังหวัดข้างเคียง + จุดความร้อน =====
 
 
 NEIGHBOR_FRESH_HOURS = 3       # reading ล่าสุดของเพื่อนบ้านห่างจากเวลาของจังหวัดเป้าหมายไม่เกินนี้ = "สด" (เก่า 1-3 ชม. เสียหาย <0.4%)
 NEIGHBOR_AVG_K = 3             # อันดับ 1 ไม่สด -> เฉลี่ยเพื่อนบ้านสดใกล้สุดสูงสุดกี่จังหวัด (MAE +2.4%/+2.5% เทียบ NaN +32%/+65%)
-NEIGHBOR_MAX_FETCH = 8         # ดึงเพื่อนบ้านตามลำดับระยะทางสูงสุดกี่จังหวัดต่อรอบ (กัน request บาน)
+NEIGHBOR_MAX_FETCH = 8         # ดึงเพื่อนบ้านตามลำดับระยะทางสูงสุดกี่จังหวัดต่อรอบ 
 TARGET_STALE_HOURS = 6         # จังหวัดเป้าหมายมี reading ล่าสุดเก่ากว่านี้ = ข้อมูลเก่า (ไม่ log, ไม่ทำ NLG — ดู get_forecast)
 TARGET_CACHE_TTL_S = 300       # จังหวัดเป้าหมายใช้ cache สั้น (ค่า "ปัจจุบัน" ต้องสด)
 SERIES_CACHE_TTL_S = 1800      # เพื่อนบ้านใช้ cache 30 นาที (scheduled job วน 20 จังหวัดต่อชั่วโมง = ดึงจังหวัดละ 1 ครั้ง)
