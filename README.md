@@ -1,4 +1,4 @@
-# PM2.5 24-Hour Forecast & Health Advisory (20 จังหวัดภาคอีสาน)
+# ระบบพยากรณ์ค่า PM2.5 และให้คำแนะนำด้านสุขภาพอากาศตามกลุ่มผู้ใช้
 
 ระบบพยากรณ์ค่าฝุ่น PM2.5 ล่วงหน้า 24 ชั่วโมง ครอบคลุม 20 จังหวัดภาคตะวันออกเฉียงเหนือ (โครงงาน
 capstone) — ใช้โมเดลเดียวที่ฝึกสอนร่วมจากหลายจังหวัด (Pooled Model) หลัง **Dynamic Routing**,
@@ -50,10 +50,15 @@ copy .env.example .env
 # 3) โมเดล — ไฟล์ .pkl ของ LightGBM/XGBoost ไม่ได้ขึ้น git (ไฟล์ใหญ่เกินลิมิตของ GitHub)
 #    ดูวิธีขอไฟล์/checksum ที่หัวข้อ "ไฟล์โมเดลที่ไม่ได้อยู่ใน git" ด้านล่างก่อนรันเซิร์ฟเวอร์
 
-# 4) Build frontend (จำเป็น — app.py เสิร์ฟจาก frontend/dist)
+# 4) PostgreSQL — ต้องติดตั้ง/รันอยู่ก่อน แล้วสร้าง database เปล่าๆ ชื่อให้ตรงกับ POSTGRES_DB ใน .env
+#    (ค่าเริ่มต้นคือ pm25_forecast) แอปสร้างตาราง/คอลัมน์ทั้งหมดเองอัตโนมัติตอนรันครั้งแรก
+#    ไม่ต้องรันคำสั่ง migrate ใดๆเอง
+createdb pm25_forecast   # หรือ: psql -U postgres -c "CREATE DATABASE pm25_forecast;"
+
+# 5) Build frontend (จำเป็น — app.py เสิร์ฟจาก frontend/dist)
 cd frontend && npm install && npm run build && cd ..
 
-# 5) รันเซิร์ฟเวอร์ (พอร์ต 5000)
+# 6) รันเซิร์ฟเวอร์ (พอร์ต 5000) — ตาราง/คอลัมน์ทั้งหมดถูกสร้าง/อัปเดตอัตโนมัติตอนนี้
 python app.py
 ```
 

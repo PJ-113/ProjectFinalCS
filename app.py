@@ -291,6 +291,10 @@ def select_model(feature_row, horizon, province, r2_lookup, force_naive=False):
 
 
 # ===== Database schema =====
+# init_db() มีแค่ schema พื้นฐาน — คอลัมน์ที่เพิ่มทีหลัง (role, home_province, province, pm25_lo/hi)
+# อยู่ในฟังก์ชัน migrate_* ด้านล่าง ซึ่งรัน ALTER TABLE ... ADD COLUMN IF NOT EXISTS ทุกครั้งที่แอปเริ่ม
+# ทำงาน (idempotent) จำเป็นต้องแยกแบบนี้เพราะ DB จริงที่ deploy อยู่แล้วมีข้อมูลสะสม รวม column เข้า
+# CREATE TABLE อย่างเดียวจะไม่มีผลกับตารางที่มีอยู่แล้ว (CREATE TABLE IF NOT EXISTS ข้ามไปเลย)
 
 def init_db():
     conn = get_db_connection()
