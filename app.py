@@ -46,7 +46,7 @@ OFFSET_FUTURE_TOLERANCE_H = 1
 HIGH_POLLUTION_THRESHOLD = 37.5  # ค่าเดียวกันทุกจังหวัด (มาตรฐาน คพ. ไม่ใช่ค่าที่ผูกกับโมเดล)
 # ต้องรัน `npm run build` ใน frontend/ ก่อน ถึงจะมีโฟลเดอร์นี้ 
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
-DEBUG = True  # ต้องอ่านจากตรงนี้ ไม่ใช่ app.debug เพราะ Flask ยังไม่ set app.debug จนกว่าจะเรียก app.run()
+DEBUG = True  # อ่านค่าคงที่นี้เสมอ ห้ามใช้ app.debug แทน เพราะ app.debug ยังไม่ถูก set จนกว่าจะเรียก app.run()
 SIGMA_CRITICAL = 0.3
 EXPLORATION_RATE = 0.2
 MIN_R2_PAIRS = 15
@@ -159,8 +159,7 @@ RISK_SCORE_BREAKPOINTS = [(0, 0), (15, 20), (25, 40), (37.5, 60), (75, 80), (150
 
 
 def effective_threshold_for(risk_group):
-    """threshold เดียว (37.5 + offset ตาม risk_group) ไม่ใช้ bias CSV แบบเดิม (per-province, เลิกใช้
-    ตั้งแต่ย้ายมาโมเดล pooled)"""
+    
     return HIGH_POLLUTION_THRESHOLD + RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0)
 
 
@@ -201,7 +200,7 @@ def compute_risk_score(pm25, risk_group, activity):
     }
 
 
-# ===== Dynamic Routing (proposal 4.1.6) =====
+# ===== Dynamic Routing  =====
 
 def compute_missing_ratio(feature_row):
   
@@ -323,8 +322,7 @@ def init_db():
     """)
 
     # ประวัติค่าจริงล่าสุดต่อรอบ (/api/notifications) — เก็บแค่ latest_pm25, risk_horizons คำนวณสด
-    # ตอน query โดย join กับ prediction_log ผ่าน recorded_at_utc=predicted_at_utc แทน (ไม่เก็บตรงๆ
-    # เพราะ risk ขึ้นกับ risk_group ที่เปลี่ยนได้ เก็บสดจะผิดสำหรับกลุ่มอื่น)
+    # ตอน query โดย join กับ prediction_log ผ่าน recorded_at_utc=predicted_at_utc แทน (ไม่เก็บตรงๆเพราะ risk ขึ้นกับ risk_group ที่เปลี่ยนได้ เก็บสดจะผิดสำหรับกลุ่มอื่น)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_log (
             id SERIAL PRIMARY KEY,
@@ -460,7 +458,7 @@ def login_required(view_func):
     return wrapper
 
 
-# ===== Live data fetching (OpenAQ + Open-Meteo — ไม่มี Air4Thai/calibration อีกต่อไป) =====
+# ===== Live data fetching (OpenAQ + Open-Meteo) =====
 
 class _CircuitBreaker:
 
@@ -682,22 +680,27 @@ def get_current_weather(province_meta, at=None):
     raise err
 
 
-# ===== Live features ใหม่ของโมเดล : จังหวัดข้างเคียง + จุดความร้อน =====
+# ===== Live features ของโมเดล =====
 
 
-NEIGHBOR_FRESH_HOURS = 3       # reading ล่าสุดของเพื่อนบ้านห่างจากเวลาของจังหวัดเป้าหมายไม่เกินนี้ = "สด" (เก่า 1-3 ชม. เสียหาย <0.4%)
-NEIGHBOR_AVG_K = 3             # อันดับ 1 ไม่สด -> เฉลี่ยเพื่อนบ้านสดใกล้สุดสูงสุดกี่จังหวัด (MAE +2.4%/+2.5% เทียบ NaN +32%/+65%)
-NEIGHBOR_MAX_FETCH = 8         # ดึงเพื่อนบ้านตามลำดับระยะทางสูงสุดกี่จังหวัดต่อรอบ 
-TARGET_STALE_HOURS = 6         # จังหวัดเป้าหมายมี reading ล่าสุดเก่ากว่านี้ = ข้อมูลเก่า (ไม่ log, ไม่ทำ NLG — ดู get_forecast)
-TARGET_CACHE_TTL_S = 300       # จังหวัดเป้าหมายใช้ cache สั้น (ค่า "ปัจจุบัน" ต้องสด)
-SERIES_CACHE_TTL_S = 1800      # เพื่อนบ้านใช้ cache 30 นาที (scheduled job วน 20 จังหวัดต่อชั่วโมง = ดึงจังหวัดละ 1 ครั้ง)
-SERIES_CACHE_MAX_AGE_S = 6 * 3600  # ดึงเพื่อนบ้านไม่สำเร็จ -> ใช้ cache เก่าได้ไม่เกินนี้ (ยังผ่านเกณฑ์ "สด" อีกที)
+# --- ความสดของข้อมูลเพื่อนบ้าน (ใช้เป็น feature) ---
+NEIGHBOR_FRESH_HOURS = 3       # เพื่อนบ้านนับว่า "สด" ถ้า reading ล่าสุดห่างจากเวลาจังหวัดเป้าหมายไม่เกิน 3 ชม.
+NEIGHBOR_AVG_K = 3             # ถ้าเพื่อนบ้านอันดับ 1 ไม่สด ให้เฉลี่ยเพื่อนบ้านที่สดที่สุด 3 จังหวัดแทน
+NEIGHBOR_MAX_FETCH = 8         # ดึงข้อมูลเพื่อนบ้านสูงสุด 8 จังหวัดต่อรอบ (เรียงตามระยะทางใกล้สุดก่อน)
+
+# --- ความสดของข้อมูลจังหวัดเป้าหมาย ---
+TARGET_STALE_HOURS = 6         # reading ล่าสุดเก่ากว่า 6 ชม. = ข้อมูลเก่า (ไม่บันทึก log, ไม่ทำ NLG)
+TARGET_CACHE_TTL_S = 300       # cache สั้น 5 นาที เพราะค่า "ปัจจุบัน" ต้องสดเสมอ
+SERIES_CACHE_TTL_S = 1800      # cache เพื่อนบ้าน 30 นาที (พอสำหรับ job รายชั่วโมงที่วน 20 จังหวัด)
+SERIES_CACHE_MAX_AGE_S = 6 * 3600  # ดึงเพื่อนบ้านไม่สำเร็จ ใช้ cache เก่าได้สูงสุด 6 ชม.
+
+# --- จุดความร้อนไฟป่า (FIRMS) ---
 FIRE_CACHE_TTL_S = 3600
 FIRE_CACHE_MAX_AGE_S = 6 * 3600
-FIRE_RADIUS_KM = 100
-FIRE_WINDOW_HOURS = 24
-FIRMS_AREA = "100.5,13.5,106.5,19.0"  # bbox เดียวกับตอนเทรน (อีสาน + กันชนลาว/กัมพูชา)
-FIRMS_NRT_SOURCE = "VIIRS_NOAA20_NRT"  # ตอนเทรนใช้ _SP (archive, ล่าช้า ~2.5 เดือน) live ต้องใช้ NRT — เทียบตรงไม่ได้ (CHANGELOG 140)
+FIRE_RADIUS_KM = 100            # นับจุดความร้อนในรัศมี 100 กม. จากจังหวัดเป้าหมาย
+FIRE_WINDOW_HOURS = 24          # นับย้อนหลัง 24 ชม.
+FIRMS_AREA = "100.5,13.5,106.5,19.0"  # bbox ภาคอีสาน + กันชนลาว/กัมพูชา
+FIRMS_NRT_SOURCE = "VIIRS_NOAA20_NRT"  # แหล่งข้อมูล live 
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -706,7 +709,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * 6371.0 * np.arcsin(np.sqrt(a))
 
 
-# เพื่อนบ้านเรียงตามระยะทางจริง (คิดจากทั้ง 20 จังหวัด รวม zero-shot — เหมือน add_spatial_lag_feature ตอนเทรน)
+# เพื่อนบ้านเรียงตามระยะทางจริง
 NEIGHBOR_RANKING = {
     p["province_en"]: [
         q["province_en"] for q in sorted(
@@ -726,7 +729,7 @@ def _series_disk_path(province):
 
 
 def _save_series_to_disk(province, df):
-    """เก็บซีรีส์ที่ดึงสำเร็จล่าสุดลงไฟล์ (เขียน tmp แล้ว replace) ให้ทางสำรองรอดการรีสตาร์ตแอป — ล้มเหลวเงียบๆ ได้ (เป็นแค่ safety net)"""
+
     if not USE_INPUT_FALLBACK or df is None:
         return
     try:
@@ -740,7 +743,7 @@ def _save_series_to_disk(province, df):
 
 
 def _load_series_disk_cache():
-    """ตอนเริ่มแอป: โหลดไฟล์ cache ที่อายุไม่เกิน TARGET_FALLBACK_MAX_AGE_S เข้า _SERIES_CACHE (เวลา monotonic ย้อนตามอายุไฟล์)"""
+    
     if not USE_INPUT_FALLBACK:
         return
     loaded = 0
@@ -903,8 +906,7 @@ IMPUTATION_CFG = _load_imputation_config()
 
 
 def imputed_q_hat(model_name, k, h):
-    """q_hat ของช่วงความเชื่อมั่นเมื่อ input ถูกเติมค่า (ทดสอบไว้ที่ k บางค่า: k จริงที่ไม่ตรง -> ใช้ k ถัดไปที่มากกว่า = conservative,
-    h ระหว่างค่าที่ทดสอบ -> interpolate เชิงเส้น) — แทน CONFORMAL_QHAT ที่สอบเทียบโดยถือว่าค่าปัจจุบันเป็นค่าจริง"""
+    
     table = IMPUTATION_CFG["_q"][model_name]
     ks = sorted(table)
     k_use = next((x for x in ks if x >= k), ks[-1])
@@ -1122,14 +1124,7 @@ migrate_users_home_province()
 # ===== Feature engineering & prediction logging =====
 
 def build_feature_row(df_recent, current_weather, province_meta, neighbor=None, fire_count=0):
-    """สร้าง feature row (superset: 23 ตัวของรุ่นเก่า + 3 ตัวใหม่ของ v2 แล้วเลือกตาม FEATURE_COLS ของโมเดลที่โหลด)
-    — สูตร lag/rolling เหมือนตอนเทรนเป๊ะ แต่ยึดตาม "เวลาจริง" ไม่ใช่ตำแหน่งแถว (OpenAQ อาจมีชั่วโมงขาดหาย)
-    gap <=48h interpolate ยาวกว่านั้นปล่อย NaN ให้ compute_missing_ratio() จับ — ต้องซิงค์กับ
-    scripts/build_raw_dataset_multiprovince.py + compute_neighbor_trend_feature.py + compute_fire_hotspot_feature.py
-    เสมอ (ดู CLAUDE.md)
-    neighbor: dict จาก compute_neighbor_features() (status != "ok" -> ค่าเพื่อนบ้านเป็น NaN ผู้เรียกต้อง force_naive)
-    fire_count: จำนวนจุดความร้อนจาก count_fire_hotspots()
-    """
+    
     latest_time = df_recent["datetime_utc"].max()
     pm25_by_time = df_recent.set_index("datetime_utc")["pm25"]
 
@@ -1398,7 +1393,7 @@ except Exception as e:
 GEMINI_MODEL = "gemini-3.1-flash-lite" 
 GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 GEMINI_TIMEOUT_SECONDS = 11
-GEMINI_MAX_RETRIES = 3  # 429 (quota) backoff: รอ 1s, 2s, 4s
+GEMINI_MAX_RETRIES = 3  
 
 _gemini_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gemini-nlg")
 
