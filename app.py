@@ -111,6 +111,7 @@ with open(PROVINCE_REGISTRY_PATH, encoding="utf-8") as f:
     _registry = json.load(f)
 PROVINCE_REGISTRY = _registry["provinces"]
 PROVINCES_BY_SLUG = {p["province_en"]: p for p in PROVINCE_REGISTRY}
+DEFAULT_PROVINCE = "khonkaen"
 assert DEFAULT_PROVINCE in PROVINCES_BY_SLUG, f"{DEFAULT_PROVINCE} ต้องอยู่ใน province registry"
 
 # pooled model: {horizon(1..24): {quantile(0.05|0.5|0.95): fitted_model}} เดียวกันทุกจังหวัด
