@@ -7,7 +7,6 @@ import { provinceState } from '../provinces'
 import ProvincePickerSheet from '../components/ProvincePickerSheet.vue'
 
 const RISK_GROUPS = ['ทั่วไป', 'เด็ก-ผู้สูงอายุ', 'มีโรคประจำตัว']
-// ป้ายบนปุ่ม segmented แบบย่อให้พอดีจอ 390px — ค่าที่ส่ง backend ยังเป็น RISK_GROUPS เดิมทุกตัว
 const RISK_GROUP_LABEL = { 'มีโรคประจำตัว': 'โรคประจำตัว' }
 
 const router = useRouter()
@@ -276,8 +275,7 @@ input:focus-visible,
 .switch-link a { color: var(--accent); font-weight: 600; text-decoration: none; }
 .switch-link a:hover { text-decoration: underline; }
 
-/* เดสก์ท็อป: จัดกล่องฟอร์มให้อยู่กึ่งกลางหน้าจอทั้งแนวตั้งและแนวนอน (margin: auto ใน flex column —
-   ถ้าเนื้อหาสูงกว่าจอจะตกลงเป็นชิดบนเองโดยไม่ถูกตัด) มือถือชิดบน */
+
 @media (min-width: 721px) {
   .auth-page { display: flex; flex-direction: column; }
   .wrap { margin: auto; width: 100%; }

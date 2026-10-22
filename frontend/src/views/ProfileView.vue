@@ -7,9 +7,9 @@ import { provinceState } from '../provinces'
 import ProvincePickerSheet from '../components/ProvincePickerSheet.vue'
 
 const RISK_GROUPS = ['ทั่วไป', 'เด็ก-ผู้สูงอายุ', 'มีโรคประจำตัว']
-// ป้ายบนปุ่ม segmented แบบย่อให้พอดีจอ 390px — ค่าที่เก็บ/ส่ง backend ยังเป็น RISK_GROUPS เดิมทุกตัว
+
 const RISK_GROUP_LABEL = { 'มีโรคประจำตัว': 'โรคประจำตัว' }
-const FAR_THRESHOLD_KM = 200 // ไกลกว่านี้ = อาจอยู่นอกภาคอีสาน เตือนแต่ไม่บล็อกการบันทึก
+const FAR_THRESHOLD_KM = 200 
 
 const router = useRouter()
 
@@ -36,7 +36,7 @@ watchEffect(() => {
 const homeProvinceName = computed(
   () => provinceState.list.find((p) => p.province_en === homeProvince.value)?.province_th || '',
 )
-// การ์ดหัวสรุปค่าที่บันทึกไว้จริง (จาก authState) ไม่ใช่ค่าที่กำลังแก้ในฟอร์ม
+
 const savedProvinceName = computed(
   () => provinceState.list.find((p) => p.province_en === authState.user?.home_province)?.province_th || '',
 )
@@ -67,7 +67,6 @@ async function handleSaveProfile() {
   }
 }
 
-// ระยะทางวงกลมใหญ่ (กม.) ระหว่างสองพิกัด — ใช้หาจังหวัดที่ใกล้ตำแหน่งปัจจุบันที่สุด
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371
   const dLat = (lat2 - lat1) * Math.PI / 180
@@ -77,7 +76,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-// ปุ่ม GPS แค่ "ช่วยเดา" เติมค่าในช่องจังหวัดให้เฉยๆ ไม่ auto-save — ผู้ใช้ต้องกดบันทึกโปรไฟล์เองเสมอ
 function handleUseLocation() {
   geoMessage.value = ''
   if (!navigator.geolocation) {

@@ -494,8 +494,7 @@ defineExpose({ loadForecast });
   color: var(--ink);
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
 }
-/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js): โทเคนกลาง (ground/card/ink/muted/line/track/
-   accent/warn/info) สลับค่าอัตโนมัติจาก main.css แล้ว เหลือแค่โทเคนเฉพาะหน้านี้ */
+
   :root[data-theme="dark"] .forecast-page {
     --chip-bg: rgba(255, 255, 255, 0.09);
 
@@ -503,13 +502,13 @@ defineExpose({ loadForecast });
   }
 
 
-/* tint การ์ดหลักตามระดับ (ตัวหนังสือเข้มบน tint อ่อน / อ่อนบน tint เข้มใน dark) ผ่าน AA ทุกระดับ */
+
 .forecast-page.aqi-excellent { --hero-bg: #e3edfd; --hero-ink: #1e3a8a; }
 .forecast-page.aqi-good      { --hero-bg: #dff4e6; --hero-ink: #14532d; }
 .forecast-page.aqi-moderate  { --hero-bg: #faefc1; --hero-ink: #4f3b00; }
 .forecast-page.aqi-unhealthy { --hero-bg: #fce4ce; --hero-ink: #6e2a00; }
 .forecast-page.aqi-bad       { --hero-bg: #fadada; --hero-ink: #7f1d1d; }
-/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+
   :root[data-theme="dark"] .forecast-page.aqi-excellent { --hero-bg: #14233f; --hero-ink: #c3d8ff; }
   :root[data-theme="dark"] .forecast-page.aqi-good { --hero-bg: #12291b; --hero-ink: #bdebcb; }
   :root[data-theme="dark"] .forecast-page.aqi-moderate { --hero-bg: #2b2410; --hero-ink: #f5de8a; }
@@ -527,7 +526,7 @@ defineExpose({ loadForecast });
   margin-bottom: 16px;
 }
 .page-title { color: var(--muted); font-weight: 600; font-size: 0.95rem; }
-/* มือถือ: ซ่อนหัวข้อหน้า */
+
 @media (max-width: 720px) { .page-title { display: none; } }
 
 .province-chip {
@@ -558,7 +557,7 @@ defineExpose({ loadForecast });
 .stack { display: flex; flex-direction: column; gap: 16px; }
 .layout { display: flex; flex-direction: column; gap: 16px; }
 .col-primary, .col-secondary { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-/* เดสก์ท็อป: ซ้าย = ค่าปัจจุบัน+ช่วงที่ควรออก / ขวา = กราฟ+ความเสี่ยง+สรุป */
+
 @media (min-width: 960px) {
   .layout { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 20px; align-items: start; }
 }

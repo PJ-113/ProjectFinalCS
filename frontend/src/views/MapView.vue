@@ -8,23 +8,18 @@ import { selectProvince } from "../provinces";
 import isaanMaskGeoJson from "../assets/isaan_provinces_mask.json";
 import isaanBoundaryGeoJson from "../assets/isaan_provinces_boundary.json";
 
-// ใช้ L.circleMarker ไม่ใช้ L.marker/ไอคอนหมุดปกติ
 
-// isaan_provinces_mask.json = สี่เหลี่ยมคลุมทั้งโลก + รู 20 จังหวัด (fillRule evenodd ของ Leaflet
-// ทำให้พื้นที่ในรูโปร่งใส) isaan_provinces_boundary.json = ขอบเขต 20 จังหวัดล้วนๆ ใช้วาดเส้นเน้นทับอีกที
 const router = useRouter();
 
 const state = ref("loading"); // "loading" | "error" | "content"
 const errorMessage = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
 const mapEl = ref(null);
 let mapInstance = null;
-const markerByProvince = new Map(); // province_en -> L.CircleMarker (คงไว้ข้ามการรีเฟรช ไม่ลบสร้างใหม่ทุกครั้ง)
+const markerByProvince = new Map(); 
 
 const ISAAN_CENTER = [15.8, 103.5];
 const ISAAN_ZOOM = 7;
-// bbox จริงของ 20 จังหวัด (lat 14.12-18.45, lon 100.83-105.64) บวก padding กันการ pan/zoom ออกไปเห็นภาคอื่น/
-// ประเทศเพื่อนบ้าน ขอบเหนือ (lat) เผื่อกว้างกว่าขอบอื่น เพื่อให้ popup ของจังหวัดติดขอบ (เลย/หนองคาย/บึงกาฬ/
-// นครพนม) ยังมีที่ autoPan ขึ้นพ้นขอบจอได้ภายใต้ maxBoundsViscosity: 1.0 ที่ล็อกขอบแข็ง
+
 const ISAAN_MAX_BOUNDS = [
   [13.5, 100.2],
   [21.3, 106.3],
@@ -33,8 +28,7 @@ const NO_DATA_COLOR = "#94a3b8";
 const MIN_HORIZON = 0;
 const MAX_HORIZON = 24;
 
-// ปุ่ม +/- ในป๊อปอัปปรับทีละ 1 ชม. ช่วง 0-24 ใช้ horizon เดียวกันทั้งหน้า (ไม่แยกต่อจังหวัด) เพื่อเทียบ
-// ภาพรวมทั้ง 20 จังหวัด ณ เวลาเดียวกัน
+
 const selectedHorizon = ref(0);
 
 function goToProvince(provinceEn) {
@@ -50,7 +44,7 @@ function stepHorizon(direction) {
 }
 
 async function loadOverview() {
-  if (markerByProvince.size === 0) state.value = "loading"; // เฉพาะครั้งแรก
+  if (markerByProvince.size === 0) state.value = "loading"; 
   try {
     const res = await fetch(`/api/provinces/overview?horizon=${selectedHorizon.value}`);
     if (!res.ok) {
@@ -67,7 +61,7 @@ async function loadOverview() {
   }
 }
 
-// badge วงกลมมีตัวเลข PM2.5 อยู่ข้างใน ปัดเป็นจำนวนเต็มให้พอดีช่องวงกลมเล็กๆ ค่าทศนิยมเต็มยังดูได้จาก popup/tooltip
+
 function markerIcon(value, color) {
   const label = value != null ? Math.round(value) : "-";
   return L.divIcon({
@@ -78,7 +72,7 @@ function markerIcon(value, color) {
   });
 }
 
-// กล่อง hover เล็กๆ บอก PM2.5 แยกจาก popup ตอนคลิก
+
 function tooltipHtmlFor(p) {
   const horizon = selectedHorizon.value;
   const pm = horizon > 0 ? p.forecast_pm25 : p.current_pm25;
@@ -128,8 +122,6 @@ function popupHtmlFor(p) {
 }
 
 
-// ผูกปุ่มใน popup ใหม่ทุกครั้งที่ popup ถูก refresh เนื้อหา — ใช้ .onclick แทน addEventListener
-// เพื่อไม่ให้ listener ซ้อนสะสม
 function bindPopupButtons(marker, provinceEn) {
   const el = marker.getPopup()?.getElement();
   if (!el) return;
@@ -154,12 +146,12 @@ function bindPopupButtons(marker, provinceEn) {
     };
     input.onchange = commitInput;
     input.onkeydown = (e) => {
-      if (e.key === "Enter") input.blur(); // blur -> trigger change -> commitInput
+      if (e.key === "Enter") input.blur(); 
     };
   }
 }
 
-// สร้าง marker ครั้งแรก ครั้งต่อไปแค่อัปเดตสี+เนื้อหา popup ของ marker เดิม ไม่ลบสร้างใหม่ทั้งหมด
+
 function createOrUpdateMarkers(provinces) {
   if (!mapInstance) return;
   const horizon = selectedHorizon.value;
@@ -188,10 +180,10 @@ function createOrUpdateMarkers(provinces) {
 
 onMounted(() => {
   mapInstance = L.map(mapEl.value, {
-    minZoom: ISAAN_ZOOM, // ห้ามซูมออกเลย (คงมุมมองเริ่มต้นเป็นระดับที่แคบที่สุดที่อนุญาต)
+    minZoom: ISAAN_ZOOM, 
     maxBounds: ISAAN_MAX_BOUNDS,
-    maxBoundsViscosity: 1.0, // กัน pan หลุดกรอบแบบยางยืด ให้รู้สึกเหมือนขอบแข็งจริงๆ
-    zoomControl: false, // ปิด default (มุมซ้ายบน) แล้วสร้างใหม่มุมขวาบนด้านล่างแทน
+    maxBoundsViscosity: 1.0, 
+    zoomControl: false, 
   }).setView(ISAAN_CENTER, ISAAN_ZOOM);
   L.control.zoom({ position: "topright" }).addTo(mapInstance);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -199,7 +191,7 @@ onMounted(() => {
     maxZoom: 18,
   }).addTo(mapInstance);
 
-  // มืดคลุมพื้นที่นอกอีสาน (interactive: false กันบัง click/hover ของ tile ใต้มาส์ก) + เส้นขอบเน้นเขตอีสานทับอีกชั้น
+  
   L.geoJSON(isaanMaskGeoJson, {
     interactive: false,
     style: { fillColor: "#0f172a", fillOpacity: 0.45, stroke: false },
@@ -254,7 +246,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* โทเคนกลาง (ground/card/ink/muted/line/track/accent) มาจาก :root ใน assets/main.css เหลือแค่โทเคนสีระดับฝุ่นที่หน้านี้ใช้เฉพาะตัวเอง */
+
 .map-page {
   --excellent: #3b82f6;
   --good: #22c55e;
@@ -283,9 +275,7 @@ h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
   margin-bottom: 16px;
 }
 
-/* แผนที่ (พื้นภาพ + ปุ่ม zoom + popup + attribution) ใช้ธีมสว่างเสมอ ไม่ตามโหมดมืด ทับค่าจาก main.css
-   ด้วยโทเคนสว่างตรงนี้ ทำให้ลูกทั้งหมด (รวม DOM ของ Leaflet/popup) รับค่าสว่างไปด้วย ส่วนการ์ด legend
-   และพื้นหน้ายังตามธีมปกติ */
+
 .map-card {
   --card: #ffffff;
   --ink: #16181d;
@@ -345,7 +335,7 @@ h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
 }
 .retry-btn:hover { opacity: 0.9; }
 
-/* ---- ปรับ Leaflet ให้เข้าธีม (DOM ของ Leaflet อยู่นอกขอบเขต scoped ของ Vue จึงต้องใช้ :deep()) ---- */
+
 :deep(.leaflet-container) { font-family: inherit; }
 :deep(.leaflet-bar) { border: 1px solid var(--line); box-shadow: none; border-radius: 14px; overflow: hidden; }
 :deep(.leaflet-bar a) {
@@ -366,8 +356,7 @@ h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
 }
 :deep(.leaflet-control-attribution a) { color: var(--accent); }
 
-/* หมุดวงกลมมีตัวเลข (L.divIcon) — wrapper ต้องล้าง style ของ Leaflet default icon (พื้นหลัง/เงา/ขอบ) ทิ้งก่อน
-   ให้ div ลูกข้างในคุมหน้าตาเองทั้งหมด */
+
 :deep(.map-marker-badge-wrap) { background: transparent; border: none; }
 :deep(.map-marker-badge) {
   width: 30px;
@@ -381,13 +370,12 @@ h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
   color: #ffffff;
   font-weight: 600;
   font-size: 0.65rem;
-  font-family: inherit; /* ฟอนต์ตัวเนื้อหาปกติ ไม่ใช่ --font-display (ฟอนต์หัวข้อตัวหนา ดูหนัก/ใหญ่เกินไปในวงเล็กๆ) */
+  font-family: inherit; 
   letter-spacing: -0.2px;
   line-height: 1;
-  padding-top: 1px; /* line-height:1 เหลือที่ว่างใต้ตัวเลขมากกว่าบน (ฟอนต์ไม่มี descender) เลยดูลอยขึ้นบน ขยับลงชดเชย */
+  padding-top: 1px; 
 }
 
-/* กล่อง hover (bindTooltip) แยกจาก popup ตอนคลิก — ใช้โทเคนสีเดียวกับ .map-card */
 :deep(.map-hover-tooltip) {
   background: var(--card);
   color: var(--ink);
@@ -446,7 +434,7 @@ h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
   width: 46px;
   text-align: center;
   font-family: inherit;
-  font-size: 1rem; /* >=16px กัน iOS zoom เข้าช่องพิมพ์ */
+  font-size: 1rem; 
   font-weight: 700;
   color: var(--ink);
   background: var(--track);
@@ -474,6 +462,6 @@ h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 4px; }
 
 @media (max-width: 600px) {
   .leaflet-container-el { height: 55vh; min-height: 360px; }
-  :deep(.map-popup-step) { width: 40px; height: 40px; } /* เป้าแตะ ≥40px สำหรับนิ้ว */
+  :deep(.map-popup-step) { width: 40px; height: 40px; } 
 }
 </style>

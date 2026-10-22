@@ -9,7 +9,7 @@ const model = ref("all");
 const showAdvanced = ref(false);
 const pickerOpen = ref(false);
 
-// ชื่อจังหวัดไทยและ zero-shot flag ของจังหวัดที่เลือกอยู่
+
 const selectedProvinceMeta = computed(
   () => provinceState.list.find((p) => p.province_en === provinceState.selected) || null
 );
@@ -28,7 +28,7 @@ const overviewLoaded = ref(false);
 const overviewData = ref(null);
 const chartEl = ref(null);
 
-// สีของแต่ละโมเดล สำหรับ model-breakdown chip ในส่วน "รายละเอียดทางเทคนิค"
+
 function modelHex(modelUsed) {
   if (String(modelUsed).startsWith("xgboost")) return "#1baf7a";
   if (modelUsed === "naive_fallback") return "#eda100";
@@ -52,8 +52,7 @@ function biasPhrase(bias) {
   return `และ<strong>ไม่มีอคติชัดเจน</strong> (ไม่ได้ทายสูงหรือต่ำกว่าจริงอย่างเป็นระบบ)`;
 }
 
-// coverage: % ของค่าจริงที่ตกอยู่ในช่วงความเชื่อมั่น 90% (P05-P95 conformal) เป้าหมายคือ ~90% พอดี
-// ไม่ใช่ยิ่งสูงยิ่งดี คืนข้อความสามทาง: ใกล้เป้า / ต่ำกว่าเป้า / สูงกว่าเป้า
+
 function coveragePhrase(pct, n) {
   if (pct == null) return "";
   const diff = pct - 90;
@@ -71,7 +70,7 @@ function barColorForMae(mae) {
   return "var(--bad)";
 }
 
-// ไอคอนหัวข้อการ์ด "คำตอบหลัก" สื่อความน่าเชื่อถือของค่าพยากรณ์
+
 function qualityIcon(cls) {
   if (cls === "good") return CircleCheck;
   if (cls === "moderate") return CircleAlert;
@@ -199,8 +198,7 @@ function drawChart(pts) {
     svg.appendChild(label);
   });
 
-  // วาดช่วงความเชื่อมั่น 90% (P05-P95 conformal) เป็น area สีฟ้าโปร่งแสง แยกเป็นช่วงต่อเนื่อง (run)
-  // ตามจุดที่มีทั้ง pm25_lo และ pm25_hi ข้ามจุดที่ไม่มีค่าแทนที่จะทำให้ทั้งแถบขาดหาย
+
   function drawBand() {
     let run = [];
     const runs = [];
@@ -266,7 +264,6 @@ function drawChart(pts) {
     svg.appendChild(circle);
   });
 
-  // จุดค่าพยากรณ์: สีเดียวเสมอ รายละเอียดโมเดล/แหล่งข้อมูลอยู่ใน tooltip (hover)
   pts.forEach((p, i) => {
     const circle = document.createElementNS(ns, "circle");
     circle.setAttribute("cx", xFor(i));
@@ -345,7 +342,6 @@ const overviewBars = computed(() => {
   }));
 });
 
-// ชื่อที่แสดงผลสำหรับแต่ละชื่อโมเดลที่พบใน prediction_log
 const modelLabel = {
   lightgbm_pooled_v3: "LightGBM (v3 ข้อมูลแก้แล้ว)", xgboost_pooled_v3: "XGBoost (v3 ข้อมูลแก้แล้ว)",
   lightgbm_pooled_v2: "LightGBM (v2 ข้อมูลป้ายเวลาผิด)", xgboost_pooled_v2: "XGBoost (v2 ข้อมูลป้ายเวลาผิด)",
@@ -369,7 +365,6 @@ onMounted(() => {
   loadComparison();
 });
 
-// เปลี่ยนจังหวัดแล้วรีโหลดทั้งภาพรวมและกราฟรายละเอียด
 watch(() => provinceState.selected, () => {
   loadOverview();
   loadComparison();
@@ -552,11 +547,11 @@ watch(() => provinceState.selected, () => {
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
 }
 
-/* tint การ์ดคำตอบหลักตามคุณภาพการพยากรณ์ */
+
 .compare-page.quality-good     { --hero-bg: #dff4e6; --hero-ink: #14532d; }
 .compare-page.quality-moderate { --hero-bg: #faefc1; --hero-ink: #4f3b00; }
 .compare-page.quality-bad      { --hero-bg: #fadada; --hero-ink: #7f1d1d; }
-/* ธีมมืด */
+
   :root[data-theme="dark"] .compare-page.quality-good { --hero-bg: #12291b; --hero-ink: #bdebcb; }
   :root[data-theme="dark"] .compare-page.quality-moderate { --hero-bg: #2b2410; --hero-ink: #f5de8a; }
   :root[data-theme="dark"] .compare-page.quality-bad { --hero-bg: #351516; --hero-ink: #ffb8b8; }

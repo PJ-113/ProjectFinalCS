@@ -5,7 +5,7 @@ import { authState } from '../auth'
 import { provinceState } from '../provinces'
 import { notificationHistory, fetchNotificationHistory, summarizeHistoryItem, formatCardTime } from '../notifications'
 
-// province ที่กระดิ่งเฝ้าอยู่จริง: home_province ของ user ถ้ามี ไม่งั้นใช้ provinceState.selected
+
 const watchedProvince = computed(() => authState.user?.home_province || provinceState.selected)
 
 onMounted(() => fetchNotificationHistory(50, watchedProvince.value))
