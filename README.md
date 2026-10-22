@@ -119,7 +119,7 @@ figures/                # กราฟ/ภาพผลการทดลอง (
 python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest(); print(h)" models/<ชื่อไฟล์>.pkl
 ```
 
-### ที่เก็บสำรอง
+### ที่เก็บโมเดล
 
 - GitHub Release : https://github.com/PJ-113/ProjectFinalCS/releases/tag/model-v3-20260919_203455 — อัปโหลดเมื่อ 2026-09-21 ขนาดตรงกับต้นฉบับ
   ดาวน์โหลดด้วย `gh release download model-v3-20260919_203455 --repo PJ-113/ProjectFinalCS --dir models`
