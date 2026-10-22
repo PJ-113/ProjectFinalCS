@@ -69,17 +69,8 @@ frontend/              # Vue 3 SPA + PWA (build ด้วย Vite)
 models/                # โมเดล .pkl (LightGBM/XGBoost pooled) + ตาราง conformal calibration
 data/                  # ชุดข้อมูลเทรน (.csv) + ทะเบียนจังหวัด (province_station_registry.json)
 scripts/               # สคริปต์เทรน/วิเคราะห์/ทดสอบ (แต่ละไฟล์รันเดี่ยวได้ ดูดัชนีที่ scripts/README.md)
-CHANGELOG.md           # ประวัติการเปลี่ยนแปลง (ทำไม ไม่ใช่แค่อะไร)
-CLAUDE.md              # คู่มือสถาปัตยกรรม/ข้อควรระวังเชิงลึก
+figures/                # กราฟ/ภาพผลการทดลอง (ส่วนใหญ่ไม่ได้ขึ้น git — regenerate ได้จาก scripts/)
 ```
-
-## หมายเหตุ
-
-- โมเดลฝึกสอนและ live inference ใช้ **OpenAQ v3** แหล่งเดียวกันทั้งคู่ จึงไม่มี calibration layer
-  (ประวัติ: ระบบเดิมก่อน 2026-09-13 ใช้ Air4Thai เป็น live source คนละสเกลกับข้อมูลฝึกสอน ต้องมี
-  calibration — เลิกใช้ไปแล้ว รายละเอียดใน `CLAUDE.md`)
-- ไฟล์ `.env` (ความลับ), โมเดล `.pkl` ขนาดใหญ่, และ `backups/` (มีข้อมูลผู้ใช้) ถูก `.gitignore` ไว้
-  ไม่ขึ้น repo — ดูวิธีขอไฟล์โมเดลที่หัวข้อ "ไฟล์โมเดลที่ไม่ได้อยู่ใน git" ด้านล่าง
 
 ## ไฟล์โมเดลที่ไม่ได้อยู่ใน git
 
@@ -106,7 +97,6 @@ python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).h
 
 - GitHub Release (repo เป็น private): https://github.com/PJ-113/ProjectFinalCS/releases/tag/model-v3-20260919_203455 — อัปโหลดเมื่อ 2026-09-21 ขนาดตรงกับต้นฉบับ
   ดาวน์โหลดด้วย `gh release download model-v3-20260919_203455 --repo PJ-113/ProjectFinalCS --dir models` (ต้อง login ด้วยบัญชีที่มีสิทธิ์)
-- สำรองอีกที่ (Drive/ฮาร์ดดิสก์): (ใส่ที่เก็บที่นี่)
 
 ### ถ้าไฟล์หาย
 
@@ -121,6 +111,6 @@ python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).h
 
 ### ไฟล์เล็กที่ app.py อ่านเพิ่ม (อยู่ใน git)
 
-`models/imputation_h_lite_20260924_204956.json` — ค่าสัมประสิทธิ์วิธีเติมข้อมูลสถานีเงียบ (H-lite) + ตาราง q(k,h) ของช่วงความเชื่อมั่น (CHANGELOG 171) ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดฟีเจอร์เติมค่าเองแล้วทำงานแบบเดิม สร้างใหม่ด้วย `scripts/export_imputation_h_lite.py`
+`models/imputation_h_lite_20260924_204956.json` — ค่าสัมประสิทธิ์วิธีเติมข้อมูลสถานีเงียบ (H-lite) + ตาราง q(k,h) ของช่วงความเชื่อมั่น ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดฟีเจอร์เติมค่าเองแล้วทำงานแบบเดิม สร้างใหม่ด้วย `scripts/export_imputation_h_lite.py`
 
-`models/weather_climatology_20260924_211741.json` — ตาราง climatology สภาพอากาศ (จังหวัด x เดือน x ชั่วโมง) ใช้เป็นทางสุดท้ายเมื่อดึง Open-Meteo ไม่ได้ (CHANGELOG 172) ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดทางสุดท้ายนี้เอง (ดึงสภาพอากาศไม่ได้ก็ตอบ 500 เหมือนเดิม) สร้างใหม่ด้วย `scripts/export_weather_climatology.py` (เรียก Open-Meteo archive 20 ครั้ง)
+`models/weather_climatology_20260924_211741.json` — ตาราง climatology สภาพอากาศ (จังหวัด x เดือน x ชั่วโมง) ใช้เป็นทางสุดท้ายเมื่อดึง Open-Meteo ไม่ได้ ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดทางสุดท้ายนี้เอง (ดึงสภาพอากาศไม่ได้ก็ตอบ 500 เหมือนเดิม) สร้างใหม่ด้วย `scripts/export_weather_climatology.py` (เรียก Open-Meteo archive 20 ครั้ง)
