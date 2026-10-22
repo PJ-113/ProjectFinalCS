@@ -48,11 +48,8 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
-  // เรียก fetchCurrentUser() เสมอ (ไม่เช็ค status === 'idle' ก่อน) เพราะ AppHeader's onMounted()
-  // อาจเริ่มเรียกไปแล้วก่อน guard นี้ทำงาน (mount ของ AppHeader ไม่ถูก router บล็อก เพราะมันอยู่
-  // นอก <RouterView/>) — ถ้าเช็ค status ก่อน จะข้ามการ await ไปเจอ authState.user ที่ยังเป็น null
-  // (fetch ยังไม่ resolve) แล้วรีไดเรกต์ผิดพลาดไป /login ทั้งที่ล็อกอินอยู่จริง (race condition ที่
-  // เจอจริงตอนเทส) fetchCurrentUser() เองมี in-flight promise cache อยู่แล้ว เรียกซ้ำจึงราคาถูก
+  // เรียก fetchCurrentUser() เสมอสำหรับ route ที่มี requiresAuth/guestOnly/requiresAdmin และ await
+  // ผลให้เสร็จก่อนตัดสิน (มี in-flight promise cache อยู่แล้ว เรียกซ้ำจึงราคาถูก)
   if (to.meta.requiresAuth || to.meta.guestOnly || to.meta.requiresAdmin) {
     await fetchCurrentUser()
   }
@@ -62,8 +59,7 @@ router.beforeEach(async (to) => {
   if (to.meta.guestOnly && isLoggedIn()) {
     return { path: '/profile' }
   }
-  // ไม่ redirect ไป /login สำหรับ requiresAdmin — ไม่อยากใบ้ว่ามีหน้านี้อยู่ให้คนที่ไม่ใช่ admin
-  // พยายาม login เข้ามา แค่เด้งกลับหน้าแรกเงียบๆ
+  // requiresAdmin ที่ไม่ใช่ admin เด้งกลับหน้าแรกเงียบๆ ไม่ redirect ไป /login
   if (to.meta.requiresAdmin && !isAdmin()) {
     return { path: '/' }
   }

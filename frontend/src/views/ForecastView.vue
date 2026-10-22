@@ -10,13 +10,10 @@ import { provinceState, selectProvince } from "../provinces";
 import { statusClass, severityVar, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
 import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
 
-// 3 การ์ดนี้กลับไปใช้ข้อมูลจริงจาก API แล้ว (ผู้ใช้สั่ง — เดิมเคยเปิดด้วยข้อมูลตัวอย่างคงที่ชั่วคราวเพื่อ
-// ถ่ายภาพ/โชว์เฉยๆ ตั้งแต่ 2026-10-02) ต้องการกลับไปโชว์ sample อีก: ตั้ง SAMPLE_EXTRA_CARDS_DATA = true
-// ต้องการซ่อนการ์ดทั้งหมด: ตั้ง SHOW_EXTRA_CARDS = false (โค้ด/logic ของจริงยังอยู่ครบไม่ถูกลบ)
+// SHOW_EXTRA_CARDS = false ซ่อนการ์ดทั้งหมด, SAMPLE_EXTRA_CARDS_DATA = true ใช้ข้อมูลตัวอย่างแทน API
 const SHOW_EXTRA_CARDS = true;
 const SAMPLE_EXTRA_CARDS_DATA = false;
-// ซ่อนป้าย "อัปเดต ... น." มุมขวาบนของการ์ด PM2.5 ตอนนี้ (ผู้ใช้สั่งก่อนนำเสนอเช้า 2026-10-20) ค่าเวลายังคำนวณ
-// ปกติ แค่ไม่ render ตั้ง true เพื่อเอากลับมาโชว์
+// SHOW_UPDATED_LABEL = false ซ่อนป้าย "อัปเดต ... น." บนการ์ด PM2.5 ตอนนี้ (ค่าเวลายังคำนวณปกติ แค่ไม่ render)
 const SHOW_UPDATED_LABEL = false;
 
 const SAMPLE_BEST_TIMES = [
@@ -24,10 +21,7 @@ const SAMPLE_BEST_TIMES = [
   { time: "04:00", pm25: 19 },
   { time: "18:00", pm25: 27 },
 ];
-// ค่าตัวอย่างคำนวณจากสูตรจริง (compute_risk_score() ใน app.py) เอง ไม่ได้เดา — สมมติ PM2.5 ปัจจุบัน
-// 28 µg/m³, activity_offset (เบา=0/ปานกลาง=-5/หนัก=-10) แล้ว interpolate ข้าม RISK_SCORE_BREAKPOINTS
-// คะแนนยิ่งสูง = ยิ่งเสี่ยง (ไม่ใช่กลับกัน) จึงต้องเพิ่มขึ้นตามความหนักกิจกรรม ของเดิมคำนวณผิดทิศทาง
-// (เคยลดลงจากเบา→หนัก) แก้แล้วตามนี้
+// ค่าตัวอย่าง คำนวณจากสูตรจริงใน app.py (compute_risk_score())
 const SAMPLE_RISK_TABLE = {
   เบา: {
     score: 45, level: "ปานกลาง", advice: "ความเสี่ยงปานกลาง ทำได้แต่ควรสังเกตอาการตนเอง",
@@ -64,7 +58,7 @@ const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
 const riskScoreConfig = ref(null);
 
 const pickerOpen = ref(false);
-// index ของแท่งที่แตะในกราฟ (null = ยังไม่เลือก) — แทน title= tooltip เดิมที่ใช้ไม่ได้บนหน้าจอทัช
+// index ของแท่งที่แตะในกราฟ (null = ยังไม่เลือก)
 const selectedIdx = ref(null);
 
 // statusClass/severityVar/PM25_LEVELS อยู่ใน pm25Levels.js (โมดูลกลาง ใช้ร่วมกับ MapView.vue)
@@ -90,9 +84,7 @@ function moodIconFor(status) {
 function barColor(pm25) {
   return `var(${severityVar(pm25)})`;
 }
-// ช่วงความเชื่อมั่น (ขอบบน P95 conformal) วาดเป็นส่วนต่อขยายโปร่งแสงของแท่งเดียวกัน (สีเดียวกับ
-// .bar เอง ที่ ~28% opacity) อยู่ชั้นล่างของแท่งทึบ ครอบคลุม 0→pm25_hi เต็ม แท่งทึบบังส่วนล่างไว้
-// เหลือให้เห็นแค่ส่วนที่ "เกิน" จุดพยากรณ์ขึ้นไปถึงขอบบนจริงๆ
+// สีของส่วนต่อขยายช่วงความเชื่อมั่น (ขอบบน P95 conformal) — สีเดียวกับ .bar ที่ ~28% opacity
 function barRangeColor(pm25) {
   return `color-mix(in srgb, var(${severityVar(pm25)}) 28%, transparent)`;
 }
@@ -103,8 +95,7 @@ function pctOf(value) {
 }
 
 const pageClass = computed(() => bodyClassFor(current.value.status));
-// รวม pm25_hi (ขอบบนช่วงความเชื่อมั่น) เข้าไปตอนหาค่าสูงสุดด้วย ไม่งั้นส่วนต่อขยายจะโผล่พ้นกราฟตอน
-// ช่วงกว้าง (horizon ไกลๆ) — 37.5 คือเพดานต่ำสุดเพื่อให้เส้นเกณฑ์อยู่ในกราฟเสมอ
+// ค่าสูงสุดของกราฟ รวม pm25_hi (ขอบบนช่วงความเชื่อมั่น) ด้วย, พื้นต่ำสุด 37.5 เพื่อให้เส้นเกณฑ์อยู่ในกราฟเสมอ
 const maxPm = computed(() =>
   Math.max(...forecast.value.flatMap((f) => [f.pm25, f.pm25_hi ?? f.pm25]), 37.5)
 );
@@ -117,13 +108,12 @@ const dailyAvgDisplay = computed(() => {
 const dailyTextDisplay = computed(() =>
   SAMPLE_EXTRA_CARDS_DATA ? SAMPLE_DAILY.text : dailySummary.value.explanation || "กำลังเตรียมข้อมูลสำหรับวันนี้"
 );
-// horizon (1..24) -> เวลานาฬิกาของจุดนั้นใน forecast[] (ผู้ใช้ไม่ต้องแปล "t+N" เอง)
+// horizon (1..24) -> เวลานาฬิกาของจุดนั้นใน forecast[]
 const fallbackTimesText = computed(() =>
   fallbackHorizons.value.map((h) => forecast.value[h - 1]?.time).filter(Boolean).join(", ")
 );
 
-// ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) อยู่ใน notifications.js เพราะกระดิ่งแจ้งเตือนใน
-// AppHeader.vue ต้องใช้ข้อความเดียวกันเป๊ะ ไม่ให้สองที่ไม่ตรงกัน
+// ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) อยู่ใน notifications.js (ใช้ร่วมกับ AppHeader.vue)
 const warningMessage = computed(() => buildWarningMessage(riskGroup.value));
 
 const markerPct = computed(() => scaleMarkerPct(current.value.pm25));
@@ -133,10 +123,8 @@ const updatedLabel = computed(() =>
 );
 const activeLevelIndex = computed(() => PM25_LEVELS.findIndex((l) => l.status === current.value.status));
 
-// ช่วงเวลาที่อากาศดีที่สุด (ค่าเดียว ไม่ใช่ top-3 — ตัดสินใจ 2026-10-13 เพราะใกล้วันนำเสนอ ไม่อยากปรับ
-// เยอะตอนนี้ จะพิจารณารวมกับการ์ด bestActivityTimes อีกทีใน phase ถัดไป ดู future-todo-list) คำนวณสด
-// จาก forecast[] กรองเฉพาะ 06:00-20:00 (ช่วงที่ใช้งานจริงได้) ก่อน sort เหมือน best_time ฝั่ง backend —
-// fallback ไป forecast ทั้งหมดถ้าว่าง
+// ช่วงเวลาที่อากาศดีที่สุด (ค่าเดียว ไม่ใช่ top-3) กรองเฉพาะ 06:00-20:00 ก่อน sort, fallback ไป forecast
+// ทั้งหมดถ้าว่าง
 const topBestTime = computed(() => {
   if (SAMPLE_EXTRA_CARDS_DATA) return SAMPLE_BEST_TIMES[0] ?? null;
   const activeHours = forecast.value.filter((f) => f.hour_thai >= 6 && f.hour_thai <= 20);
@@ -201,10 +189,9 @@ watch(() => provinceState.selected, loadForecast);
 
 onMounted(loadForecast);
 
-// รีเฟรชแค่การ์ด "ปัจจุบัน" เป็นระยะ แยกจาก loadForecast() ทั้งก้อน เพราะ /api/forecast หนัก (inference
-// 2 โมเดล + บางครั้ง Gemini) ใช้ /api/current_pm25 ที่เบากว่ามากแทน — อ่าน provinceState.selected สด
-// ทุกครั้งที่ tick จึงตามจังหวัดที่เลือกอยู่เสมอโดยไม่ต้อง clear/ตั้ง interval ใหม่ตอนสลับจังหวัดเอง
-const CURRENT_PM25_POLL_MS = 2 * 60 * 1000; // สั้นกว่า cache TTL ฝั่ง backend (5 นาที) พอเห็นค่าขยับ แต่ไม่ถี่เกิน
+// รีเฟรชแค่การ์ด "ปัจจุบัน" เป็นระยะผ่าน /api/current_pm25 (แยกจาก loadForecast() ทั้งก้อน) อ่าน
+// provinceState.selected สดทุก tick จึงตามจังหวัดที่เลือกอยู่เสมอโดยไม่ต้อง clear/ตั้ง interval ใหม่
+const CURRENT_PM25_POLL_MS = 2 * 60 * 1000;
 let currentPm25IntervalId = null;
 
 async function refreshCurrentPm25() {
@@ -487,8 +474,7 @@ defineExpose({ loadForecast });
 
 <style scoped>
 .forecast-page {
-  /* โทเคนกลางของหน้า (ground/card/ink/muted/line/track/accent/warn/info) มาจาก :root ใน
-     assets/main.css ที่โหลดทั้งแอปอยู่แล้ว (เดิมประกาศซ้ำไว้ในนี้ด้วย — เอาออกเพื่อกันสองที่ไม่ตรงกัน)
+  /* โทเคนกลาง (ground/card/ink/muted/line/track/accent/warn/info) มาจาก :root ใน assets/main.css
      เหลือแค่โทเคนที่หน้านี้ใช้เฉพาะตัวเอง (สีระดับฝุ่น/โมเดล/การ์ดหลัก) */
   --chip-bg: rgba(255, 255, 255, 0.72);
 
@@ -541,7 +527,7 @@ defineExpose({ loadForecast });
   margin-bottom: 16px;
 }
 .page-title { color: var(--muted); font-weight: 600; font-size: 0.95rem; }
-/* มือถือ: header ด้านบนมี brand อยู่แล้ว ไม่ต้องซ้ำหัวข้อหน้าอีก */
+/* มือถือ: ซ่อนหัวข้อหน้า */
 @media (max-width: 720px) { .page-title { display: none; } }
 
 .province-chip {

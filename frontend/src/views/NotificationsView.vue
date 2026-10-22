@@ -5,8 +5,7 @@ import { authState } from '../auth'
 import { provinceState } from '../provinces'
 import { notificationHistory, fetchNotificationHistory, summarizeHistoryItem, formatCardTime } from '../notifications'
 
-// province: ให้ตรงกับจังหวัดหลักที่กระดิ่งเฝ้าอยู่จริง (เดิมหน้านี้ไม่ส่ง province เลยจึงใช้
-// provinceState.selected เสมอ ไม่ตรงกับ dropdown ใน AppHeader.vue ที่ใช้ home_province เป็นหลัก)
+// province ที่กระดิ่งเฝ้าอยู่จริง: home_province ของ user ถ้ามี ไม่งั้นใช้ provinceState.selected
 const watchedProvince = computed(() => authState.user?.home_province || provinceState.selected)
 
 onMounted(() => fetchNotificationHistory(50, watchedProvince.value))
@@ -15,7 +14,7 @@ const provinceName = computed(
   () => provinceState.list.find((p) => p.province_en === watchedProvince.value)?.province_th || '',
 )
 
-// คำนวณ summary/timeLabel ครั้งเดียวต่อ item แทนที่จะเรียกฟังก์ชันซ้ำหลายครั้งในเทมเพลต
+// คำนวณ summary/timeLabel ล่วงหน้าต่อ item
 const items = computed(() =>
   notificationHistory.items.map((item) => ({
     ...item,
@@ -65,7 +64,7 @@ const items = computed(() =>
 </template>
 
 <style scoped>
-/* โทเคนสีธีมใหม่มาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่) */
+/* โทเคนสีธีมมาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่) */
 .notifications-page {
   min-height: 100vh;
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);

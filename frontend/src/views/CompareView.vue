@@ -9,7 +9,7 @@ const model = ref("all");
 const showAdvanced = ref(false);
 const pickerOpen = ref(false);
 
-// ชื่อจังหวัดไทย/zero-shot ของจังหวัดที่เลือกอยู่ — ใช้กับ province-chip แบบเดียวกับ ForecastView.vue
+// ชื่อจังหวัดไทยและ zero-shot flag ของจังหวัดที่เลือกอยู่
 const selectedProvinceMeta = computed(
   () => provinceState.list.find((p) => p.province_en === provinceState.selected) || null
 );
@@ -28,9 +28,7 @@ const overviewLoaded = ref(false);
 const overviewData = ref(null);
 const chartEl = ref(null);
 
-// สีดิบสำหรับใช้ใน SVG fill attribute โดยตรง (ไม่ผ่าน CSS var เพื่อความชัวร์ข้าม browser) — ใช้แค่ใน
-// model-breakdown chip ของส่วน "รายละเอียดทางเทคนิค" เท่านั้น กราฟหลักไม่ encode สีตามโมเดลแล้ว (ดู
-// drawChart() — ผู้ใช้ตัดสินใจแล้วว่าให้ซ่อนชื่อ/สีโมเดลไว้ในส่วนขั้นสูงเท่านั้น)
+// สีของแต่ละโมเดล สำหรับ model-breakdown chip ในส่วน "รายละเอียดทางเทคนิค"
 function modelHex(modelUsed) {
   if (String(modelUsed).startsWith("xgboost")) return "#1baf7a";
   if (modelUsed === "naive_fallback") return "#eda100";
@@ -54,10 +52,8 @@ function biasPhrase(bias) {
   return `และ<strong>ไม่มีอคติชัดเจน</strong> (ไม่ได้ทายสูงหรือต่ำกว่าจริงอย่างเป็นระบบ)`;
 }
 
-// coverage: % ของค่าจริงที่ตกอยู่ในช่วงความเชื่อมั่น 90% (P05-P95 conformal) — เป้าหมายตามงานวิจัยคือ
-// ~90% พอดี (ALPHA=0.10 ใน scripts/train_multiprovince_models.py) ไม่ใช่ "ยิ่งสูงยิ่งดี" เหมือน MAE
-// เพราะช่วงกว้างเกินไปก็ทำให้ coverage สูงเกิน 90% ได้เหมือนกัน (แต่แปลว่าช่วงกว้างเกินความจำเป็น
-// ไม่มีประโยชน์กับผู้ใช้) จึงให้ข้อความสามทาง: ใกล้เป้า / ต่ำกว่าเป้า / สูงกว่าเป้า
+// coverage: % ของค่าจริงที่ตกอยู่ในช่วงความเชื่อมั่น 90% (P05-P95 conformal) เป้าหมายคือ ~90% พอดี
+// ไม่ใช่ยิ่งสูงยิ่งดี คืนข้อความสามทาง: ใกล้เป้า / ต่ำกว่าเป้า / สูงกว่าเป้า
 function coveragePhrase(pct, n) {
   if (pct == null) return "";
   const diff = pct - 90;
@@ -75,8 +71,7 @@ function barColorForMae(mae) {
   return "var(--bad)";
 }
 
-// ไอคอนหัวข้อการ์ด "คำตอบหลัก" — คนละชุดกับไอคอนหน้ายิ้มของ ForecastView โดยตั้งใจ (ที่นั่นสื่อ
-// สถานะคุณภาพอากาศ ที่นี่สื่อ "ความน่าเชื่อถือของค่าพยากรณ์" คนละเรื่องกัน ใช้ปนกันจะสับสน)
+// ไอคอนหัวข้อการ์ด "คำตอบหลัก" สื่อความน่าเชื่อถือของค่าพยากรณ์
 function qualityIcon(cls) {
   if (cls === "good") return CircleCheck;
   if (cls === "moderate") return CircleAlert;
@@ -204,10 +199,8 @@ function drawChart(pts) {
     svg.appendChild(label);
   });
 
-  // ช่วงความเชื่อมั่น 90% (P05-P95 conformal) เป็น area wash สีเดียวกับเส้นพยากรณ์ ความเข้ม ~10%
-  // ตาม mark spec ของ dataviz skill (area fill = series hue ที่ ~10% opacity, ไม่ใช่บล็อกทึบ) วาด
-  // แยกเป็นช่วงต่อเนื่อง (run) เพราะบางจุดอาจไม่มี pm25_lo/pm25_hi (แถวเก่าก่อน CHANGELOG 81 หรือยัง
-  // ไม่ backfill) ข้ามจุดที่ไม่มีค่าแทนที่จะทำให้ทั้งแถบขาดหาย
+  // วาดช่วงความเชื่อมั่น 90% (P05-P95 conformal) เป็น area สีฟ้าโปร่งแสง แยกเป็นช่วงต่อเนื่อง (run)
+  // ตามจุดที่มีทั้ง pm25_lo และ pm25_hi ข้ามจุดที่ไม่มีค่าแทนที่จะทำให้ทั้งแถบขาดหาย
   function drawBand() {
     let run = [];
     const runs = [];
@@ -261,7 +254,7 @@ function drawChart(pts) {
   drawPath("predicted", "#2563eb");
   drawPath("actual", "#16a34a");
 
-  // จุดค่าจริง: วงกลมทึบสีเขียวเดิม (ground truth ไม่ขึ้นกับโมเดล)
+  // จุดค่าจริง: วงกลมทึบสีเขียว
   pts.forEach((p, i) => {
     if (p.actual == null) return;
     const circle = document.createElementNS(ns, "circle");
@@ -273,9 +266,7 @@ function drawChart(pts) {
     svg.appendChild(circle);
   });
 
-  // จุดค่าพยากรณ์: สีเดียวเสมอ (ไม่ encode โมเดล/backfill-live ด้วยสี/รูปทรงบนกราฟหลักแล้ว ตาม
-  // การตัดสินใจ "ซ่อนรายละเอียดโมเดลไว้ในส่วนขั้นสูง") — รายละเอียดโมเดล/แหล่งข้อมูลยังอยู่ใน
-  // tooltip (hover ดูได้) ไม่ได้ทิ้งข้อมูลไป แค่ไม่บังคับให้ทุกคนต้องแปลรหัสสีบนหน้าจอ
+  // จุดค่าพยากรณ์: สีเดียวเสมอ รายละเอียดโมเดล/แหล่งข้อมูลอยู่ใน tooltip (hover)
   pts.forEach((p, i) => {
     const circle = document.createElementNS(ns, "circle");
     circle.setAttribute("cx", xFor(i));
@@ -354,7 +345,7 @@ const overviewBars = computed(() => {
   }));
 });
 
-// รุ่นเก่า (ไม่มี suffix) ยังอยู่ในแถวเก่าของ prediction_log — v2 คือโมเดลรุ่นล่าสุด (21 feature, CHANGELOG 141)
+// ชื่อที่แสดงผลสำหรับแต่ละชื่อโมเดลที่พบใน prediction_log
 const modelLabel = {
   lightgbm_pooled_v3: "LightGBM (v3 ข้อมูลแก้แล้ว)", xgboost_pooled_v3: "XGBoost (v3 ข้อมูลแก้แล้ว)",
   lightgbm_pooled_v2: "LightGBM (v2 ข้อมูลป้ายเวลาผิด)", xgboost_pooled_v2: "XGBoost (v2 ข้อมูลป้ายเวลาผิด)",
@@ -368,7 +359,7 @@ const modelBreakdown = computed(() => {
     color: modelHex(m.model_used),
     line1: `MAE ±${m.mae} µg/m³ (n=${m.n}${m.basis === "mixed" ? ", รวม backfill" : m.basis === "live" ? ", live ล้วน" : ""})`,
     line2: `backfill ${m.n_backfill} / live ${m.n_live}`,
-    // naive_fallback ไม่มี coverage (ช่วงกว้าง 0 เสมอ ไม่ใช่ conformal interval จริง — ดู backend)
+    // naive_fallback ไม่มี coverage (ช่วงกว้าง 0 เสมอ)
     line3: m.coverage_pct != null ? `coverage ${m.coverage_pct}% (n=${m.n_coverage})` : m.model_used === "naive_fallback" ? "ไม่มีช่วงความเชื่อมั่น (persistence)" : null,
   }));
 });
@@ -378,8 +369,7 @@ onMounted(() => {
   loadComparison();
 });
 
-// สลับจังหวัดจาก dropdown บน header ขณะเปิดหน้านี้ค้างไว้ — ต้องรีโหลดทั้งภาพรวมและกราฟรายละเอียด
-// ตาม pattern เดียวกับ ForecastView.vue (ไม่งั้นข้อมูลจะค้างเป็นของจังหวัดเดิมจนกว่าจะรีเฟรชหน้าเอง)
+// เปลี่ยนจังหวัดแล้วรีโหลดทั้งภาพรวมและกราฟรายละเอียด
 watch(() => provinceState.selected, () => {
   loadOverview();
   loadComparison();
@@ -400,7 +390,7 @@ watch(() => provinceState.selected, () => {
       </div>
       <p class="subtitle">ดูว่าที่ผ่านมาระบบพยากรณ์ PM2.5 แม่นยำแค่ไหน เทียบกับค่าที่วัดได้จริง</p>
 
-      <!-- การ์ดคำตอบหลัก — สิ่งแรกที่ควรเห็น: "พยากรณ์แม่นยำแค่ไหน" แบบภาพรวม ไม่ต้องอ่านศัพท์สถิติ -->
+      <!-- การ์ดคำตอบหลัก: สรุปความแม่นยำแบบภาพรวม -->
       <div class="card hero-card">
         <div class="hero-row">
           <div class="hero-icon" :class="overviewQuality ? 'quality-' + overviewQuality.cls : ''">
@@ -474,7 +464,7 @@ watch(() => provinceState.selected, () => {
         </div>
       </div>
 
-      <!-- รายละเอียดทางเทคนิค — ซ่อนไว้เป็นค่าเริ่มต้น เพื่อไม่ให้ศัพท์สถิติ/ชื่อโมเดลรบกวนภาพรวมด้านบน -->
+      <!-- รายละเอียดทางเทคนิค ซ่อนไว้เป็นค่าเริ่มต้น -->
       <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
         <ChevronDown :size="16" :stroke-width="2" :class="{ 'toggle-icon-open': showAdvanced }" />
         {{ showAdvanced ? "ซ่อนรายละเอียดทางเทคนิค" : "ดูรายละเอียดทางเทคนิค" }}
@@ -541,10 +531,7 @@ watch(() => provinceState.selected, () => {
 
 <style scoped>
 .compare-page {
-  /* โทเคนกลางของหน้า (ground/card/ink/muted/line/track/accent/warn/info/success) มาจาก :root ใน
-     assets/main.css เหมือน ForecastView/MapView/NotificationsView — เหลือแค่โทเคนที่หน้านี้ใช้เฉพาะตัวเอง
-     (สีคุณภาพการพยากรณ์ good/moderate/bad, สีเส้นกราฟ, สีชิปโมเดล) ไม่มี sky gradient/glass blur อีกแล้ว
-     เพื่อให้หน้าตาตรงกับหน้าอื่นทั้งหมด */
+  /* โทเคนสีเฉพาะหน้านี้: คุณภาพการพยากรณ์ (good/moderate/bad), สีเส้นกราฟ, สีชิปโมเดล */
   --good: #22c55e;
   --moderate: #eab308;
   --bad: #ef4444;
@@ -555,7 +542,7 @@ watch(() => provinceState.selected, () => {
   --model-xgboost: #10b981;
   --model-fallback: #ec4899;
 
-  /* สีการ์ดคำตอบหลัก (hero) แบบเดียวกับ ForecastView — ปรับ tint ตามคุณภาพผ่านคลาส .quality-* บน root */
+  /* สีการ์ดคำตอบหลัก ปรับ tint ตามคุณภาพผ่านคลาส .quality-* บน root */
   --hero-bg: var(--card);
   --hero-ink: var(--ink);
 
@@ -565,13 +552,11 @@ watch(() => provinceState.selected, () => {
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
 }
 
-/* tint การ์ดคำตอบหลักตามคุณภาพการพยากรณ์ (ตัวหนังสือเข้มบน tint อ่อน / อ่อนบน tint เข้มใน dark) —
-   ใช้ hex เดียวกับ ForecastView.vue .aqi-good/.aqi-moderate/.aqi-bad เพื่อให้ความหมายสี "ดี/ปานกลาง/แย่"
-   ตรงกันทั้งแอป */
+/* tint การ์ดคำตอบหลักตามคุณภาพการพยากรณ์ */
 .compare-page.quality-good     { --hero-bg: #dff4e6; --hero-ink: #14532d; }
 .compare-page.quality-moderate { --hero-bg: #faefc1; --hero-ink: #4f3b00; }
 .compare-page.quality-bad      { --hero-bg: #fadada; --hero-ink: #7f1d1d; }
-/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+/* ธีมมืด */
   :root[data-theme="dark"] .compare-page.quality-good { --hero-bg: #12291b; --hero-ink: #bdebcb; }
   :root[data-theme="dark"] .compare-page.quality-moderate { --hero-bg: #2b2410; --hero-ink: #f5de8a; }
   :root[data-theme="dark"] .compare-page.quality-bad { --hero-bg: #351516; --hero-ink: #ffb8b8; }
@@ -587,7 +572,7 @@ watch(() => provinceState.selected, () => {
   margin-bottom: 4px;
 }
 .page-title { color: var(--muted); font-weight: 600; font-size: 0.95rem; }
-/* มือถือ: header ด้านบนมี brand อยู่แล้ว ไม่ต้องซ้ำหัวข้อหน้าอีก (เหมือน ForecastView.vue) */
+/* มือถือ: ซ่อนหัวข้อหน้า */
 @media (max-width: 720px) { .page-title { display: none; } }
 
 .province-chip {

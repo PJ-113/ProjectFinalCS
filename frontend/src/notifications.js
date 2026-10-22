@@ -2,7 +2,6 @@ import { reactive } from 'vue'
 import { provinceState } from './provinces'
 
 // สถานะแจ้งเตือนที่ใช้ร่วมกันระหว่าง AppHeader (กระดิ่ง) และ ForecastView (การ์ด/แบนเนอร์เตือน)
-// pattern เดียวกับ auth.js (reactive singleton + dedup ผ่าน promise cache) — โปรเจกต์นี้ไม่ใช้ Pinia
 export const notificationState = reactive({
   status: 'idle', // 'idle' | 'loading' | 'ready' | 'error'
   highPollutionRisk: false,
@@ -19,8 +18,7 @@ const WARNING_ADVICE_BY_RISK_GROUP = {
   มีโรคประจำตัว: 'ผู้มีโรคประจำตัวทางเดินหายใจควรหลีกเลี่ยงกิจกรรมกลางแจ้งและเตรียมอุปกรณ์ป้องกัน',
 }
 
-// ใช้ทั้งใน .warning-box ของ ForecastView และในกระดิ่งแจ้งเตือนของ AppHeader — นิยามที่เดียว
-// กันข้อความสองที่ไม่ตรงกัน
+// ใช้ทั้งใน .warning-box ของ ForecastView และกระดิ่งแจ้งเตือนของ AppHeader
 export function buildWarningMessage(riskGroup) {
   const advice = WARNING_ADVICE_BY_RISK_GROUP[riskGroup] || WARNING_ADVICE_BY_RISK_GROUP['ทั่วไป']
   return `ช่วงนี้ PM2.5 อยู่ในระดับสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อยในช่วงมลพิษสูง ${advice}`
@@ -29,8 +27,7 @@ export function buildWarningMessage(riskGroup) {
 let _fetchPromise = null
 
 // /api/forecast ทำงานหนัก (เรียก API ภายนอก + inference 3 โมเดล + บางครั้งเรียก Gemini) —
-// AppHeader mount อยู่ทุกหน้า ส่วน ForecastView mount เฉพาะหน้า "/" ถ้าไม่ dedup ที่นี่ หน้า "/"
-// จะยิง /api/forecast 2 ครั้งซ้อนกัน (จากทั้งกระดิ่งและตัวหน้าเอง)
+// dedup ด้วย promise cache กันการยิงซ้ำซ้อนตอน AppHeader และ ForecastView mount พร้อมกัน
 export async function fetchForecast() {
   if (_fetchPromise) return _fetchPromise
   notificationState.status = 'loading'
@@ -62,10 +59,9 @@ export async function fetchForecast() {
   }
 }
 
-// เบากว่า fetchForecast() มาก — ไม่ผ่าน feature engineering/model inference/log ใดๆ แค่ค่า PM2.5
-// ล่าสุดของจังหวัดเดียว ใช้สำหรับ poll รีเฟรชการ์ด "ปัจจุบัน" เป็นระยะโดยไม่ยิง /api/forecast ซ้ำถี่ๆ
-// ไม่ throw และไม่แตะ notificationState (ตัวแปรร่วมกับกระดิ่ง/แบนเนอร์เตือน) — คืน null เงียบๆ เมื่อพลาด
-// ให้ caller (ForecastView) ตัดสินใจเองว่าจะคงค่าเดิมไว้หรือทำอะไรต่อ
+// ดึงค่า PM2.5 ล่าสุดของจังหวัดเดียวเท่านั้น (ไม่ผ่าน feature engineering/model inference/log)
+// ใช้สำหรับ poll รีเฟรชการ์ด "ปัจจุบัน" เป็นระยะ ไม่ throw และไม่แตะ notificationState
+// คืน null เงียบๆ เมื่อพลาด ให้ caller (ForecastView) ตัดสินใจเองว่าจะทำอะไรต่อ
 export async function fetchCurrentPm25(province) {
   try {
     const res = await fetch(`/api/current_pm25?province=${province}`)
@@ -76,11 +72,9 @@ export async function fetchCurrentPm25(province) {
   }
 }
 
-// เหมือน fetchForecast() แต่สำหรับ "จังหวัดหลัก" ของ user (home_province) แยกต่างหาก — ใช้
-// /api/notifications/status แทน /api/forecast เพราะถูกกว่ามาก (อ่านจาก notification_log/
-// prediction_log ล่าสุด ไม่เรียก live API/inference ซ้ำ) เหมาะกับกระดิ่งที่แค่ต้องรู้สถานะเสี่ยง
-// ไม่ต้องมีค่าพยากรณ์ 24 ชม.เต็มแบบหน้า "/" คนละฟังก์ชันกับ fetchForecast() เพราะจังหวัดอาจไม่ตรงกับ
-// provinceState.selected ที่หน้า "/" ใช้แสดงผล
+// เหมือน fetchForecast() แต่สำหรับ "จังหวัดหลัก" ของ user (home_province) ใช้
+// /api/notifications/status ซึ่งอ่านจาก notification_log/prediction_log ล่าสุด
+// ไม่เรียก live API/inference ซ้ำ และไม่คืนค่าพยากรณ์ 24 ชม.เต็มแบบหน้า "/"
 export async function fetchHomeProvinceStatus(province) {
   notificationState.status = 'loading'
   try {
@@ -104,16 +98,13 @@ export async function fetchHomeProvinceStatus(province) {
   }
 }
 
-// ประวัติการแจ้งเตือน — endpoint แยกจาก /api/forecast ไม่ต้อง prewarm ตอน mount เหมือน fetchForecast()
-// (กระดิ่งไม่จำเป็นต้องมีประวัติพร้อมใช้ทันทีเหมือน badge จุดแดง) ดึงตอนเปิด dropdown/เข้าหน้า
-// /notifications เท่านั้น
+// ประวัติการแจ้งเตือน — endpoint แยกจาก /api/forecast ดึงตอนเปิด dropdown/เข้าหน้า /notifications เท่านั้น
 export const notificationHistory = reactive({
   status: 'idle', // 'idle' | 'loading' | 'ready' | 'error'
   items: [],
 })
 
 // "YYYY-MM-DD HH:MM" (เวลาไทยจาก backend, recorded_at_th) -> Date local ล้วนๆ ไม่ยุ่ง timezone
-// เพิ่มเติม เพราะแค่บวกชั่วโมงแล้ว format กลับเป็น string เองทั้งหมด
 function parseThaiDateTime(str) {
   const [datePart, timePart] = str.split(' ')
   const [y, m, d] = datePart.split('-').map(Number)
@@ -133,7 +124,7 @@ function formatHM(date) {
 }
 
 // หัวการ์ดประวัติ: "2026-09-23 21:00" (ดิบจาก backend) -> "วันนี้ 21:00 น." / "เมื่อวาน ..." / "23 ก.ย. ..."
-// อ่านง่ายกว่า ISO-ish string เดิม โดยเทียบกับวันที่ปัจจุบันของเบราว์เซอร์ผู้ใช้
+// เทียบกับวันที่ปัจจุบันของเบราว์เซอร์ผู้ใช้
 export function formatCardTime(str) {
   const d = parseThaiDateTime(str)
   const now = new Date()
@@ -144,7 +135,7 @@ export function formatCardTime(str) {
   return `${d.getDate()} ${THAI_MONTHS_ABBR[d.getMonth()]} ${formatHM(d)}`
 }
 
-// จัดกลุ่ม horizon ที่ติดกันเป็นช่วงเดียว (เช่น [1,2,3,7,8] -> [[1,3],[7,8]]) กัน list ยาวเป็นพรืด
+// จัดกลุ่ม horizon ที่ติดกันเป็นช่วงเดียว (เช่น [1,2,3,7,8] -> [[1,3],[7,8]])
 function groupConsecutive(horizons) {
   const groups = []
   let start = horizons[0]
@@ -162,7 +153,7 @@ function groupConsecutive(horizons) {
   return groups
 }
 
-// ติดป้าย "พรุ่งนี้" แค่ตอนวันเปลี่ยนจริง แค่จุดเดียวต่อช่วง (ไม่ใช่ทุกจุดเวลาเหมือนเดิม) —
+// ติดป้าย "พรุ่งนี้" แค่ตอนวันเปลี่ยนจริง แค่จุดเดียวต่อช่วง
 // horizon สูงสุด 24 ข้ามได้แค่ 1 วัน ไม่ต้องรองรับ "มะรืนนี้"
 function formatRange(base, start, end) {
   const startDate = new Date(base.getTime() + start * 3600000)
@@ -174,8 +165,7 @@ function formatRange(base, start, end) {
 }
 
 // สรุป 1 รายการประวัติเป็น { headline, ranges, note } ให้ template render เป็นหัวข้อ + chip แยกใบ
-// (ไม่ใช่ string ประโยคยาวคั่นจุลภาคเหมือนเดิม — อ่านยากเมื่อมีหลายช่วง) ใช้ร่วมกันทั้ง dropdown ใน
-// AppHeader และหน้า /notifications เต็ม กันข้อความไม่ตรงกันเหมือนที่ทำกับ buildWarningMessage
+// ใช้ร่วมกันทั้ง dropdown ใน AppHeader และหน้า /notifications เต็ม
 export function summarizeHistoryItem(item) {
   let headline = ''
   let ranges = []
@@ -192,9 +182,7 @@ export function summarizeHistoryItem(item) {
   return { headline, ranges, note }
 }
 
-// เคยเปิดไว้ชั่วคราวเพื่อโชว์อาจารย์ (ผู้ใช้สั่ง 2026-10-04) ตอนนั้นของจริงยังว่างเปล่าเพราะ PM2.5
-// ยังไม่เคยถึงเกณฑ์แจ้งเตือน — ปิดกลับแล้ว (2026-10-20) ตอนนี้ของจริงมีประวัติแล้ว (มีรอบที่ฝุ่นเกินเกณฑ์
-// เกิดขึ้นจริงตั้งแต่กลาง ต.ค. 2569) ตั้ง true อีกครั้งถ้าต้องโชว์ตัวอย่างหน้าตาการแจ้งเตือนแบบคุมเคสได้เอง
+// true = ใช้ข้อมูลตัวอย่างแทนประวัติจริงจาก /api/notifications
 // กระทบทั้ง dropdown กระดิ่งใน AppHeader.vue และหน้า /notifications เพราะทั้งคู่อ่านจาก
 // notificationHistory.items ตัวเดียวกัน
 const SAMPLE_NOTIFICATION_HISTORY = false
@@ -225,8 +213,8 @@ function sampleHistoryItems() {
   ]
 }
 
-// province: ไม่ส่งมา = ใช้ provinceState.selected เหมือนเดิม (guest/ยังไม่ตั้งจังหวัดหลัก) — ส่งมา
-// เพื่อให้ตรงกับจังหวัดที่กระดิ่ง (badge สถานะ) กำลังเฝ้าอยู่จริง เวลามี home_province (AppHeader.vue)
+// province: ไม่ส่งมา = ใช้ provinceState.selected (guest/ยังไม่ตั้งจังหวัดหลัก) ส่งมาเพื่อให้ตรงกับ
+// จังหวัดที่กระดิ่ง (badge สถานะ) กำลังเฝ้าอยู่จริง เวลามี home_province (AppHeader.vue)
 export async function fetchNotificationHistory(limit = 5, province = provinceState.selected) {
   if (SAMPLE_NOTIFICATION_HISTORY) {
     notificationHistory.items = sampleHistoryItems().slice(0, limit)

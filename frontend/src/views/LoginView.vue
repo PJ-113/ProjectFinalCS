@@ -62,7 +62,7 @@ async function handleSubmit() {
 </template>
 
 <style scoped>
-/* โทเคนสีธีมใหม่มาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่/โปรไฟล์) */
+/* โทเคนสีธีมมาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่/โปรไฟล์) */
 .auth-page {
   min-height: 100vh;
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
@@ -144,7 +144,7 @@ input:focus-visible,
 .switch-link a:hover { text-decoration: underline; }
 
 /* เดสก์ท็อป: จัดกล่องฟอร์มให้อยู่กึ่งกลางหน้าจอทั้งแนวตั้งและแนวนอน (margin: auto ใน flex column —
-   ถ้าเนื้อหาสูงกว่าจอจะตกลงเป็นชิดบนเองโดยไม่ถูกตัด) มือถือคงชิดบนตามเดิม */
+   ถ้าเนื้อหาสูงกว่าจอจะตกลงเป็นชิดบนเองโดยไม่ถูกตัด) มือถือชิดบน */
 @media (min-width: 721px) {
   .auth-page { display: flex; flex-direction: column; }
   .wrap { margin: auto; width: 100%; }

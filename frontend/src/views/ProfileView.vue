@@ -67,8 +67,7 @@ async function handleSaveProfile() {
   }
 }
 
-// ระยะทางวงกลมใหญ่ (กม.) ระหว่างสองพิกัด — ใช้หาจังหวัดที่ใกล้ตำแหน่งปัจจุบันที่สุด ไม่มี dependency
-// เพิ่ม เป็นแค่สูตรคณิตศาสตร์ทั่วไป
+// ระยะทางวงกลมใหญ่ (กม.) ระหว่างสองพิกัด — ใช้หาจังหวัดที่ใกล้ตำแหน่งปัจจุบันที่สุด
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371
   const dLat = (lat2 - lat1) * Math.PI / 180
@@ -79,7 +78,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 // ปุ่ม GPS แค่ "ช่วยเดา" เติมค่าในช่องจังหวัดให้เฉยๆ ไม่ auto-save — ผู้ใช้ต้องกดบันทึกโปรไฟล์เองเสมอ
-// (ตัดสินใจไว้ตั้งแต่ตอนวางแผน กัน GPS หยาบ/ผิดพลาดไปบันทึกทับโดยไม่ได้ตรวจสอบก่อน)
 function handleUseLocation() {
   geoMessage.value = ''
   if (!navigator.geolocation) {
@@ -264,7 +262,7 @@ async function handleLogout() {
 </template>
 
 <style scoped>
-/* โทเคนสีธีมใหม่มาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่) */
+/* โทเคนสีมาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่) */
 .profile-page {
   min-height: 100vh;
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);

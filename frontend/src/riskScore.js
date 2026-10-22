@@ -1,10 +1,7 @@
 import { reactive } from 'vue'
 
-// Personalized Risk Score (proposal) — เก็บ activity ที่ผู้ใช้เลือกไว้เอง ไม่ผูกกับ auth/profile
-// (ตัดสินใจแล้วว่า "กิจกรรมที่ต้องการทำ" เปลี่ยนได้ทุกครั้งที่เข้าเว็บ ไม่ใช่ trait ถาวรแบบ risk_group)
-// จำค่าล่าสุดผ่าน localStorage อย่างเดียว ไม่มี backend เกี่ยวข้อง — สูตรคำนวณคะแนนเองก็เป็น pure
-// function ทั่วไป (linear interpolation) ตัวเลข offset/breakpoint จริงมาจาก risk_score_config ที่
-// /api/forecast ส่งมาให้เสมอ (นิยามที่เดียวคือ app.py กัน frontend/backend คำนวณไม่ตรงกัน)
+// Personalized Risk Score — เก็บ activity ที่ผู้ใช้เลือกไว้ล่าสุดผ่าน localStorage
+// offset/breakpoint ของสูตรคำนวณมาจาก risk_score_config ที่ /api/forecast ส่งมา
 export const ACTIVITY_LEVELS = ['เบา', 'ปานกลาง', 'หนัก']
 
 const STORAGE_KEY = 'pm25_activity_intensity'
@@ -25,7 +22,7 @@ export function setActivity(level) {
 }
 
 // ระดับเดียวกับ PM25_LEVELS ใน app.py (มาตรฐาน คพ. 2566) — ต้อง match string ให้ตรงเป๊ะกับที่
-// _classify_pm25_level() คืนกลับมา (เหมือน statusClass() ใน ForecastView.vue)
+// _classify_pm25_level() คืนกลับมา
 const LEVEL_BOUNDARIES = [
   [15, 'ดีมาก'],
   [25, 'ดี'],
@@ -41,9 +38,8 @@ function classifyLevel(value) {
   return LEVEL_BOUNDARIES[LEVEL_BOUNDARIES.length - 1][1]
 }
 
-// mirror ของ compute_risk_score() ใน app.py — ตัวเลข (offset/breakpoints) มาจาก config ที่ backend
-// ส่งมาเสมอ ไม่ hardcode ซ้ำที่นี่ ที่ hardcode ซ้ำได้จริงๆ มีแค่ตัว "สูตร" (interpolation ทั่วไป)
-// ซึ่งเป็น math ล้วนๆ ไม่ใช่ business constant จึงไม่เสี่ยง drift แบบ feature engineering อื่นในโปรเจกต์
+// mirror ของ compute_risk_score() ใน app.py — ใช้สูตร linear interpolation เดียวกัน
+// offset/breakpoints มาจาก config ที่ backend ส่งมา
 export function computeRiskScore(pm25, config, activity) {
   if (pm25 == null || !config) return { score: null, level: '', effective_pm25: null }
   const activityOffset = config.activity_offsets[activity] ?? 0
@@ -69,9 +65,7 @@ export function computeRiskScore(pm25, config, activity) {
   }
 }
 
-// คำแนะนำสั้นๆ ต่อท้ายคะแนน แปลระดับ (ตัวเลข/สี ที่อาจดูเข้าใจยาก) เป็นภาษาที่บอกว่า "ควรทำยังไง"
-// ตรงๆ — โทนเดียวกับ _HEALTH_MESSAGE_TEMPLATES ใน app.py (คนละก้อนเพราะฝั่งนั้นผูกกับ NLG/Gemini
-// safety check ส่วนนี้แค่สรุปสั้นสำหรับการ์ดคะแนน)
+// คำแนะนำสั้นๆ ต่อท้ายคะแนน ตามระดับความเสี่ยง
 const RISK_SCORE_ADVICE = {
   ดีมาก: 'ความเสี่ยงต่ำมาก ทำกิจกรรมนี้ได้ตามปกติ',
   ดี: 'ความเสี่ยงต่ำ ทำกิจกรรมนี้ได้ตามปกติ',

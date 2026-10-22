@@ -1,7 +1,5 @@
-// ระดับ/สี PM2.5 ตรงกับ PM25_LEVELS ใน app.py (มาตรฐาน คพ. 2566) — โมดูลกลางเดียว ไม่ให้ค่า/สี/label
-// กระจายซ้ำในหลายไฟล์ (ก่อนหน้านี้มีสำเนาเดียวอยู่ใน ForecastView.vue เท่านั้น, MapView.vue ใช้ชุด
-// เดียวกัน) ต้อง match string สถานะให้ตรงเป๊ะกับที่ pm25_status() คืนกลับมา ไม่งั้นจะ fall through
-// ไปโชว์สี/ระดับผิด (เคยเป็นบั๊กมาก่อนตอนยังมีแค่ 3 ระดับ)
+// ระดับ/สี PM2.5 ตรงกับ PM25_LEVELS ใน app.py (มาตรฐาน คพ. 2566) — โมดูลกลางเดียวที่ ForecastView.vue
+// และ MapView.vue ใช้ร่วมกัน ต้อง match string สถานะให้ตรงเป๊ะกับที่ pm25_status() คืนกลับมา
 
 export const PM25_LEVELS = [
   { max: 15, status: "ดีมาก", cssVar: "--excellent", statusClass: "status-excellent", hex: "#3b82f6" },
@@ -31,8 +29,7 @@ export function scaleMarkerPct(pm25) {
   return ((i + frac) / PM25_LEVELS.length) * 100;
 }
 
-// คำแนะนำสั้นๆ ใต้ค่า PM2.5 ปัจจุบัน (ระดับเดียวกับ status ที่ backend ส่งมา) — โทนเดียวกับ
-// WARNING_ADVICE_BY_RISK_GROUP ใน notifications.js และ RISK_SCORE_ADVICE ใน riskScore.js
+// คำแนะนำสั้นๆ ใต้ค่า PM2.5 ปัจจุบัน ตามระดับ status ที่ backend ส่งมา
 const ADVICE_BY_STATUS = {
   ดีมาก: "อากาศดีมาก ทำกิจกรรมกลางแจ้งได้ตามปกติ",
   ดี: "อากาศดี ทำกิจกรรมกลางแจ้งได้ตามปกติ",
@@ -56,7 +53,6 @@ export function statusClass(status) {
 }
 
 // numeric pm25 -> hex สีตรง ใช้ตอนต้องการ literal color (เช่น Leaflet circleMarker fillColor)
-// แทนการพึ่ง CSS var() ซึ่งไม่ใช่ทุก renderer จะ resolve ให้แน่นอน
 export function severityHex(pm25) {
   return levelForPm25(pm25).hex;
 }

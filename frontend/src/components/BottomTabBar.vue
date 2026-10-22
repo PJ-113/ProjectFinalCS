@@ -3,9 +3,8 @@ import { computed } from 'vue'
 import { House, Map as MapIcon, ChartColumn, User, LogIn } from '@lucide/vue'
 import { authState, isAdmin } from '../auth'
 
-// แถบนำทางล่างสำหรับมือถือ (≤720px) — แทนลิงก์ tab/login ที่เคยอยู่ใน AppHeader (header บนมือถือเหลือแค่
-// brand + กระดิ่ง) แสดงผลเฉพาะจอแคบด้วย CSS; เดสก์ท็อปยังใช้ top nav ใน AppHeader ตามเดิม
-// "เปรียบเทียบ" เป็น admin-only เหมือนใน AppHeader (route guard จริงอยู่ที่ router/index.js)
+// แถบนำทางล่างสำหรับมือถือ (≤720px) แสดงผลเฉพาะจอแคบด้วย CSS เดสก์ท็อปใช้ top nav ใน AppHeader
+// "เปรียบเทียบ" เป็น admin-only (route guard อยู่ที่ router/index.js)
 const tabs = computed(() => {
   const list = [
     { to: '/', label: 'พยากรณ์', icon: House },

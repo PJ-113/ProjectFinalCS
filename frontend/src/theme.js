@@ -1,9 +1,7 @@
 import { reactive } from 'vue'
 
-// สลับธีมสว่าง/มืดด้วยปุ่ม — เก็บค่าที่เลือกไว้ใน localStorage (per-viewer preference เหมือน provinces.js/
-// riskScore.js) ถ้ายังไม่เคยเลือกจะตามธีมของเครื่อง (prefers-color-scheme) และตามต่อเมื่อเครื่องเปลี่ยน
-// ธีมของทุกหน้าอ่านจาก attribute data-theme บน <html> (CSS: :root[data-theme="dark"] ...) ไม่ใช้
-// @media (prefers-color-scheme) แล้ว — สคริปต์ inline ใน index.html ตั้งค่าเดียวกันนี้ก่อน render (กันจอวาบ)
+// สลับธีมสว่าง/มืดด้วยปุ่ม — เก็บค่าที่เลือกไว้ใน localStorage ถ้ายังไม่เคยเลือกจะตามธีมของเครื่อง
+// (prefers-color-scheme) และตามต่อเมื่อเครื่องเปลี่ยน ธีมของทุกหน้าอ่านจาก attribute data-theme บน <html>
 const STORAGE_KEY = 'pm25_theme'
 const THEME_COLOR = { light: '#f6f4ef', dark: '#0e1013' } // meta theme-color = สี --ground ของแต่ละธีม
 

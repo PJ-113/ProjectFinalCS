@@ -1,8 +1,7 @@
 import { reactive } from 'vue'
 
-// รายชื่อ 20 จังหวัดภาคอีสาน (17 เทรน + 3 zero-shot) มาจาก /api/provinces (อ่านจาก
-// data/province_station_registry.json ฝั่ง backend) — จำจังหวัดที่เลือกไว้ผ่าน localStorage
-// อย่างเดียว (per-viewer preference) ไม่มี backend เกี่ยวข้อง เหมือน riskScore.js
+// รายชื่อ 20 จังหวัดภาคอีสาน (17 เทรน + 3 zero-shot) มาจาก /api/provinces
+// จังหวัดที่เลือกไว้เก็บผ่าน localStorage อย่างเดียว
 const STORAGE_KEY = 'pm25_selected_province'
 const DEFAULT_PROVINCE = 'khonkaen'
 

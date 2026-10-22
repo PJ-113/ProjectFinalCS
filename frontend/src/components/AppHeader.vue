@@ -16,13 +16,11 @@ import {
 import { provinceState, fetchProvinces } from '../provinces'
 import logoIcon from '../assets/logo-icon.svg'
 
-// เปิดใช้งานแล้ว 2026-09-23 (ตั้งค่าเครื่องใหม่เสร็จ: Postgres/SECRET_KEY/GEMINI_KEY พร้อมหมด) —
-// login/register/profile + กระดิ่งแจ้งเตือนกลับมาโชว์
+// เปิด/ปิดการแสดง login/register/profile + กระดิ่งแจ้งเตือน
 const SHOW_EXTRA_FEATURES = true
-// หน้าเปรียบเทียบ (/compare) จำกัดเฉพาะ admin เท่านั้น (route guard ที่ router/index.js เป็นคนบังคับจริง
-// อันนี้แค่ซ่อนลิงก์ไม่ให้ user ทั่วไปงงว่ากดแล้วโดนเด้งกลับ)
+// เปิด/ปิดลิงก์หน้าเปรียบเทียบ (/compare) — สิทธิ์เข้าหน้าจริงบังคับโดย route guard ใน router/index.js
 const SHOW_COMPARE = true
-// หน้าแผนที่ภาพรวม (/map) เช่นเดียวกัน — อ่านจาก notification_log ล้วนๆ ไม่ต้องพึ่ง auth/Gemini
+// เปิด/ปิดลิงก์หน้าแผนที่ภาพรวม (/map)
 const SHOW_MAP = true
 
 const notifOpen = ref(false)
@@ -30,15 +28,13 @@ const notifWrapperEl = ref(null)
 
 function toggleNotif() {
   notifOpen.value = !notifOpen.value
-  // ดึงประวัติตอนเปิด dropdown เท่านั้น (ไม่ prewarm ตอน mount เหมือน fetchForecast() — ประวัติไม่
-  // จำเป็นสำหรับ badge จุดแดง กันยิง request เพิ่มทุกหน้าโดยไม่จำเป็น) ใช้จังหวัดเดียวกับที่ badge
-  // สถานะกำลังเฝ้าอยู่ (home_province ถ้าตั้งไว้ ไม่งั้น dropdown ที่เลือกอยู่)
+  // ดึงประวัติเมื่อเปิด dropdown เท่านั้น ใช้จังหวัดเดียวกับที่ badge สถานะกำลังเฝ้าอยู่
+  // (home_province ถ้าตั้งไว้ ไม่งั้น dropdown ที่เลือกอยู่)
   if (notifOpen.value) fetchNotificationHistory(5, authState.user?.home_province || provinceState.selected)
 }
 
-// เลือกว่ากระดิ่งจะเฝ้าจังหวัดไหน: home_province ของ user (ถ้าตั้งไว้) แยกจาก dropdown ที่ใช้ดู
-// พยากรณ์อยู่ตอนนี้ เพื่อไม่ให้สลับ dropdown ไปดูจังหวัดอื่นแล้วกระดิ่งเปลี่ยนไปเฝ้าจังหวัดนั้นด้วย —
-// ใช้ /api/notifications/status (ถูก, อ่านจาก DB ล่าสุด) แทน /api/forecast (แพง) เมื่อมี home_province
+// เลือกจังหวัดที่กระดิ่งจะเฝ้า: ถ้า user ตั้ง home_province ไว้ ใช้ /api/notifications/status
+// (แยกจาก dropdown เลือกจังหวัดที่ใช้ดูพยากรณ์อยู่) ไม่งั้นใช้ /api/forecast ตามจังหวัดที่เลือกดูอยู่
 function refreshNotificationWatch() {
   if (authState.user?.home_province) {
     fetchHomeProvinceStatus(authState.user.home_province)
@@ -47,8 +43,7 @@ function refreshNotificationWatch() {
   }
 }
 
-// ปิด dropdown เมื่อคลิกนอกกล่อง — ไม่มี pattern นี้อยู่ก่อนในโปรเจกต์ ใช้ document click listener
-// ตรงๆ (ไม่มี modal/dropdown component ให้ reuse)
+// ปิด dropdown เมื่อคลิกนอกกล่อง
 function handleOutsideClick(e) {
   if (notifOpen.value && notifWrapperEl.value && !notifWrapperEl.value.contains(e.target)) {
     notifOpen.value = false
@@ -56,11 +51,9 @@ function handleOutsideClick(e) {
 }
 
 onMounted(() => {
-  fetchProvinces() // ต้องมีเสมอ ไม่ผูกกับ SHOW_EXTRA_FEATURES — โหลด list ไว้ให้หน้าพยากรณ์/เปรียบเทียบ
-  // ใช้ (dropdown เลือกจังหวัดย้ายไปอยู่ในแต่ละหน้าแล้ว ไม่ได้อยู่ใน header)
+  fetchProvinces() // โหลดรายชื่อจังหวัดไว้ให้หน้าพยากรณ์/เปรียบเทียบใช้ (ไม่ขึ้นกับ SHOW_EXTRA_FEATURES)
   if (SHOW_EXTRA_FEATURES) {
-    // ต้องรอ fetchCurrentUser() เสร็จก่อน ถึงจะรู้ authState.user?.home_province แน่ชัด (ไม่งั้นจะ
-    // เห็นเป็น undefined ชั่วคราวแล้วเลือกผิดทาง)
+    // รอ fetchCurrentUser() เสร็จก่อน แล้วค่อยเช็ค authState.user?.home_province
     fetchCurrentUser().then(refreshNotificationWatch)
   }
   document.addEventListener('click', handleOutsideClick)
@@ -69,8 +62,7 @@ onUnmounted(() => {
   document.removeEventListener('click', handleOutsideClick)
 })
 
-// เผื่อ login/logout หรือแก้ home_province ในหน้าโปรไฟล์ระหว่างเปิดหน้าเว็บค้างไว้ — ให้กระดิ่งอัปเดต
-// ตามจังหวัดใหม่โดยไม่ต้องรีเฟรชหน้าเอง
+// เมื่อ home_province เปลี่ยน อัปเดตจังหวัดที่กระดิ่งเฝ้าโดยไม่ต้องรีเฟรชหน้า
 watch(() => authState.user?.home_province, () => {
   if (SHOW_EXTRA_FEATURES) refreshNotificationWatch()
 })
@@ -242,7 +234,7 @@ const historyItems = computed(() =>
   background: rgba(59, 130, 246, 0.1);
 }
 
-/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
+/* ธีมมืด (data-theme="dark" บน <html>) */
   :root[data-theme="dark"] .nav-tab.router-link-exact-active {
     background: rgba(96, 165, 250, 0.15);
   }
@@ -314,7 +306,7 @@ const historyItems = computed(() =>
   background: rgba(59, 130, 246, 0.1);
 }
 
-/* pulse dot เดียวกับ .live-dot ใน ForecastView.vue แค่เปลี่ยนสีเป็น error แทน good */
+/* จุดกระพริบแจ้งเตือนบนไอคอนกระดิ่ง */
 .notif-bell-alert::after {
   content: '';
   position: absolute;
@@ -365,7 +357,7 @@ const historyItems = computed(() =>
   line-height: 1.5;
 }
 
-/* โครงเดียวกับ banner ในหน้าพยากรณ์ (ไอคอน + ข้อความ) ใช้สี warn/info ไม่ใช้แดง error */
+/* กล่องไอคอน + ข้อความ ใช้สี warn/info */
 .notif-item {
   display: flex;
   gap: 12px;
@@ -457,10 +449,8 @@ const historyItems = computed(() =>
   text-decoration: underline;
 }
 
-/* อยู่ท้ายไฟล์เสมอ: ต้องมาหลังกฎฐานของ .notif-dropdown/.notif-backdrop/.notif-grip ไม่งั้นกฎฐานที่ความเฉพาะเจาะจง
-   เท่ากันแต่มาทีหลังจะทับ media query นี้ (เดิมเป็นบั๊ก: sheet บนมือถือไม่ทำงาน) */
-/* มือถือ (≤720px): เหลือแค่ brand + กระดิ่งแถวเดียว — ลิงก์ tab/login/register ย้ายไป BottomTabBar.vue
-   (ทุกหน้าเผื่อ padding ผ่าน --app-top-offset / --app-bottom-offset ใน main.css) */
+/* ต้องอยู่หลังกฎฐานของ .notif-dropdown/.notif-backdrop/.notif-grip เพื่อให้ media query นี้ทับได้ */
+/* มือถือ (≤720px): เหลือแค่ brand + กระดิ่งแถวเดียว — ลิงก์ tab/login/register อยู่ใน BottomTabBar.vue */
 @media (max-width: 720px) {
   .desktop-only { display: none !important; }
   .app-header {
@@ -469,8 +459,7 @@ const historyItems = computed(() =>
     right: 8px;
     flex-wrap: nowrap;
     padding: 6px 8px 6px 16px;
-    /* backdrop-filter ทำให้ลูก position:fixed (dropdown แจ้งเตือนที่เป็น bottom sheet) อ้างอิงกล่อง header
-       แทนหน้าจอ — ปิดบนมือถือและใช้พื้นทึบแทน */
+    /* backdrop-filter ทำให้ลูก position:fixed อ้างอิงกล่อง header แทนหน้าจอ — ปิดบนมือถือและใช้พื้นทึบแทน */
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     background: var(--card);
@@ -481,8 +470,7 @@ const historyItems = computed(() =>
   .app-header-auth { gap: 0; }
   .notif-bell-alert::after { top: 9px; right: 10px; }
 
-  /* dropdown แจ้งเตือน → bottom sheet เต็มความกว้าง + backdrop มืด (ยกทั้ง header ให้สูงกว่า tab bar
-     ตอนเปิด ไม่งั้น sheet จะถูก tab bar ที่ z-index เท่ากันแต่มาทีหลังในเอกสารทับ) */
+  /* dropdown แจ้งเตือน → bottom sheet เต็มความกว้าง + backdrop มืด; ยก header เหนือ tab bar ตอนเปิดด้วย z-index */
   .app-header-open { z-index: 250; }
   .notif-backdrop {
     display: block;

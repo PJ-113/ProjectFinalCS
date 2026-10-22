@@ -3,9 +3,8 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { Search, X, Check } from '@lucide/vue'
 import { provinceState } from '../provinces'
 
-// bottom sheet บนมือถือ / dialog กลางจอบนเดสก์ท็อป — แทน <select> เดิมที่กดยากบนมือถือและไม่มีช่องค้นหา
-// (20 จังหวัด) ไม่ตัดสินใจเองว่าเลือกแล้วทำอะไร: emit 'select' (ค่า province_en หรือ '' = ไม่ระบุ) ให้ผู้เรียก
-// จัดการ — หน้าพยากรณ์ส่งเข้า selectProvince() (จังหวัดที่กำลังดู) ส่วนหน้าโปรไฟล์ใช้ตั้ง "จังหวัดหลัก"
+// bottom sheet บนมือถือ / dialog กลางจอบนเดสก์ท็อป สำหรับเลือกจังหวัด (20 จังหวัด) พร้อมช่องค้นหา
+// ไม่ตัดสินใจเองว่าเลือกแล้วทำอะไร: emit 'select' (ค่า province_en หรือ '' = ไม่ระบุ) ให้ผู้เรียกจัดการ
 // Teleport ไป body จึงใช้โทเคนสี global (:root ใน main.css) ไม่ inherit จากหน้าที่เรียกใช้
 const props = defineProps({
   open: { type: Boolean, default: false },
