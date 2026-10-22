@@ -1,15 +1,8 @@
 """
-อาจารย์ขอให้รายงานผลเป็นค่า "Accuracy" — โมเดลนี้เป็น regression (ทำนายค่า PM2.5 ต่อเนื่อง)
-ไม่ใช่ classification จึงไม่มี accuracy แบบ "ทายถูก/ผิด" ตรงๆ วิธีที่เป็นมาตรฐานของงาน
-forecasting (พยากรณ์ค่าต่อเนื่อง) คือแปลง MAPE (Mean Absolute Percentage Error) เป็น
-Accuracy = 100% - MAPE% (ใช้กันทั่วไปในวงการ forecasting เช่น demand forecasting "forecast
-accuracy")
+คำนวณ Accuracy = 100% - MAPE% (MAPE = Mean Absolute Percentage Error) บน test split เดียวกับที่
+รายงานผลทางการ แยกตามช่วงปกติ/ฤดูฝุ่น และต่อ horizon ตัวแทน
 
-ใช้กับโมเดลล่าสุด (_20260914_211416, 19 feature) บน test split เดียวกับที่รายงานผลทางการ —
-reuse โค้ดจาก analyze_burning_season_backtest_clean.py (predict_all_horizons ฯลฯ) ตรงๆ
-
-หมายเหตุสำคัญ: MAPE ไม่เสถียรเมื่อค่าจริงใกล้ 0 (หารด้วยเลขเล็กทำให้ %error พุ่ง) — รายงานทั้ง
-แบบรวมทุกแถว และแบบตัดแถวที่ actual < 5 ug/m3 ออก (เกณฑ์ทางปฏิบัติที่ใช้กันทั่วไป) ให้เห็นทั้ง 2 แบบ
+MAPE ไม่เสถียรเมื่อค่าจริงใกล้ 0 จึงรายงานทั้งแบบรวมทุกแถว และแบบตัดแถวที่ actual < 5 ug/m3 ออก
 """
 import importlib.util
 import os
@@ -18,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOW_ACTUAL_THRESHOLD = 5.0  # ug/m3 — ต่ำกว่านี้ %error ไม่เสถียร ตัดออกจาก MAPE ที่ 2
+LOW_ACTUAL_THRESHOLD = 5.0  # ug/m3 — ต่ำกว่านี้ %error ไม่เสถียร
 
 
 def load_backtest_module():

@@ -1,11 +1,7 @@
 """
-วัด latency จริงของ Gemini API (gemini-3.1-flash-lite) สำหรับ prompt แบบ NLG รายวัน (CHANGELOG 179
-เปิดใช้ SHAP→NLG แล้วพบว่าหลายแถวหลุดไป fallback template เพราะเกิน GEMINI_TIMEOUT_SECONDS=5 วิ —
-ยืนยันแล้วว่าไม่ใช่โควตา (Google AI Studio: RPM peak 9/15 ใน 28 วัน) จึงต้องวัด latency จริงก่อนตั้ง
-ค่า timeout ใหม่ ไม่เดาตัวเลขลอยๆ — pattern เดียวกับ IMPUTATION_MIN_K ที่วัดจาก target_latency_scheduler_log.csv)
-
-เรียก _gemini_client.models.generate_content(...) ตรงๆ โดยไม่ผ่าน ThreadPoolExecutor/timeout wrapper
-ของ _call_gemini() เพื่อให้เห็นหางการกระจาย (tail) ของเวลาตอบจริง ไม่ถูกตัดที่ 5 วินาที
+วัด latency จริงของ Gemini API (gemini-3.1-flash-lite) สำหรับ prompt แบบ NLG รายวัน
+เรียก _gemini_client.models.generate_content(...) ตรงๆ โดยไม่ผ่าน timeout wrapper ของ _call_gemini()
+เพื่อวัดการกระจาย (รวม tail) ของเวลาตอบจริง แล้วเสนอค่า GEMINI_TIMEOUT_SECONDS ที่เหมาะสม
 """
 import importlib.util
 import os
@@ -20,9 +16,7 @@ import pandas as pd
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_PATH = os.path.join(_ROOT, "app.py")
 N_CALLS = 30
-# >= GEMINI_MIN_CALL_SPACING_S ใน app.py (4.5s) กัน 429 ปนผลวัด — สคริปต์นี้ยิงตรงไม่ผ่าน rate-limiter
-# ของ _call_gemini() เพื่อดู tail latency จริง แต่ก็ต้องไม่ยิงเร็วกว่า production path เองไม่งั้นชนโควตา
-# (ชนจริงตอน 2026-10-12 ตอนยังใช้ 1.5s: 16/24 สำเร็จ, 8/24 ชน 429 ตั้งแต่ครั้งที่ 17)
+# เว้นจังหวะระหว่างคำขอ กัน rate limit (429)
 SLEEP_BETWEEN_S = 4.5
 OUT_CSV_PATH = os.path.join(_ROOT, "models", f"gemini_latency_measurement_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv")
 
@@ -43,8 +37,7 @@ import shap_analysis_clean as sac
 
 test = sac._load_test_split()
 valid = test.dropna(subset=["pm25_t+1"])
-# สุ่มแถวจาก test จริงหลายแถว + สลับ daily_avg_pm25/status หลายระดับ ให้ prompt มีความยาว/เนื้อหา
-# ใกล้เคียงของจริงที่หลากหลาย ไม่ใช่ prompt เดียวซ้ำๆ (อาจไม่สะท้อน latency จริงของการใช้งานจริง)
+# สุ่มแถวจาก test + สลับ daily_avg_pm25/status หลายระดับ ให้ prompt หลากหลายใกล้เคียงของจริง
 rng = np.random.default_rng(42)
 sample_idx = rng.choice(len(valid), size=min(N_CALLS, len(valid)), replace=False)
 daily_avg_choices = [5.0, 15.0, 30.0, 45.0, 60.0]

@@ -1,9 +1,9 @@
 """
-Phase D ขั้นยืนยัน — แตะ test split ครั้งเดียวเพื่อยืนยันผลรวมของสิ่งที่ผ่านการเลือกบน calib (A1 hyperparameter + nb_trend_12h)
-เทียบ 3 variant (P50, 5 horizon ตัวแทน, LGB+XGB), วัด 4 มุม (รวม/ปกติ/ฤดูฝุ่น/>p90):
-  ref     = โมเดลปัจจุบัน (20 feature, default hyperparameter)
-  tuned   = 20 feature + hyperparameter จูนแล้ว (แยกผลของ A1)
-  tuned+nb= 21 feature (+nb_trend_12h) + hyperparameter จูนแล้ว (candidate สุดท้าย)
+ยืนยันบน test split (ครั้งเดียว) เทียบ 3 variant (P50, 5 horizon ตัวแทน, LGB+XGB)
+วัด MAE รวม/ปกติ/ฤดูฝุ่น/>p90:
+  ref      = โมเดลปัจจุบัน (20 feature, default hyperparameter)
+  tuned    = 20 feature + hyperparameter จูนแล้ว
+  tuned+nb = 21 feature (+nb_trend_12h) + hyperparameter จูนแล้ว
 """
 import importlib.util
 import os

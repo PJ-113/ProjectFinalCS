@@ -1,9 +1,6 @@
 """
 ทดสอบ auth routes (register/login/me/profile/change-password/logout) ใน app.py
-
-เขียนแถวทดสอบลง users จริงใน Postgres แต่ใช้อีเมลลงท้าย "@test-marker.invalid" เสมอ
-(ไม่มีทางชนกับผู้ใช้จริง) แล้วลบทิ้งเองทั้งก่อน/หลังรัน (idempotent, safe to re-run) ตาม
-pattern เดียวกับ test_dynamic_routing.py (marker-based, ไม่ใช่ temp DB แยก เพราะย้ายไป Postgres แล้ว)
+เขียนแถวทดสอบลง users จริงใน Postgres ด้วยอีเมลลงท้าย "@test-marker.invalid" แล้วลบทิ้งก่อน/หลังรัน
 """
 import importlib.util
 import sys

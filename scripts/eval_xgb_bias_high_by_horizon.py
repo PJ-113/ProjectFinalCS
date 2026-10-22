@@ -1,8 +1,6 @@
 """
-คำนวณ bias_high/mae_high ต่อ horizon ของ XGBoost ที่ deploy จริง (ยังไม่ผ่าน sample-weight retrain
-เหมือน LightGBM) บน test set เดิม — ไม่ retrain ใหม่ แค่ inference ซ้ำเพื่อวัด bias ตามธรรมชาติของโมเดล
-ปัจจุบัน ใช้ประกอบ EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL ใน app.py (threshold แจ้งเตือนมลพิษสูงแยกตามโมเดล
-แทนที่จะ calibrate จาก LightGBM แล้วใช้กับทุกโมเดล)
+คำนวณ bias_high/mae_high ต่อ horizon ของ XGBoost ที่ deploy จริง บน test set เดิม
+(inference ซ้ำ ไม่ retrain) สำหรับใช้ประกอบ EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL ใน app.py
 """
 import pickle
 import pandas as pd

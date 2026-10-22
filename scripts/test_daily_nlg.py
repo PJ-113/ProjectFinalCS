@@ -1,13 +1,8 @@
 """
 ทดสอบ NLG รายวัน (generate_daily_nlg_explanation, maybe_generate_daily_nlg, get_today_daily_nlg,
-get_thai_now) — เน้นเคสข้ามวัน UTC/เวลาไทยเป็นพิเศษ เพราะ 06:00 น. เวลาไทย = 23:00 UTC ของ
-"วันก่อนหน้า" ถ้าคำนวณ date_thai ผิดจะบันทึกวันที่ผิด
+get_thai_now) — เน้นเคสข้ามวัน UTC/เวลาไทย (06:00 น. ไทย = 23:00 UTC ของวันก่อนหน้า)
 
-app.py ย้ายไป PostgreSQL แล้ว (ไม่มี DB_PATH ให้ monkeypatch เป็น temp sqlite file อีกต่อไป —
-ดู CHANGELOG) เขียนแถวทดสอบลง daily_nlg_log จริงแต่ใช้ปี 2199 เสมอ (เกินขอบเขตปีจริงของโปรเจกต์
-ไปมาก แต่ยังอยู่ในช่วงที่ pandas.Timestamp รองรับ ต่างจาก sentinel ปี 2100/9999 ที่ใช้ใน
-test_dynamic_routing.py ตรงที่ test นี้ต้อง mock get_thai_now() ให้คืนค่าเป็น pd.Timestamp จริง
-ซึ่งมีขอบเขตปีสูงสุดราว 2262 เท่านั้น) แล้วลบทิ้งเองทั้งก่อน/หลังรัน กันชนกับข้อมูลจริงของปีปัจจุบัน
+เขียนแถวทดสอบลง daily_nlg_log จริงด้วย date_thai ปี 2199 แล้วลบทิ้งก่อน/หลังรัน
 """
 import importlib.util
 import os
@@ -40,7 +35,7 @@ def clear_test_rows(app):
 
 
 app = load_app()
-clear_test_rows(app)  # กันแถวทดสอบตกค้างจากรอบก่อนหน้า (idempotent, safe to re-run)
+clear_test_rows(app)
 
 _original_call_gemini = app._call_gemini
 _gemini_call_count = {"n": 0}
@@ -118,7 +113,7 @@ print("TEST 5: edge case — 22:59 UTC (ยังไม่ถึง 06:00 น. �
 print("*** พฤติกรรมเปลี่ยนจากเดิม ***: เดิมเงื่อนไขคือ hour == 6 พอดี ตอนนี้เปลี่ยนเป็น hour >= 6")
 print("(trigger ได้ตั้งแต่ 06:00 น. เป็นต้นไปจนกว่าจะมีแถวของวันนั้น ไม่ใช่แค่ชั่วโมง 6 เป๊ะ)")
 print("=" * 80)
-# 22:59 UTC 16 = 05:59 น. ไทย 17 -> hour=5 ยังไม่ถึง 6 ต้องไม่ trigger (พฤติกรรมเดิม ไม่เปลี่ยน)
+# 22:59 UTC 16 = 05:59 น. ไทย 17 -> hour=5 ยังไม่ถึง 6 ต้องไม่ trigger
 app.get_thai_now = lambda: pd.Timestamp(f"{_TEST_YEAR}-07-16T22:59:00", tz="UTC").tz_convert("Asia/Bangkok")
 _gemini_call_count["n"] = 0
 app.maybe_generate_daily_nlg(make_fake_forecast([15.0] * 24), fake_feature_row)
@@ -126,8 +121,7 @@ print(f"  22:59 UTC (05:59 น. ไทย, hour=5): เรียก Gemini {_gem
 assert _gemini_call_count["n"] == 0, "05:59 น. ไทย (hour=5) ยังไม่ถึง 06:00 น. ต้องไม่ trigger"
 assert app.get_daily_nlg_row(f"{_TEST_YEAR}-07-17") is None
 
-# 00:30 UTC 17 = 07:30 น. ไทย 17 -> hour=7, ก่อนหน้านี้ (hour==6 พอดี) จะไม่ trigger
-# แต่ตอนนี้ (hour>=6) ต้อง trigger เพราะยังไม่มีแถวของวันนั้นเลย — นี่คือพฤติกรรมที่ตั้งใจเปลี่ยน
+# 00:30 UTC 17 = 07:30 น. ไทย 17 -> hour=7, ยังไม่มีแถวของวันนั้น ต้อง trigger
 app.get_thai_now = lambda: pd.Timestamp(f"{_TEST_YEAR}-07-17T00:30:00", tz="UTC").tz_convert("Asia/Bangkok")
 _gemini_call_count["n"] = 0
 app.maybe_generate_daily_nlg(make_fake_forecast([15.0] * 24), fake_feature_row)

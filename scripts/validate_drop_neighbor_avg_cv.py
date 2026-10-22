@@ -1,9 +1,8 @@
 """
-ตรวจก่อนตัด pm25_neighbor_avg ออกจากชุด v3 (CHANGELOG 149): ablation บน test (CHANGELOG 148) บอกว่าตัดแล้ว MAE ไม่เปลี่ยน (-0.04%/-0.11%) แต่การตัดสินจาก test
-ไม่ใช่วิธีเลือก feature ที่ถูก จึงยืนยันด้วย rolling-origin CV เดียวกับ validate_features_timeblocked_cv.py (4 fold ครอบคลุมฤดูฝุ่น) ก่อนตัดจริง
-เทียบ: 21 feature (ชุดปัจจุบัน) vs 20 feature (ตัด pm25_neighbor_avg, เก็บ nb_trend_12h + fire) ; horizon [1,12,24], LGB+XGB, hyperparameter ชุดเดียวกัน
+Rolling-origin CV (4 fold ครอบคลุมฤดูฝุ่น) เทียบ: 21 feature (ชุดปัจจุบัน) vs 20 feature
+(ตัด pm25_neighbor_avg) ที่ horizon [1,12,24], LGB+XGB
 
-เกณฑ์ (ตั้งไว้ก่อนรัน — non-inferiority): "ตัดได้" ต่อเมื่อทั้ง LGB และ XGB
+เกณฑ์ non-inferiority: "ตัดได้" ต่อเมื่อทั้ง LGB และ XGB
   (ก) macro MAE ของ 20 ไม่แย่กว่า 21 เกิน +0.2%
   (ข) MAE เฉลี่ยของ fold ฤดูฝุ่น (A, C) ไม่แย่กว่าเกิน +0.5%
   (ค) MAE ที่ >p90 ของ fold ฤดูฝุ่นไม่แย่กว่าเกิน +1.0%

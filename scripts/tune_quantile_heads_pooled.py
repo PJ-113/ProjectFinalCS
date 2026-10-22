@@ -1,10 +1,7 @@
 """
-ทดลอง 2 ไอเดียค้างจาก entry 134/136 เพื่อแก้ coverage <90% (โดยเฉพาะ >p90/ฤดูฝุ่น) ของโมเดล _20260919_135655:
-  (1) sample weight เฉพาะหัว P95 (แถวที่ target>37.5 ถ่วง w=2/3/5) — P50 ไม่แตะ (entry 134 พบว่าถ่วง P50 แล้ว MAE รวมแย่ลง)
-  (2) hyperparameter แยกสำหรับหัว P05/P95 (โมเดลปัจจุบันใช้ค่าที่จูนจาก P50 ทั้งสามหัว) — random search แนว regularize มากขึ้น
-วิธีวัด (ไม่แตะ test): เทรนบน train, แบ่ง calib เป็น 2 ท่อนตามเวลาต่อจังหวัด: calibA ใช้คำนวณ q_hat (conformal, single q_hat),
-calibB วัด coverage/ความกว้างช่วง — วัด coverage รวม / >p90 / ฤดูฝุ่น (ก.พ.-เม.ย.) + ความกว้างช่วงเฉลี่ย (ต้องไม่กว้างขึ้นเกินจำเป็น)
-horizon [1,12,24]; base = ค่าปัจจุบัน (TUNED_PARAMS ของ train_multiprovince_models.py)
+ทดลองปรับหัว quantile P05/P95: (1) sample weight เฉพาะหัว P95 (w=2/3/5 สำหรับแถว target>37.5)
+(2) hyperparameter แยกสำหรับหัว P05/P95 (random search)
+วัด coverage รวม / >p90 / ฤดูฝุ่น (ก.พ.-เม.ย.) + ความกว้างช่วงเฉลี่ย ที่ horizon [1,12,24] เทียบ baseline
 """
 import importlib.util
 import os

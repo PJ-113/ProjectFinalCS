@@ -1,15 +1,6 @@
 """
-Task D (feedback อาจารย์ ข้อ 4 — experimental design): ตั้งสมมติฐานก่อนว่า feature กลุ่มไหน
-น่าจะมีผลต่อการพยากรณ์ PM2.5 แค่ไหน แล้วทดสอบทีละกลุ่มจริง (leave-one-group-out) แทนการโยน
-23 feature เข้าโมเดลพร้อมกันโดยไม่เคยแยกวัดผล
-
-P50-only (ไม่ quantile P05/P95 + conformal, เหมือน eval_zeroshot_multiprovince.py เพราะวัดแค่
-MAE/R²) เทรน/เทสต์บน train_df(65%)/test_df(20%) เดียวกับที่ใช้ backtest ฤดูฝุ่น (task A) และ
-เป็น split เดียวกับที่รายงาน MAE(P50) อย่างเป็นทางการ (reuse split_train_calib_test())
-
-ขอบเขต: วัดที่ horizon ตัวแทน 5 จุด (t+1, t+6, t+12, t+18, t+24 — ครอบคลุมช่วงใกล้/กลาง/ไกล)
-ไม่ใช่ครบ 24 horizon เพื่อความเร็ว (แพทเทิร์นความสำคัญของ feature กลุ่มต่างๆ ไม่ควรเปลี่ยนแรงมาก
-ระหว่าง horizon ติดกัน — ดูผลจริงถ้าแกว่งมากค่อยขยายเป็นครบ 24 ทีหลัง)
+Ablation study: ตัด feature ทีละกลุ่ม (leave-one-group-out) วัดผลต่อ MAE/R² (P50 only)
+ที่ horizon ตัวแทน 5 จุด (t+1, t+6, t+12, t+18, t+24)
 """
 import importlib.util
 import os
@@ -21,7 +12,7 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, r2_score
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_PATH = None  # ตั้งใน main() จาก train_mod.DATA_PATH (dataset ล่าสุด)
+DATA_PATH = None  # ตั้งใน main()
 MODEL_DIR = os.path.join(_ROOT, "models")
 
 N_ESTIMATORS = 300
@@ -39,7 +30,6 @@ FEATURE_GROUPS = {
     "fire_hotspot": ["fire_hotspot_count_100km_24h"],
 }
 
-# สมมติฐานก่อนทดสอบ (ต้องระบุก่อนเห็นผล ตามที่อาจารย์ขอ)
 HYPOTHESES = {
     "pm25_lag_rolling": "กลุ่มสำคัญที่สุด (autocorrelation ของมลพิษ) — ตัดออกควร MAE แย่ลงมากที่สุด",
     "weather": "ช่วยเสริมพอสมควร โดยเฉพาะ precipitation (scavenging effect)",

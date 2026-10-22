@@ -1,9 +1,6 @@
 """
-ทำ task A (backtest ฤดูฝุ่นสูง ก.พ.-เม.ย. เทียบช่วงปกติ) ซ้ำบน**โมเดลที่ retrain เต็มพร้อม
-fire_hotspot_count_100km_24h** (_20260919_203455, 20 feature, CHANGELOG 127) — ปิดวงจร
-validate (122-126) -> retrain เต็ม (127) -> re-verify (entry นี้) ตามธรรมเนียมโปรเจกต์
-(เทียบ spatial-lag 94->95->(103 ทำทีหลัง), k=1 108->110->111) — ตรรกะเดียวกับ
-analyze_burning_season_backtest_k1.py เป๊ะ เปลี่ยนแค่ MODEL_TAG
+Backtest: เทียบ MAE/coverage ของโมเดล LightGBM/XGBoost ระหว่างฤดูฝุ่นสูง (ก.พ.-เม.ย.) กับช่วงปกติ
+แยกตาม severity bin ของ actual PM2.5 และตาม horizon
 """
 import importlib.util
 import os

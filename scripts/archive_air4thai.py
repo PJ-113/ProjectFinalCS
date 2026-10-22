@@ -1,13 +1,7 @@
 """
-เก็บ archive ข้อมูล Air4Thai (station 46t) สะสมไว้ในไฟล์เดียว เพื่อไม่ให้เสียข้อมูลถาวรตอนที่
-retention ~2 เดือนของ getHistoryData.php เลื่อนผ่านไป (ยืนยัน hard limit นี้แล้วจากการทดสอบตรงๆ
-ก่อนหน้า) เป้าหมาย: สะสมให้ครอบคลุมฤดูหมอกควัน ธ.ค. 2026 - มี.ค. 2027 เพื่อ re-fit
-calibration (models/air4thai_openaq_calibration.pkl) ในช่วง PM2.5 สูง ซึ่งตอนนี้ calibration
-fit จากช่วง เม.ย.-ก.ค. 2026 ที่อากาศดีเท่านั้น ยังไม่เคยเห็นค่าสูงเลย
-
-ออกแบบให้ทนต่อการรันไม่สม่ำเสมอ (เช่น เครื่องปิดหลายวัน): ทุกครั้งที่รันจะดึงข้อมูลย้อนหลัง
-FETCH_DAYS_BACK วันเต็ม (ไม่ใช่แค่ตั้งแต่ครั้งก่อน) แล้ว merge + dedupe กับ archive เดิม จึงไม่
-พลาดข้อมูลตราบใดที่รันอย่างน้อย 1 ครั้งทุกๆ <60 วัน (เผื่อ margin จาก retention จริง ~2 เดือน)
+เก็บ archive ข้อมูล Air4Thai (station 46t) สะสมไว้ในไฟล์เดียวก่อนที่ retention ~2 เดือนของ
+getHistoryData.php จะเลื่อนผ่านไป ทุกครั้งที่รันดึงข้อมูลย้อนหลัง FETCH_DAYS_BACK วันเต็ม
+แล้ว merge + dedupe กับ archive เดิม
 """
 import sys
 from datetime import timedelta
@@ -20,11 +14,11 @@ sys.stdout.reconfigure(encoding="utf-8")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 STATION_ID_AIR4THAI = "46t"
-FETCH_DAYS_BACK = 58  # ต่ำกว่า retention จริง (~60 วัน) เผื่อ margin
+FETCH_DAYS_BACK = 58
 import os
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARCHIVE_PATH = os.path.join(_ROOT, r"data\air4thai_archive.csv")
-STALE_GAP_WARNING_DAYS = 55  # ถ้าห่างจากครั้งก่อนเกินนี้ แปลว่าอาจมีข้อมูลหลุดไปแล้วจริง
+STALE_GAP_WARNING_DAYS = 55
 
 
 def fetch_air4thai_history(days_back):

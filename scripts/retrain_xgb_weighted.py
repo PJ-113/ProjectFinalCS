@@ -1,18 +1,7 @@
 """
-Retrain XGBoost ด้วย sample weighting (แก้ bias ประเมินค่าต่ำในช่วงมลพิษสูง) — ใช้ recipe
-เดียวกับ retrain_weighted_v2.py ที่ใช้กับ LightGBM ไปแล้ว (ดู CHANGELOG (09)/(19)) ต่างจากสคริปต์
-นั้น 2 จุด:
-
-1. feature_cols/target_cols/station_id โหลดจาก pkl ของ XGBoost ที่ deploy อยู่ตอนนี้เอง
-   (models/xgb_pm25_multistep_20260712_191350.pkl) ไม่ใช่จาก pkl ของ LightGBM แบบที่
-   train_xgb_prophet_v2.py ทำ เพราะตอนนั้นเทรนพร้อมกันทั้ง 3 โมเดลเลยอยากให้ feature set ตรงกันเป๊ะ
-   แต่รอบนี้ retrain แค่ XGBoost เดี่ยวๆ ไม่มีข้อจำกัดนั้น — pkl ของ XGBoost เองคือ source of truth
-   ที่ตรงที่สุดอยู่แล้วว่าตอนนี้มันเทรนด้วย feature อะไร
-2. ตัวเลข baseline (unweighted) คำนวณสดในสคริปต์นี้เลย จากการรัน predict ของโมเดล deploy จริง
-   บน test set เดียวกับที่ใช้ evaluate โมเดล weighted ตัวใหม่ ไม่ได้ไปอ่านจาก CSV ประวัติแยกต่างหาก
-   แบบ retrain_weighted_v2.py (ที่อ่าน eval_high_pollution_by_horizon_v2.csv) เพราะไฟล์ผลลัพธ์ของ
-   สคริปต์นี้ (eval_xgb_weighted_vs_baseline_*.csv) มีเจตนาจะมาแทน xgb_bias_high_by_horizon_*.csv
-   (จาก eval_xgb_bias_high_by_horizon.py) ไปเลย ไม่อยากให้ยังพึ่งพาไฟล์ที่กำลังจะถูกแทนที่
+เทรน weighted XGBoost ด้วย sample weighting (แก้ bias ประเมินค่าต่ำในช่วงมลพิษสูง)
+feature_cols/target_cols/station_id โหลดจาก pkl ของ XGBoost ที่ deploy อยู่ตอนนี้
+baseline (unweighted) คำนวณสดจากโมเดล deploy จริง บน test set เดียวกับที่ใช้ evaluate โมเดลใหม่
 """
 import pickle
 import sys
@@ -32,10 +21,8 @@ DEPLOYED_XGB_PKL_PATH = os.path.join(_ROOT, r"models\xgb_pm25_multistep_20260712
 MODEL_DIR = os.path.join(_ROOT, r"models")
 HIGH_THRESHOLD = 37.5
 WEIGHT_GRID = [1.0, 3.0, 5.0, 10.0]
-# ทดลองรอบ 2: representative horizon เลือกจาก scripts/shap_divergence_by_horizon.py แทนการ copy
-# t+1/t+12/t+24 ของ LightGBM ตรงๆ — เลือก 3 horizon ที่ SHAP feature-importance ของ LightGBM กับ
-# XGBoost ต่างกันมากสุด (L1 distance ของสัดส่วน mean|SHAP| ต่อ feature) ผลคือ [1, 21, 24]
-# (พบว่าทั้งคู่ยึด pm25_lag_1 เป็น top feature ทุก horizon เหมือนกัน ต่างกันที่ secondary features)
+# horizon ตัวแทนที่ SHAP feature-importance ของ LightGBM กับ XGBoost ต่างกันมากสุด
+# (วัดจาก scripts/shap_divergence_by_horizon.py)
 REP_HORIZONS = [1, 21, 24]
 
 with open(DEPLOYED_XGB_PKL_PATH, "rb") as f:
@@ -52,7 +39,7 @@ split_idx = int(len(df_final) * 0.8)
 train = df_final.iloc[:split_idx]
 test = df_final.iloc[split_idx:]
 
-# nested 85/15 split ของ train เท่านั้น สำหรับหา weight — ไม่แตะ test set จริงเลย
+# nested 85/15 split ของ train สำหรับหา weight (ไม่แตะ test set จริง)
 tune_split_idx = int(len(train) * 0.85)
 train_tune = train.iloc[:tune_split_idx]
 valid_tune = train.iloc[tune_split_idx:]
@@ -97,8 +84,7 @@ for h in REP_HORIZONS:
 grid_df = pd.DataFrame(grid_results)
 print()
 
-# เลือก weight ต่อ representative horizon: |bias_high| น้อยสุด โดย MAE_all ต้องไม่แย่ลงเกิน 8%
-# เทียบกับ weight=1.0 (เกณฑ์เดียวกับตอน retrain LightGBM)
+# เลือก weight ต่อ horizon ตัวแทน: |bias_high| น้อยสุด โดย MAE_all ต้องไม่แย่ลงเกิน 8% เทียบ weight=1.0
 chosen_weights = {}
 for h in REP_HORIZONS:
     sub = grid_df[grid_df["horizon"] == h].reset_index(drop=True)
@@ -142,7 +128,7 @@ for h in range(1, 25):
     rmse_all = mean_squared_error(y_te, y_pred) ** 0.5
     r2_all = r2_score(y_te, y_pred)
 
-    # baseline: โมเดล unweighted ที่ deploy อยู่จริงตอนนี้ ประเมินบน test_valid ชุดเดียวกันเป๊ะ
+    # baseline: โมเดล unweighted ที่ deploy อยู่จริงตอนนี้ ประเมินบน test_valid ชุดเดียวกัน
     y_pred_base = deployed_models[h].predict(X_te)
     mae_all_b, mae_high_b, bias_high_b, _ = evaluate(y_te.values, y_pred_base)
 
@@ -170,7 +156,6 @@ print(f"\nMAE_all เฉลี่ย: baseline={comparison['MAE_all_baseline'].m
 print(f"MAE_high เฉลี่ย: baseline={comparison['MAE_high_baseline'].mean():.3f} -> weighted={comparison['MAE_high_weighted'].mean():.3f}")
 print(f"bias_high เฉลี่ย: baseline={comparison['bias_high_baseline'].mean():.3f} -> weighted={comparison['bias_high_weighted'].mean():.3f}")
 
-# บันทึกโมเดลใหม่
 timestamp = dt.now().strftime("%Y%m%d_%H%M%S")
 model_package = {
     "models": weighted_models,

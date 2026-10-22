@@ -9,10 +9,8 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, r2_score
 
 # การทดลอง: เทรนด้วยข้อมูลทั้ง 20 จังหวัด (ไม่กัน 3 จังหวัด zero-shot ออก) เทียบกับโมเดล production
-# ที่เทรนแค่ 17 จังหวัด (`train_multiprovince_models.py`, deploy อยู่ = _20260919_203455) — ก็อปมาจาก
-# ไฟล์นั้นเป๊ะแล้วเปลี่ยนแค่ตัวแปรเดียว (บรรทัดกรอง is_zero_shot) เพื่อแยกผลกระทบของ "มีข้อมูลจังหวัด
-# นั้นตอนเทรน" ออกจากปัจจัยอื่น (ไม่ retune hyperparameter ใหม่) — ไฟล์นี้เป็นสคริปต์ทดลองแยกต่างหาก
-# ไม่ใช่สคริปต์เทรน production ตัวจริง (ไฟล์เดิมยังคงพฤติกรรม 17+3 ไว้เป็นค่าเริ่มต้นเสมอ)
+# ที่เทรนแค่ 17 จังหวัด (train_multiprovince_models.py) เพื่อวัดผลกระทบของการมีข้อมูลจังหวัดนั้นตอนเทรน
+# ไม่ใช่สคริปต์เทรน production ตัวจริง
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(
     _ROOT, "data", "multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv"
@@ -39,8 +37,7 @@ assert len(FEATURE_COLS) == 20
 TARGET_COLS = [f"pm25_t+{h}" for h in range(1, 25)]
 
 # 3 จังหวัดที่ปกติเป็น zero-shot (production กันออกตอนเทรน) — ตอนนี้อยู่ในชุดเทรนแล้ว
-# เก็บ breakdown MAE/coverage แยกไว้เทียบกับ baseline zero-shot เดิม (CHANGELOG 149):
-# มหาสารคาม 2.65/2.63 MAE, 87.4%/87.8% cov | ร้อยเอ็ด 3.23/3.21, 83.4%/82.4% | นครพนม 4.68/4.71, 80.2%/78.0%
+# เก็บ breakdown MAE/coverage แยกไว้เทียบกับ baseline zero-shot เดิม
 BREAKDOWN_PROVINCES = ["nakhonphanom", "roiet", "mahasarakham"]
 
 

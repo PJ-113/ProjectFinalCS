@@ -1,12 +1,7 @@
 """
-แก้ปัญหา coverage ตกช่วงฝุ่นสูง (task A, CHANGELOG 89) ด้วย group-conditional (Mondrian) conformal
-calibration — แทนที่จะใช้ q_hat ค่าเดียวรวมทุกอย่างต่อ horizon (วิธีเดิมใน train_multiprovince_models.py),
-แบ่ง calibration split เป็น 2 กลุ่มตาม predicted P50 ("high" = top 10%, "normal" = ที่เหลือ)
-แล้วคำนวณ q_hat แยกต่อกลุ่ม — จัดกลุ่มด้วยค่าที่ทำนายไว้ล่วงหน้าเท่านั้น (ไม่ใช่ค่าจริง) เพื่อไม่ให้
-ผิดหลัก conformal prediction (grouping ต้องมาจากข้อมูลที่รู้ก่อนเห็นผลจริง)
-
-ใช้กับโมเดลใหม่ล่าสุด (_20260914_211416, 19 feature, spatial-lag+ตัด time_cyclical) ไม่ retrain
-quantile model ใหม่ แค่เปลี่ยนวิธีคำนวณ q_hat ตอน calibration — ยังไม่แก้ app.py ในรอบนี้
+Group-conditional (Mondrian) conformal calibration: แบ่ง calibration split เป็น 2 กลุ่มตาม
+predicted P50 ("high" = top 10%, "normal" = ที่เหลือ) แล้วคำนวณ q_hat แยกต่อกลุ่ม
+วัด coverage ต่อ horizon x severity bin เทียบ single q_hat กับ group-conditional q_hat
 """
 import importlib.util
 import os
@@ -18,7 +13,7 @@ import pandas as pd
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_DIR = os.path.join(_ROOT, "models")
 MODEL_TAG = "20260914_211416"
-HIGH_GROUP_PERCENTILE = 90  # top 10% ของ predicted P50 -> กลุ่ม "high" (ตรงจุดที่ task A พบปัญหา)
+HIGH_GROUP_PERCENTILE = 90  # top 10% ของ predicted P50 -> กลุ่ม "high"
 TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
 
@@ -108,7 +103,7 @@ def main():
             lo_single = lo_test - q_hat_single
             hi_single = hi_test + q_hat_single
 
-            # severity bin ของค่าจริง (เหมือน task A) เพื่อเทียบ >p90 โดยตรง
+            # severity bin ของค่าจริง เพื่อเทียบ >p90 โดยตรง
             bins = [-0.01, np.percentile(y_test, 50), np.percentile(y_test, 75),
                     np.percentile(y_test, 90), y_test.max() + 0.01]
             labels = ["<=p50", "p50-p75", "p75-p90", ">p90"]

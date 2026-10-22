@@ -1,14 +1,10 @@
 """
-ดึง PM2.5 "ดิบ" (ไม่ interpolate/mask) ของ 20 จังหวัดอีสานจาก OpenAQ แล้วเก็บเป็นไฟล์ — ใช้เป็นข้อมูลตั้งต้นของ
-การทดลอง Data Imputation (คอมเมนต์กรรมการข้อ 4): ต้องรู้ว่าชั่วโมงไหน "วัดได้จริง" (observed mask) เพื่อซ่อนค่าจริงมาเป็นเฉลย
-และวัดการกระจายความยาวช่องว่างจริง — dataset ใน data/multiprovince_*.csv เติมช่องว่าง <=48 ชม.ไปแล้ว แยกไม่ออก
+ดึง PM2.5 ดิบ (ไม่ interpolate/mask) ของ 20 จังหวัดอีสานจาก OpenAQ แล้วเก็บเป็นไฟล์ — ใช้เพื่อรู้ว่าชั่วโมงไหน
+"วัดได้จริง" (observed mask) และการกระจายความยาวช่องว่างจริง (dataset เทรนเติมช่องว่าง <=48 ชม.ไปแล้ว แยกไม่ออก)
 
-ใช้ fetch_pm25() เดิมของ build_raw_dataset_multiprovince.py (บวก openaq_timestamp_offset_hours ต่อสถานีจาก registry ให้ป้ายเวลา
-ถูกต้อง — CHANGELOG 144-145) ช่วงเวลาเดียวกับตอนสร้าง dataset เทรน (WINDOW_START..WINDOW_END)
-
+ใช้ fetch_pm25() ของ build_raw_dataset_multiprovince.py ช่วงเวลาเดียวกับตอนสร้าง dataset เทรน
 ผลลัพธ์: data/raw_pm25_isaan_<ts>.csv (province_en, datetime_utc, pm25 เฉพาะชั่วโมงที่มีค่าจริง) + log ต่อจังหวัด
-ตรวจ parity: ที่ชั่วโมงเดียวกัน ค่าดิบต้องตรงกับ pm25 ใน dataset เทรนล่าสุด (>=99%) ไม่งั้นหยุด (ป้ายเวลา/สถานีอาจผิด)
-ห้าม print/log OPENAQ_KEY หรือ URL ที่ฝังคีย์ (กฎของโปรเจกต์)
+ตรวจ parity: ค่าดิบต้องตรงกับ pm25 ใน dataset เทรนล่าสุด (>=99%) ไม่งั้นหยุด
 """
 import importlib.util
 import json

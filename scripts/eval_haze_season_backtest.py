@@ -1,12 +1,7 @@
 """
-Backtest ผลของโมเดลที่ deploy อยู่จริง (app.py's MODEL_PATH/XGB_MODEL_PATH) เฉพาะช่วงฤดูฝุ่น
-(ธ.ค.-มี.ค.) ที่ตกอยู่ใน chronological test split เดิม (80/20 เหมือนตอนเทรน) — ข้อมูลส่วนนี้เป็น
-out-of-sample จริง (โมเดลไม่เคยเห็นตอนเทรน) ไม่ใช่แค่กรองจากข้อมูลทั้งหมดเฉยๆ ซึ่งจะเสี่ยง data
-leakage ถ้าดันไปรวมแถวที่อยู่ใน train split ด้วย
-
-อ่านอย่างเดียว ไม่แตะ predictions.db/Postgres, ไม่ต้องเปิด Flask/frontend เลย (ดู CLAUDE.md
-เรื่อง "Data source mismatch" — เทียบใน sqlite/CSV scale เดียวกับตอนเทรน ไม่ต้องผ่าน
-calibrate_pm25() เพราะไม่ได้ดึงจาก Air4Thai)
+Backtest โมเดลที่ deploy อยู่จริง (LightGBM/XGBoost) เฉพาะช่วงฤดูฝุ่น (ธ.ค.-มี.ค.) ที่ตกอยู่ใน
+chronological test split เดิม (80/20 เหมือนตอนเทรน) วัด MAE/bias ต่อ horizon ทั้งโดยรวมและเฉพาะ
+ช่วงค่าสูง (> HIGH_THRESHOLD)
 """
 import pickle
 import sys
@@ -37,7 +32,7 @@ assert feature_cols == xgb_package["feature_cols"], "feature_cols mismatch betwe
 lgb_models = lgb_package["models"]
 xgb_models = xgb_package["models"]
 
-# chronological 80/20 split เดียวกับตอนเทรน (ดู CLAUDE.md: train/test split convention)
+# chronological 80/20 split เดียวกับตอนเทรน
 split_idx = int(len(df) * 0.8)
 test = df.iloc[split_idx:]
 haze_test = test[test["datetime_utc"].dt.month.isin(HAZE_MONTHS)]
@@ -52,7 +47,7 @@ def eval_model(models, X_all, label):
     rows = []
     for h in range(1, 25):
         target = f"pm25_t+{h}"
-        sub = haze_test.dropna(subset=[target])  # แต่ละ horizon มีจำนวนแถวใช้ได้ไม่เท่ากันใกล้ gap (ดู CLAUDE.md)
+        sub = haze_test.dropna(subset=[target])
         if len(sub) == 0:
             rows.append({"horizon": h, "n": 0, "MAE": float("nan"), "bias": float("nan"),
                          "n_high": 0, "MAE_high": float("nan"), "bias_high": float("nan")})

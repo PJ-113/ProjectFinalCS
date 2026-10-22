@@ -1,12 +1,7 @@
 """
 หา horizon ที่ SHAP feature importance ของ LightGBM กับ XGBoost (โมเดล deploy จริงทั้งคู่) ต่างกัน
-ชัดเจนที่สุด — ใช้เลือก representative horizon สำหรับ weight grid search ของ
-scripts/retrain_xgb_weighted.py แทนการ copy t+1/t+12/t+24 จาก LightGBM ตรงๆ (จุดที่ LightGBM
-เลือกไว้สะท้อนพฤติกรรมของ LightGBM เอง ไม่ได้การันตีว่าเป็นจุดที่มีความหมายสำหรับ XGBoost ด้วย)
-
-วิธีวัดความต่าง: คำนวณ mean|SHAP| ต่อ feature ต่อโมเดลต่อ horizon (ทั้ง 24 horizon ไม่ใช่แค่ 3
-จุดแบบ shap_analysis.py) normalize เป็นสัดส่วนรวม 1 ต่อ horizon แล้ววัด L1 distance ระหว่าง
-สัดส่วนของสองโมเดล — ยิ่งสูงยิ่งแปลว่าสองโมเดลให้น้ำหนัก feature ต่างกันมากที่ horizon นั้น
+ชัดเจนที่สุด — คำนวณ mean|SHAP| ต่อ feature ต่อโมเดลต่อ horizon (ครบ 24 horizon) normalize เป็น
+สัดส่วนรวม 1 ต่อ horizon แล้ววัด L1 distance ระหว่างสัดส่วนของสองโมเดล
 """
 import pickle
 import sys
@@ -21,7 +16,7 @@ import os
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(_ROOT, r"data\khonkaen_pm25_features_raw_20260712_191249.csv")
 LGB_MODEL_PATH = os.path.join(_ROOT, r"models\lgb_pm25_multistep_weighted_20260712_191056.pkl")
-XGB_MODEL_PATH = os.path.join(_ROOT, r"models\xgb_pm25_multistep_20260712_191350.pkl")  # baseline unweighted ตัวปัจจุบัน
+XGB_MODEL_PATH = os.path.join(_ROOT, r"models\xgb_pm25_multistep_20260712_191350.pkl")
 
 with open(LGB_MODEL_PATH, "rb") as f:
     lgb_pkg = pickle.load(f)
@@ -49,12 +44,11 @@ for h in range(1, 25):
     lgb_importance = np.abs(lgb_shap).mean(axis=0)
     xgb_importance = np.abs(xgb_shap).mean(axis=0)
 
-    # normalize เป็นสัดส่วนรวม 1 ต่อโมเดลต่อ horizon กันมาตราส่วนรวม (magnitude) ของ SHAP ต่างกัน
-    # ระหว่างโมเดลมากวน — สนใจแค่ "สัดส่วนน้ำหนักที่ให้แต่ละ feature" ว่าต่างกันแค่ไหน
+    # normalize เป็นสัดส่วนรวม 1 ต่อโมเดลต่อ horizon
     lgb_prop = lgb_importance / lgb_importance.sum()
     xgb_prop = xgb_importance / xgb_importance.sum()
 
-    l1_dist = float(np.abs(lgb_prop - xgb_prop).sum())  # ช่วง 0 (เหมือนกันเป๊ะ) ถึง 2 (ไม่ overlap เลย)
+    l1_dist = float(np.abs(lgb_prop - xgb_prop).sum())  # 0=เหมือนกันเป๊ะ, 2=ไม่ overlap เลย
 
     lgb_top_feat = FEATURE_COLS[int(np.argmax(lgb_prop))]
     xgb_top_feat = FEATURE_COLS[int(np.argmax(xgb_prop))]

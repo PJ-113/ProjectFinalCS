@@ -1,10 +1,7 @@
 """
-Phase A1 — hyperparameter tuning ของ pooled LGB/XGB (P50 only) ที่ไม่เคยทำมาก่อน
-(fit_lgb_quantile/fit_xgb_quantile ใน train_multiprovince_models.py ใช้แค่ default + n_estimators=300 + bagging 0.8)
-
-วิธี: random search N_CONFIGS config/โมเดล เทรนบน train แล้ว "วัดบน calib split" (ไม่แตะ test เพื่อกัน overfit
-จากการลองหลาย config) ที่ SEARCH_HORIZONS แล้วนำ top-K ไปยืนยันที่ CONFIRM_HORIZONS
-วัด 4 มุมเหมือน tune_fire_hotspot_hyperparams.py (รวม / ฤดูฝุ่น ก.พ.-เม.ย. / >p90) — baseline = config ปัจจุบันของ train_multiprovince_models.py
+Hyperparameter tuning ของ pooled LGB/XGB (P50 only): random search N_CONFIGS config/โมเดล
+วัดบน calib split ที่ SEARCH_HORIZONS แล้วนำ top-K ไปยืนยันที่ CONFIRM_HORIZONS
+วัด MAE รวม / ฤดูฝุ่น (ก.พ.-เม.ย.) / >p90 เทียบ baseline
 """
 import importlib.util
 import os

@@ -1,24 +1,10 @@
 """
-ประเมิน post-hoc bias correction สำหรับ XGBoost (ทางเลือกแทน sample weighting ที่ลองแล้วล้มเหลว
-เพราะ structural mismatch — ดู CHANGELOG (45)-(46)) แนวคิด: ไม่แตะโมเดล/ไม่ retrain เลย แค่ชดเชย
-raw prediction บวก bias_high ต่อ horizon (จาก models/xgb_bias_high_by_horizon_20260712_191350.csv
-ที่คำนวณไว้แล้ว จาก test set เดิม ใช้ประกอบ EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL อยู่แล้วใน app.py)
-เฉพาะตอน raw prediction เข้าใกล้โซนมลพิษสูง เพื่อไม่ให้กระทบค่าปกติ
+ประเมิน post-hoc bias correction สำหรับ XGBoost: ไม่แตะโมเดล/ไม่ retrain เลย แค่ชดเชย raw prediction
+บวก bias_high ต่อ horizon (จาก xgb_bias_high_by_horizon_20260712_191350.csv) ด้วย ramp เชิงเส้น
+ระหว่าง (LOW, HIGH) เฉพาะตอน raw prediction เข้าใกล้โซนมลพิษสูง (แทน hard cutoff ที่มี discontinuity)
 
-Ramp แทน hard cutoff เดียว: threshold เดียว (raw_pred > X ชดเชยเต็ม, <= X ไม่ชดเชยเลย) จะเกิดรอยต่อ
-(discontinuity) ที่ prediction ใกล้ X กระโดดขึ้นทันที ramp เชิงเส้นระหว่าง LOW-HIGH ทำให้การชดเชยค่อยๆ
-เพิ่มขึ้น ไม่มีรอยต่อ
-
-**สำคัญ — วิธี evaluate ให้ไม่ leak**: bias_high_by_horizon คำนวณจาก test set เดิม (20% ท้ายสุด) ถ้า
-เอา correction ที่ได้จากตัวเลขนั้นไปทดสอบกับ test set เดิมซ้ำ จะเป็นการทดสอบแบบวนกลับ (circular) —
-บวกเลขที่คำนวณจากชุดข้อมูลนั้นเองกลับเข้าไปในชุดข้อมูลเดิม แล้วบอกว่า "bias หายเกือบหมด" ซึ่งเป็นจริง
-โดยไม่มีความหมายอะไร (เคยพลาดแบบนี้ในรอบแรกของสคริปต์นี้ ก่อนแก้) วิธีที่ถูกต้อง: เลือกโซน ramp
-(LOW,HIGH) และ variant (มี/ไม่มี context gate) จาก valid_tune (15% ท้ายของ train — คนละช่วงเวลากับ
-test, ไม่เคยถูกใช้คำนวณ bias_high_by_horizon เลย) เท่านั้น ไม่แตะ test ระหว่างเลือก config แล้วค่อยเอา
-config ที่เลือกแล้วไปรันยืนยันครั้งเดียวบน test จริง — ตัวเลขบน valid_tune คือตัวเลข generalization ที่
-เชื่อถือได้ ส่วนตัวเลขบน test เป็นแค่ข้อมูลอ้างอิงเทียบกับ xgb_bias_high_by_horizon.csv เดิม (มี
-component ที่ circular บางส่วนเพราะ bias constant มาจาก test เอง) — รายงานทั้งคู่แยกกันชัดเจน ห้ามเอา
-ตัวเลขฝั่ง test มาอ้างเป็นผล generalization
+เลือกโซน ramp และ context-gate variant จาก valid_tune (15% ท้ายของ train) เท่านั้น เพื่อไม่ leak
+กับ test ที่ bias_high_by_horizon คำนวณมาจาก แล้วรันยืนยันครั้งเดียวบน test ด้วย config ที่เลือกไว้
 """
 import pickle
 
@@ -31,9 +17,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(_ROOT, r"data\khonkaen_pm25_features_raw_20260712_191249.csv")
 XGB_PATH = os.path.join(_ROOT, r"models\xgb_pm25_multistep_20260712_191350.pkl")
 BIAS_CSV_PATH = os.path.join(_ROOT, r"models\xgb_bias_high_by_horizon_20260712_191350.csv")
-HIGH_THRESHOLD = 37.5  # นิยาม "มลพิษสูงจริง" ไว้ตัดสิน bias_high/MAE_high (เหมือน eval_xgb_bias_high_by_horizon.py)
-MAE_DEGRADE_GUARD = 0.08  # เกณฑ์เดียวกับตอนเลือก weight ของ sample weighting (retrain_weighted_v2.py)
-CONTEXT_THRESHOLD = 25.0  # pm25_lag_1 ต่ำกว่านี้ถือว่า "ยังไม่มีหลักฐานจริง" ว่าเข้าสู่ช่วงมลพิษสูง
+HIGH_THRESHOLD = 37.5  # นิยาม "มลพิษสูง" ไว้ตัดสิน bias_high/MAE_high
+MAE_DEGRADE_GUARD = 0.08  # MAE_all ยอมแย่ลงได้ไม่เกินเท่านี้
+CONTEXT_THRESHOLD = 25.0  # pm25_lag_1 ต่ำกว่านี้ถือว่ายังไม่เข้าสู่ช่วงมลพิษสูง
 
 ZONE_CANDIDATES = [(20.0, 30.0), (25.0, 35.0), (28.0, 37.5), (22.0, 33.0)]
 
@@ -51,7 +37,7 @@ train = df.iloc[:split_idx]
 test = df.iloc[split_idx:]
 
 tune_split_idx = int(len(train) * 0.85)
-valid_tune = train.iloc[tune_split_idx:]  # 15% ท้ายของ train — คนละช่วงเวลากับ test, ใช้เลือก config เท่านั้น
+valid_tune = train.iloc[tune_split_idx:]  # 15% ท้ายของ train, ใช้เลือก config เท่านั้น
 
 
 def ramp_weight(raw_pred, low, high):

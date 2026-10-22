@@ -1,9 +1,6 @@
 """
-Validate elevation_m เป็น model feature — คนละคำถามกับ analyze_elevation_vs_pm25_pattern.py
-(ที่พบว่าไม่สัมพันธ์กับความผันผวน) เพราะแม้ elevation จะไม่อธิบาย volatility ตรงๆ มันก็ยังอาจ
-ช่วยโมเดลแยกแยะ "ลักษณะพื้นที่" ของแต่ละจังหวัดได้ (คล้าย lat/lon) — วิธีเดียวกับ
-validate_spatial_lag_feature.py (P50-only, representative horizons) เทียบ baseline (19
-feature ปัจจุบัน) vs +elevation_m (20 feature)
+Validate elevation_m เป็น model feature: เทียบ baseline (19 feature ปัจจุบัน) vs
++elevation_m (20 feature) ด้วย MAE/R² (P50-only) ที่ horizon ตัวแทน 5 จุด
 """
 import importlib.util
 import json

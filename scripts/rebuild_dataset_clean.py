@@ -1,13 +1,10 @@
 """
-P1 ของแผนแก้ป้ายเวลา OpenAQ (CHANGELOG 144-145): สร้าง dataset เทรนใหม่ทั้งสายด้วยป้ายเวลาที่ถูกต้อง โดยเรียกสคริปต์เดิม 4 ตัวต่อกัน
-ส่ง path ผลลัพธ์ของขั้นก่อนหน้าเป็น input ของขั้นถัดไป (สคริปต์เดิมมี path ฮาร์ดโค้ด จึง override ค่าคงที่ระดับ module ก่อนเรียก main()):
-  1) build_raw_dataset_multiprovince.py        ดึง OpenAQ (บวก offset ต่อสถานีจาก registry) + Open-Meteo, lag/rolling/target, neighbor k=3
+สร้าง training dataset ใหม่ทั้งสาย: เรียกสคริปต์ 4 ตัวต่อกัน ส่ง path ผลลัพธ์ของขั้นก่อนหน้าเป็น input ของขั้นถัดไป
+  1) build_raw_dataset_multiprovince.py        ดึง OpenAQ + Open-Meteo, lag/rolling/target, neighbor k=3
   2) augment_raw_dataset_with_spatial_lag_k1.py pm25_neighbor_avg ด้วย k=1
-  3) compute_fire_hotspot_feature.py            fire_hotspot_count_100km_24h (ไฟล์ FIRMS เดิม)
+  3) compute_fire_hotspot_feature.py            fire_hotspot_count_100km_24h
   4) compute_neighbor_trend_feature.py          nb_trend_12h
-ผลลัพธ์เป็นไฟล์ timestamp ใหม่ทั้งหมด (ไม่ทับของเดิม) + manifest data/rebuild_clean_manifest_{ts}.json ที่บอก path แต่ละขั้น (สคริปต์ P2/P3 อ่านจากตรงนี้)
-ไฟล์ขั้นที่ 1 มีคอลัมน์ pm25_neighbor_avg แบบ k=3 ไว้เทียบ k ใน P3
-ใช้เวลาประมาณ 10-20 นาที (ดึง API ~600 request) ไม่พิมพ์คีย์
+เขียนไฟล์ผลลัพธ์ใหม่ทุกขั้น (ไม่ทับของเดิม) + manifest data/rebuild_clean_manifest_{ts}.json
 """
 import importlib.util
 import json

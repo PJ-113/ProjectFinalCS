@@ -1,21 +1,12 @@
 """
-เทียบ ensemble (รวมพยากรณ์ LGB+XGB) กับ Dynamic Routing (เลือกโมเดลเดียวต่อ horizon/province
-ตาม rolling R2 แบบ epsilon-greedy, select_model() ใน app.py) — ใช้โมเดล v3 ข้อมูลสะอาด ล่าสุด
-(_20260919_203455, 20 feature, CHANGELOG 127) แทนโมเดล k=1 ก่อนหน้า (_20260917_001147,
-19 feature) ที่ eval_ensemble_vs_routing_k1.py ใช้ — ไม่ต้อง retrain ใหม่ เพราะเป็นแค่ eval-time
-ensembling บน prediction ที่ทำได้จาก pkg ที่เทรนไว้แล้ว ตรรกะเดียวกันเป๊ะ เปลี่ยนแค่ module
-ที่ import (analyze_burning_season_backtest_clean แทน _k1) ทำให้ MODEL_TAG เปลี่ยนตามไปด้วย
+เทียบ ensemble (รวมพยากรณ์ LGB+XGB แบบ simple-average/weighted-average) กับ Dynamic Routing
+(เลือกโมเดลเดียวต่อ horizon/province ตาม rolling R2 แบบ epsilon-greedy, select_model() ใน app.py)
+วัด MAE (P50) ต่อ variant และ coverage ของช่วง P05/P95 หลัง conformal calibration
+บนโมเดล v3 ข้อมูลสะอาด (_20260919_203455) แยกช่วงฤดูฝุ่น (ก.พ.-เม.ย.) กับช่วงปกติ
 
-**ข้อจำกัดสำคัญที่ต้องอ่านคู่กับผลลัพธ์เสมอ**: Dynamic Routing ตัวจริงเป็นระบบ online ที่ปรับ
-ตาม rolling window (24 คู่ predict/actual ล่าสุด) ของผลจริงแยกตาม province และมี cold-start
-exploration (EXPLORATION_RATE) — ไม่มีข้อมูลนี้ในการ evaluate แบบออฟไลน์บน train/calib/test split
-เดียว ตัวเลข "oracle_routing" ในผลลัพธ์นี้คือ**เพดานบนแบบ perfect-hindsight**เท่านั้น (รู้ผลลัพธ์
-จริงล่วงหน้าแล้วเลือกโมเดลที่ดีที่สุดต่อ horizon) — ไม่ใช่สิ่งที่ Dynamic Routing ตัวจริงทำได้ เพราะ
-ตัวจริงต้องเรียนรู้จากอดีตที่ lag และมี noise จาก exploration ผลจริงของ Dynamic Routing แบบ live
-น่าจะอยู่ระหว่าง lgb_only/xgb_only กับ oracle_routing ไม่ใช่เท่ากับ oracle_routing
-
-ค่าถ่วงน้ำหนัก (weighted_avg) เลือกจาก calibration split (ไม่ใช่ test) เพื่อไม่ tune ทับ test set
-เดียวกับที่ใช้รายงานผล — สอดคล้องกับหลักการ train/calib/test แยกกันเข้มงวดที่ใช้มาทั้งโปรเจกต์
+หมายเหตุ: "oracle_routing" คือเพดานบนแบบ perfect-hindsight (รู้ผลจริงล่วงหน้าแล้วเลือกโมเดลที่ดี
+ที่สุดต่อ horizon) ไม่ใช่ผลที่ Dynamic Routing ตัวจริง (online, มี lag และ exploration) ทำได้จริง
+น้ำหนัก weighted_avg เลือกจาก calibration split ไม่ใช่ test set
 """
 import importlib.util
 import os
@@ -38,9 +29,7 @@ def load_module(name, filename):
 
 
 def predict_raw_quantiles(pkg, df_split, feature_cols):
-    """เหมือน analyze_burning_season_backtest_clean.predict_all_horizons() แต่คืนค่า
-    P05/P50/P95 แบบ**ดิบ ก่อน conformal adjustment** (เพื่อให้เอาไปรวม/ถ่วงน้ำหนักแล้ว
-    conformal-calibrate ใหม่ทีเดียวตอน ensemble ไม่ใช่ adjust ซ้ำสองรอบ)"""
+    """คืนค่า P05/P50/P95 แบบดิบ (ก่อน conformal adjustment) ต่อ horizon"""
     out_rows = []
     for h in range(1, 25):
         target_col = f"pm25_t+{h}"
@@ -106,14 +95,14 @@ def main():
     mae_per_horizon["simple_avg"] = mae_by_horizon(
         (test_m["p50_lgb"] + test_m["p50_xgb"]) / 2, test_m["actual"], test_m["horizon"])
 
-    # oracle_routing: ต่อ horizon เลือกโมเดลที่ MAE ต่ำกว่าจริงบน test (เพดานบนแบบ hindsight เท่านั้น)
+    # oracle_routing: ต่อ horizon เลือกโมเดลที่ MAE ต่ำกว่าจริงบน test
     oracle_choice = {}
     for h in mae_per_horizon["lgb_only"].index:
         oracle_choice[h] = "lgb" if mae_per_horizon["lgb_only"][h] <= mae_per_horizon["xgb_only"][h] else "xgb"
     oracle_pred = np.where(test_m["horizon"].map(oracle_choice) == "lgb", test_m["p50_lgb"], test_m["p50_xgb"])
     mae_per_horizon["oracle_routing"] = mae_by_horizon(pd.Series(oracle_pred), test_m["actual"], test_m["horizon"])
 
-    # weighted_avg: หาน้ำหนัก w ที่ดีที่สุดจาก CALIB (ไม่ใช่ test) แล้วค่อยประเมินผลจริงบน test
+    # weighted_avg: หาน้ำหนัก w ที่ดีที่สุดจาก calib แล้วประเมินผลจริงบน test
     calib_mae_by_w = {}
     for w in WEIGHT_GRID:
         pred_w = w * calib_m["p50_lgb"] + (1 - w) * calib_m["p50_xgb"]

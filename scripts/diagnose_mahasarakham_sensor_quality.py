@@ -3,24 +3,20 @@ import os
 import numpy as np
 import pandas as pd
 
-# CHANGELOG (75) ตั้งข้อสงสัยไว้ว่าสถานีมหาสารคามที่ registry เลือก (Pramuan Suk Health Park,
-# coverage_overlap_days 544.9/913 — ต่ำกว่าจังหวัดอื่นที่เกือบเต็ม) อาจเป็นเซนเซอร์ AirGradient
-# ราคาถูก ไม่ใช่ reference-grade ตามที่ผู้ใช้เคยรู้มา — ไม่เคยถูกตรวจสอบซ้ำเลย สคริปต์นี้เช็คคร่าวๆ
-# ก่อนใช้ข้อมูลจังหวัดนี้เทรนจริงจังในการทดลอง all-20-province
+# ตรวจสอบคุณภาพข้อมูล PM2.5 ของสถานีมหาสารคาม เทียบกับจังหวัดข้างเคียง (ขอนแก่น, ร้อยเอ็ด)
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(
     _ROOT, "data", "multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv"
 )
 
 TARGET = "mahasarakham"
-NEIGHBORS = ["khonkaen", "roiet"]  # ติดกับมหาสารคามโดยตรง ใช้เทียบลักษณะข้อมูล
+NEIGHBORS = ["khonkaen", "roiet"]
 
 
 def summarize(series):
     s = series.dropna()
     diffs = s.diff().dropna()
     repeat_ratio = float((diffs == 0).mean()) if len(diffs) else float("nan")
-    # เซนเซอร์ราคาถูกมักปัดเศษหยาบกว่า (เช่น จำนวนเต็ม) ดูว่าเศษทศนิยมกระจายแบบไหน
     frac_is_integer = float(np.isclose(s % 1, 0).mean())
     return {
         "n": len(s),

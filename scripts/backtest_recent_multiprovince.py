@@ -1,11 +1,7 @@
 """
-Phase 3 (แผนขยาย 17+3 จังหวัด): backtest โมเดลที่เทรนไว้ (train_multiprovince_models.py)
-กับข้อมูลจริงหลังช่วงเทรน (2026-07-02 เป็นต้นไป) — คนละก้อนกับ test split เดิม (20% ท้าย
-ของแต่ละจังหวัด ซึ่งยังอยู่ในช่วงเวลาที่เทรน 2024-01-01..2026-07-02) จุดสำคัญของสคริปต์นี้คือ
-ประเมินกับข้อมูลที่ "เกิดขึ้นหลังโมเดลเทรนเสร็จ" ซึ่งรั่วเข้าไปตอนเทรนไม่ได้เลยในทางเทคนิค — เป็น
-การยืนยันผลที่แข็งแรงกว่า historical test split ธรรมดา
-
-ไม่แตะ app.py/DB — ดึงข้อมูลสดจาก OpenAQ/Open-Meteo เอง เก็บผลลง CSV แยกต่างหาก
+Backtest โมเดลที่เทรนไว้ (train_multiprovince_models.py) กับข้อมูลจริงหลังช่วงเทรน
+(2026-07-02 เป็นต้นไป) ดึงข้อมูลสดจาก OpenAQ/Open-Meteo เอง (ไม่แตะ app.py/DB)
+วัด MAE/R2/coverage ต่อ horizon ต่อจังหวัด เก็บผลลง CSV แยกต่างหาก
 """
 import functools
 import json
@@ -29,9 +25,9 @@ XGB_MODEL_PATH = os.path.join(MODEL_DIR, "xgb_pm25_multiprovince_residual_bagged
 CONFORMAL_LGB_PATH = os.path.join(MODEL_DIR, "conformal_calibration_lgb_20260913_014901.csv")
 CONFORMAL_XGB_PATH = os.path.join(MODEL_DIR, "conformal_calibration_xgb_20260913_014901.csv")
 
-TRAIN_WINDOW_END = pd.Timestamp("2026-07-02 00:00:00", tz="UTC")  # ท้ายช่วงเทรนเดิม (build_raw_dataset_multiprovince.py)
+TRAIN_WINDOW_END = pd.Timestamp("2026-07-02 00:00:00", tz="UTC")  # ท้ายช่วงเทรนเดิม
 FETCH_START = TRAIN_WINDOW_END - pd.Timedelta(days=5)  # buffer ให้ lag_24/roll_24 มีข้อมูลย้อนหลังพอ
-FETCH_END = pd.Timestamp.utcnow().floor("h") - pd.Timedelta(hours=1)  # เผื่อข้อมูลล่าสุดยังไม่ finalize (utcnow() มี tzinfo อยู่แล้ว)
+FETCH_END = pd.Timestamp.utcnow().floor("h") - pd.Timedelta(hours=1)  # เผื่อข้อมูลล่าสุดยังไม่ finalize
 GAP_CUTOFF_HOURS = 48
 REQUEST_SLEEP_S = 0.4
 TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
@@ -118,8 +114,7 @@ def fetch_weather(lat, lon):
 
 
 def build_station_features(province, pm25_raw, weather):
-    """เหมือน build_one_station ใน build_raw_dataset_multiprovince.py แบบย่อ (ช่วงสั้นกว่ามาก
-    ไม่ต้องมี is_zero_shot/province columns เพราะจะเติมทีหลัง) คงสูตร lag/rolling/gap เดิมเป๊ะ"""
+    """เหมือน build_one_station ใน build_raw_dataset_multiprovince.py แบบย่อ"""
     full_grid = pd.date_range(FETCH_START, FETCH_END, freq="h", tz="UTC")
     grid = pd.DataFrame({"datetime_utc": full_grid})
     grid = grid.merge(pm25_raw[["datetime_utc", "pm25"]], on="datetime_utc", how="left")
@@ -179,8 +174,7 @@ def build_station_features(province, pm25_raw, weather):
     grid["is_zero_shot"] = province["is_zero_shot"]
 
     grid = grid.drop(columns=["pm25"]).rename(columns={"pm25_filled": "pm25"})
-    # เอาเฉพาะช่วงหลังจากช่วงเทรนเดิม (ของจริงที่โมเดลไม่เคยเห็นตอนเทรน) — buffer ก่อนหน้านั้นใช้
-    # แค่คำนวณ lag/rolling เท่านั้น ไม่เอาไปประเมิน
+    # เอาเฉพาะช่วงหลังจากช่วงเทรนเดิม — buffer ก่อนหน้านั้นใช้แค่คำนวณ lag/rolling
     grid = grid[grid["datetime_utc"] >= TRAIN_WINDOW_END].reset_index(drop=True)
     grid = grid.dropna(subset=PM25_FEATURE_COLS).reset_index(drop=True)
     return grid

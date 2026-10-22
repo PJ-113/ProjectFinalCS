@@ -1,14 +1,7 @@
 """
-Validate feature ใหม่ "fire_hotspot_count_100km_24h" (จำนวนจุดความร้อนดาวเทียมในรัศมี 100km
-ย้อนหลัง 24 ชม., จาก scripts/compute_fire_hotspot_feature.py, entry 123-124) ก่อนตัดสินใจลงทุน
-sync feature formula 4 จุด + retrain เต็มระบบ — วิธีเดียวกับ validate_spatial_lag_feature.py
-(CHANGELOG 94) และ validate_elevation_feature.py เป๊ะ (baseline 19 feature vs +1 feature ใหม่,
-P50-only, 5 horizon ตัวแทน)
-
-ต่างจาก elevation/amenity ตรงที่ feature นี้ตั้งใจแก้จุดอ่อนเฉพาะ (>p90 coverage, ฤดูฝุ่น) ที่ยังไม่มี
-feature ไหนช่วยได้เลยทั้งวัน (entry 111-121) — เลยวัดผลเพิ่มอีกชั้น แยกตาม is_burning_season และ
-severity bin ของ actual ไม่ใช่แค่ MAE เฉลี่ยรวม เพราะผลรวมอาจกลบ improvement ที่กระจุกอยู่เฉพาะ
-ช่วงที่สำคัญที่สุดได้
+Validate feature fire_hotspot_count_100km_24h (จำนวนจุดความร้อนดาวเทียมในรัศมี 100km ย้อนหลัง 24 ชม.):
+เทียบ baseline (19 feature) vs +fire_hotspot_count_100km_24h (20 feature) ด้วย MAE/R² (P50-only)
+ที่ 5 horizon ตัวแทน แยกตามรวม/ปกติ/ฤดูฝุ่น/severity bin (>p90)
 """
 import glob
 import importlib.util

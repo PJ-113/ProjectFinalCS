@@ -1,14 +1,7 @@
 """
-ทดสอบความสามารถในการเตือนภัยล่วงหน้า (Proactive Alert Capability) — objective 5 ของ proposal
-
-ใช้ผล backtest วันต่อวันที่มีอยู่แล้ว (models/dayahead_backtest_daily_20260920_234307.csv, จาก
-scripts/backtest_dayahead_dust_episodes.py) ไม่ดึงข้อมูลใหม่/ไม่ retrain คำนวณ Recall/Precision/F1
-เทียบ 3 วิธีเตือน (ค่าพยากรณ์ตรงๆ, persistence, ค่าเฉลี่ยวันก่อนหน้า) ที่ 2 เกณฑ์ (37.5 µg/m³ มาตรฐาน
-คพ. ปัจจุบัน = หลัก, 50 µg/m³ = เกณฑ์เดียวกับ ESAN-Air เพื่อเทียบตรงๆ เท่านั้น) รูปแบบตารางอิงตามที่
-ESAN-Air รายงาน (Recall/Precision/F1) แต่แยกครบ 17 จังหวัด แทนที่จะแค่ 4 จังหวัด
-
-ตัวเลข pooled ที่ threshold=37.5, method=pred_day ต้องตรงกับที่เคยยืนยันในเอกสารอาจารย์แล้ว
-(recall ~93% LightGBM เทียบ persistence ~90%) ใช้เป็น sanity check ก่อนเชื่อผลแยกจังหวัด
+ทดสอบความสามารถในการเตือนภัยล่วงหน้า (Proactive Alert Capability): คำนวณ Recall/Precision/F1
+จากผล backtest วันต่อวัน เทียบ 3 วิธีเตือน (ค่าพยากรณ์ตรงๆ, persistence, ค่าเฉลี่ยวันก่อนหน้า)
+ที่ 2 เกณฑ์ (37.5 และ 50 µg/m³) ทั้งแบบ pooled และแยกรายจังหวัด (17 จังหวัด)
 """
 import os
 
@@ -22,8 +15,8 @@ TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 THRESHOLDS = [37.5, 50.0]
 METHODS = {"pred_day": "ค่าพยากรณ์", "pm25_now": "persistence", "yday_mean": "ค่าเฉลี่ยวันก่อนหน้า"}
 MODELS = ["lgb", "xgb"]
-RECALL_ACCEPT = 0.80  # เกณฑ์ตัดสินตั้งไว้ก่อนดูผล (อิงช่วงของ ESAN-Air 70-81%)
-RECALL_FLAG = 0.70  # ต่ำกว่านี้ต้องรายงานแยกพร้อมสมมติฐาน
+RECALL_ACCEPT = 0.80  # เกณฑ์ยอมรับ recall
+RECALL_FLAG = 0.70  # ต่ำกว่านี้ต้องรายงานแยก
 
 
 def compute_confusion(df, pred_col, threshold):
@@ -58,7 +51,7 @@ def main():
             for col, label in METHODS.items():
                 r = compute_confusion(sub_m, col, threshold)
                 pooled_rows.append({"model": model, "threshold": threshold, "method": label, **r})
-            # แถวเสริม: ขอบบนช่วงความเชื่อมั่น (ไม่รวมในตารางหลัก แค่ไว้พูดเรื่อง trade-off)
+            # แถวเสริม: ขอบบนช่วงความเชื่อมั่น
             r_hi = compute_confusion(sub_m, "hi_day", threshold)
             pooled_rows.append({"model": model, "threshold": threshold, "method": "ขอบบนช่วงความเชื่อมั่น (P95)", **r_hi})
     pooled = pd.DataFrame(pooled_rows)

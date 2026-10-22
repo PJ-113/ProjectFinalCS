@@ -1,12 +1,7 @@
 """
-ต่อจาก entry 125 (validate radius=100km/window=24h แล้วได้ผลก้ำกึ่งแต่มีสัญญาณชัดเจนที่ severity
-สูงสุด) — ทดสอบ hyperparameter อื่นก่อนตัดสินใจสุดท้าย (radius/window ที่ใช้ตอนนี้เป็นแค่ค่าเดา
-เริ่มต้น ไม่เคยเทียบกับค่าอื่นเลย) วิธีเดียวกับ tune_spatial_lag_k.py (CHANGELOG 108) ที่กวาด
-grid แล้ว evaluate แบบเดียวกันทุกจุด
-
-RADIUS_GRID x WINDOW_GRID = 3x2 = 6 config เทียบกับ baseline (ไม่มี fire hotspot) — วัด MAE ทั้ง
-4 มุมเหมือน entry 125 (รวม/ปกติ/ฤดูฝุ่น/>p90) ไม่ใช่แค่ MAE รวม เพราะรู้แล้วจาก entry 125 ว่าผล
-กระจุกเฉพาะ severity สูง
+กวาด grid radius x window ของ fire hotspot feature (fire_hotspot_count_{radius}km_{window}h)
+เทียบกับ baseline (ไม่มี fire hotspot) ด้วย LightGBM/XGBoost
+วัด MAE รวม/ช่วงฤดูฝุ่น/>p90 ที่ 5 horizon ตัวแทน (t+1,6,12,18,24)
 """
 import glob
 import importlib.util

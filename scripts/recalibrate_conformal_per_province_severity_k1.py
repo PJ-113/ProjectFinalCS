@@ -1,18 +1,9 @@
 """
-ต่อยอดจาก entry 115 (group-conditional/Mondrian calibration แบบ severity-only บนโมเดล k=1 —
-ดีขึ้นแต่ยังไม่ถึงเป้า 90% ที่ >p90) — CHANGELOG (76) เคยตั้งข้อสังเกตไว้ว่า q_hat รวมทุกจังหวัด
-เป็นค่าเดียวทำให้ coverage เบี่ยงต่อจังหวัดด้วย (คนละมิติกับ severity) แต่ไม่เคยลองรวม 2 มิตินี้
-เข้าด้วยกัน งานนี้ลอง **Mondrian calibration แบบ (province, severity) ร่วมกัน**: จัดกลุ่มด้วย
-predicted P50 **เทียบกับ percentile ของจังหวัดตัวเองเท่านั้น** (ไม่ใช่ percentile รวมทุกจังหวัด)
-เพราะระดับฝุ่นพื้นฐานต่างกันมากระหว่างจังหวัด (เขตเมืองสูงกว่า, entry 105) การใช้ percentile รวม
-จะทำให้บางจังหวัดแทบไม่มีแถวเข้ากลุ่ม "high" เลย
-
-fallback chain เมื่อกลุ่ม (province, severity) มีข้อมูล calib น้อยเกินไป (<MIN_GROUP_SIZE):
-(province, severity) -> province เดี่ยว (รวมทุก severity) -> single q_hat เดิมทั้งระบบ
-
-เทียบ 3 วิธีในตารางเดียว: single_qhat (baseline เดิม), flat_3grp (severity อย่างเดียว, ดีที่สุด
-จาก entry 115), province_severity (ใหม่ในงานนี้) — ไม่มีการ retrain โมเดลใดๆ ใช้ pkg
-`_20260917_001147` ที่เทรนไว้แล้วอย่างเดียว
+Mondrian calibration แบบ (province, severity) ร่วมกัน: จัดกลุ่มด้วย predicted P50 เทียบกับ
+percentile ของจังหวัดตัวเองเท่านั้น (ไม่ใช่ percentile รวมทุกจังหวัด)
+fallback chain เมื่อกลุ่ม (province, severity) มีข้อมูล calib น้อยเกินไป: (province, severity) ->
+province เดี่ยว -> single q_hat
+เทียบ coverage ของ 3 วิธี: single_qhat, flat_3grp (severity อย่างเดียว), province_severity
 """
 import importlib.util
 import os
@@ -25,7 +16,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_DIR = os.path.join(_ROOT, "models")
 MODEL_TAG = "20260917_001147"
 TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-THRESHOLDS_PCTL = [85, 95]  # 3 กลุ่ม: rest / p85-p95 / >p95 — config ที่ดีที่สุดจาก entry 115
+THRESHOLDS_PCTL = [85, 95]  # 3 กลุ่ม: rest / p85-p95 / >p95
 MIN_GROUP_SIZE = 20
 
 
@@ -67,7 +58,7 @@ def quantile_qhat(scores, n):
 
 
 def compute_flat_group_qhat(p50_calib, lo_calib, hi_calib, y_calib, thresholds_pctl):
-    """severity-only, รวมทุกจังหวัด (วิธีเดิมจาก entry 115)"""
+    """severity-only, รวมทุกจังหวัด"""
     thresholds_val = [np.percentile(p50_calib, p) for p in thresholds_pctl]
     group_calib = assign_group(p50_calib, thresholds_val)
     q_hats = {}
@@ -80,7 +71,7 @@ def compute_flat_group_qhat(p50_calib, lo_calib, hi_calib, y_calib, thresholds_p
 
 
 def compute_province_severity_qhat(provinces_calib, p50_calib, lo_calib, hi_calib, y_calib, thresholds_pctl):
-    """percentile + q_hat แยกต่อจังหวัด (ใหม่ในงานนี้)"""
+    """percentile + q_hat แยกต่อจังหวัด"""
     thresholds_by_province, qhat_by_province_group, pooled_qhat_by_province = {}, {}, {}
     for province in np.unique(provinces_calib):
         mask_p = provinces_calib == province
@@ -108,7 +99,7 @@ def apply_province_severity(provinces_test, p50_test, thresholds_by_province, qh
         mask_p = provinces_test == province
         thresholds_val = thresholds_by_province.get(province)
         if thresholds_val is None:
-            continue  # ไม่ควรเกิดจริง (17 จังหวัดเดียวกันทั้ง calib/test)
+            continue
         group_p = assign_group(p50_test[mask_p], thresholds_val)
         pooled_fallback = pooled_qhat_by_province.get(province)
         idx_p = np.where(mask_p)[0]

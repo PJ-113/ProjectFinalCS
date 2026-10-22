@@ -1,15 +1,7 @@
 """
-วิเคราะห์ว่า LightGBM (weighted model, ที่ deploy อยู่จริง) พลาดหนักตอน PM2.5
-เปลี่ยนแปลงฉับพลันหรือไม่ โดยใช้ backtest จาก test set เดิม (ไม่ต้องรอ live data)
-
-สำคัญ: พบว่า test set (แถวสุดท้าย 20% ตามเวลา) มี shock event น้อยมาก (|change|>3 มีแค่ 2
-จุด, >5 มีแค่ 1 จุด จาก 7582 แถว) ขณะที่ train set มีเยอะกว่ามาก (106/108 ของทั้งหมดที่
-threshold>3) การเปรียบเทียบ MAE แบบ shock-vs-normal ที่ขอมาจึงทำบน test set อย่างเดียว
-ไม่ได้อย่างมีนัยสำคัญทางสถิติ — สคริปต์นี้เลยแบ่งเป็น 2 ส่วน: (1) test set จริง (n น้อย,
-รายงานตรงๆ ว่าน้อยแค่ไหน) (2) train set แบบ supplementary (กำกับชัดว่าเป็น in-sample,
-ไม่ใช่ held-out validation, มีแนวโน้ม underestimate ความคลาดเคลื่อนจริงเพราะโมเดลเคยเห็น
-ข้อมูลนี้ตอนเทรนแล้ว) ส่วน precipitation/Scavenging Effect ใช้ full dataset ได้เพราะเป็น
-คำถามเกี่ยวกับข้อมูลสภาพอากาศ ไม่ใช่ performance ของโมเดล จึงไม่มีปัญหาเรื่อง train/test leakage
+วัด MAE ของ LightGBM (weighted, deployed) ตอน PM2.5 เปลี่ยนแปลงฉับพลัน (shock event) เทียบ
+ตอนปกติ แยกทิศทาง (ร่วง/พุ่ง) บน test set (held-out) และ train set (supplementary) และวัด
+ความสัมพันธ์ระหว่าง precipitation กับจุดร่วงฮวบ (scavenging effect) บน full dataset
 """
 import pickle
 
@@ -21,7 +13,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(_ROOT, r"data\khonkaen_pm25_features_final.csv")
 MODEL_PATH = os.path.join(_ROOT, r"models\lgb_pm25_multistep_weighted_20260709_004955.pkl")
 HORIZONS = [1, 2, 3, 4]
-THRESHOLD = 3  # ปรับลงจาก 10/7 ที่ขอมา เพราะ test set ไม่มีจุดเข้าเกณฑ์เลยแม้ที่ 7
+THRESHOLD = 3  # |pm25_change_1h| ที่ถือว่าเป็น shock event
 
 df = pd.read_csv(DATA_PATH)
 df["datetime_utc"] = pd.to_datetime(df["datetime_utc"])

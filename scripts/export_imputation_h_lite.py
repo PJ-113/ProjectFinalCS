@@ -1,11 +1,10 @@
 """
-ส่งออกค่าสัมประสิทธิ์ของวิธีเติมข้อมูล H-lite (Ridge-lite + จุดสลับ + ตาราง q(k,h) ของช่วงความเชื่อมั่นเมื่อ input ถูกเติมค่า) เป็น JSON เล็กๆ
-ให้ app.py อ่านตอนเริ่ม (IMPUTATION_CONFIG_PATH) — ไม่ต้องพึ่ง sklearn/pickle ตอนใช้งานจริง
+ส่งออกค่าสัมประสิทธิ์ของวิธีเติมข้อมูล H-lite (Ridge-lite + จุดสลับ + ตาราง q(k,h) ของช่วงความเชื่อมั่น) เป็น JSON เล็ก
+ให้ app.py อ่านตอนเริ่ม (IMPUTATION_CONFIG_PATH)
 
-อ่าน: models/imputation_tuned_params_*.json (จูนบน calib โดย experiment_imputation_accuracy.py) และ
-      models/imputation_interval_qhat_*.json (recalibration โดย experiment_imputation_interval_recalibration.py, method = H-lite)
-fit Ridge-lite ซ้ำด้วย seed/จำนวนแถว/พารามิเตอร์ชุดเดียวกับตอนทดลอง (ผลต้องเหมือนกันเป๊ะ — ตรวจด้วยการเทียบค่าที่เติมกับ impute_trailing "HL")
-เขียน: models/imputation_h_lite_<ts>.json  (ไฟล์เล็ก เก็บใน git ได้; ห้ามมีคีย์/ความลับ)
+อ่าน models/imputation_tuned_params_*.json และ models/imputation_interval_qhat_*.json แล้ว fit Ridge-lite ซ้ำ
+ตรวจว่าสูตร JSON ให้ผลตรงกับ impute_trailing("HL") ของสคริปต์ทดลอง
+เขียน: models/imputation_h_lite_<ts>.json
 รัน: python scripts/export_imputation_h_lite.py
 """
 import glob

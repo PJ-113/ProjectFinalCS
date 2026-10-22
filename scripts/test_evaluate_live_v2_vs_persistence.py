@@ -1,6 +1,6 @@
 """
-ทดสอบตรรกะของ evaluate_live_v2_vs_persistence.evaluate() ด้วยข้อมูลสังเคราะห์ (ไม่ต่อ DB) — ค่าที่คำนวณด้วยมือได้:
-รัน: python scripts/test_evaluate_live_v2_vs_persistence.py
+ทดสอบตรรกะของ evaluate_live_v2_vs_persistence.evaluate() ด้วยข้อมูลสังเคราะห์ (ไม่ต่อ DB)
+ที่คำนวณค่า MAE/coverage/verdict ที่คาดหวังไว้ด้วยมือ
 """
 import importlib.util
 import os

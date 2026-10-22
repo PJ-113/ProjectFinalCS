@@ -1,7 +1,6 @@
 """
-TASK 1: เทียบข้อมูล PM2.5 ดิบจาก OpenAQ (sensor 1304249, location 7747 = สถานีเดียวกับที่
-ใช้เทรนโมเดล) กับข้อมูลที่ผ่าน interpolation แล้วใน data/khonkaen_pm25_features_final.csv
-ในช่วงเวลาเดียวกับ test set (2025-05-16 ถึง 2026-07-01) เพื่อแยกสมมติฐาน:
+เทียบข้อมูล PM2.5 ดิบจาก OpenAQ (sensor 1304249) กับข้อมูลที่ผ่าน interpolation แล้วใน
+data/khonkaen_pm25_features_final.csv ช่วงเวลาเดียวกับ test set เพื่อแยกสมมติฐาน:
   (A) อากาศนิ่งจริงช่วงนั้น (raw ก็นิ่งพอๆ กับ clean)
   (B) interpolation ลบความผันผวนออกไป (raw ผันผวนกว่า clean มาก)
 """

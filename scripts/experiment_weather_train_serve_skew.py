@@ -1,21 +1,11 @@
 """
-วัดขนาดช่องว่างจริงระหว่างข้อมูลอุตุนิยมวิทยาที่ใช้ฝึกสอนโมเดล (Open-Meteo Archive API —
-reanalysis, สร้างหลังเกิดเหตุการณ์จริง) กับข้อมูลที่ระบบใช้งานจริงได้ (Open-Meteo Forecast API —
-nowcast จากโมเดลพยากรณ์อากาศ มีความคลาดเคลื่อนในตัวเอง) — พบจากการตรวจ CLAUDE review (Perplexity)
-ว่า build_raw_dataset_multiprovince.py ใช้ archive-api ส่วน app.py ใช้ api.open-meteo.com/v1/forecast
-คนละ endpoint กัน ไม่เคยวัดผลกระทบมาก่อนในโปรเจกต์นี้
+วัดช่องว่างระหว่างข้อมูลอุตุนิยมวิทยาที่ใช้ฝึกสอนโมเดล (Open-Meteo Archive API) กับข้อมูลที่ระบบใช้งานจริง
+(Open-Meteo Forecast API) โดยใช้ Historical Forecast API เป็นตัวแทนของ Forecast API ย้อนหลัง
 
-ข้อจำกัดของวิธีวัด: ดึง "current weather สด" ย้อนหลังจริงไม่ได้ (Forecast API ให้แค่ค่าปัจจุบัน ณ
-ตอนเรียก ไม่มี endpoint ย้อนอดีต) จึงใช้ **Historical Forecast API**
-(historical-forecast-api.open-meteo.com) แทน ตามที่ Open-Meteo แนะนำเองสำหรับ backtesting ระบบที่
-ใช้ Forecast API จริง — เก็บค่าที่โมเดลพยากรณ์อากาศของ Open-Meteo เคยทำนายไว้จริงในอดีต (ไม่ใช่ reanalysis)
-ใกล้เคียงกับคุณภาพข้อมูลที่ระบบสดได้รับมากกว่า Archive API
-
-วิธีทำ: สุ่ม 3 ช่วงเวลา ~10 วัน กระจายทั่วปี (คลุมทั้งฤดูฝุ่น/ฝน/ปกติ) x 17 จังหวัดที่ใช้ฝึกโมเดล
-ดึงทั้ง 2 แหล่งในช่วงเดียวกัน เทียบ MAE/correlation ต่อตัวแปร (temp, humidity, wind_speed,
-precipitation, pressure, wind_direction) แล้ววัดผลกระทบจริงต่อการพยากรณ์: แทนค่าอุตุนิยมวิทยาใน
-feature row ของ test set ด้วยค่าจาก historical-forecast แทน archive แล้วเทียบ MAE การพยากรณ์ PM2.5
-ของโมเดล v3 ที่ deploy จริง (ไม่ retrain) ว่าต่างจาก MAE บน feature archive (ของเดิมที่ใช้ประเมินในบทที่ 4) แค่ไหน
+สุ่ม 3 ช่วงเวลา ~10 วัน กระจายทั่วปี x 17 จังหวัดที่ใช้ฝึกโมเดล ดึงทั้ง 2 แหล่งในช่วงเดียวกัน
+เทียบ MAE/correlation ต่อตัวแปร (temp, humidity, wind_speed, precipitation, pressure, wind_direction)
+แล้ววัดผลกระทบต่อการพยากรณ์: แทนค่าอุตุนิยมวิทยาใน feature row ของ test set ด้วยค่าจาก historical-forecast
+แทน archive แล้วเทียบ MAE การพยากรณ์ PM2.5 ของโมเดล v3 ที่ deploy จริง (ไม่ retrain)
 
 รัน: python scripts/experiment_weather_train_serve_skew.py
 """

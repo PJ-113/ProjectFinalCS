@@ -1,9 +1,6 @@
 """
-ต่อจาก validate_feature_refinements.py: nb_trend_3h เป็น candidate เดียวที่ดีขึ้นชัดเจนทั้ง 2 โมเดล (MAE -2.2%/-2.5%)
-ขณะที่ fire refinement (FRP/upwind), nb_upwind_avg, nb_max, dry_hours ไม่ช่วย และ blh ช่วย MAE รวมเล็กน้อยแต่แย่ลงในฤดูฝุ่น/>p90
-สคริปต์นี้ (1) ทดสอบ trend หลายหน้าต่าง (1h/6h/12h) หาหน้าต่างที่ดีที่สุด
-(2) ทดสอบ combo กับ precip_sum_72h (ตัวที่ดีขึ้นรองลงมาทั้ง 2 โมเดล)
-บน calib split เท่านั้น, hyperparameter จูนแล้ว (lgb cfg06/xgb cfg02), 3 horizon [1,12,24] + ยืนยันตัวที่ดีที่สุดที่ 5 horizon
+ทดสอบ nb_trend หลายหน้าต่าง (1h/3h/6h/12h) และ combo กับ precip_sum_72h บน calib split เท่านั้น
+วัด MAE/MAE ฤดูฝุ่น/MAE >p90 เทียบ baseline ที่ horizon [1,12,24]
 """
 import glob
 import importlib.util

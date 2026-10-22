@@ -1,10 +1,6 @@
 """
-Validate amenity_density_3km เป็น model feature — คนละคำถามกับ analyze_amenity_density_vs_
-pm25_pattern.py (ที่พบว่าสัมพันธ์กับระดับฝุ่นเฉลี่ยแต่ไม่ใช่ความผันผวน) เพราะแม้จะสัมพันธ์กับ
-pm25_mean ก็ยังต้องดูว่าช่วยโมเดล predict แม่นขึ้นจริงไหม (โมเดลอาจเรียนรู้ผลนี้ผ่าน lat/lon
-หรือ pm25_lag อยู่แล้วก็ได้) — วิธีเดียวกับ validate_elevation_feature.py/validate_spatial_
-lag_feature.py (P50-only, representative horizons) เทียบ baseline (19 feature ปัจจุบัน) vs
-+amenity_density_3km (20 feature)
+Validate amenity_density_3km เป็น model feature: เทียบ baseline (19 feature ปัจจุบัน) vs
++amenity_density_3km (20 feature) ด้วย MAE/R² (P50-only) ที่ horizon ตัวแทน 5 จุด
 """
 import importlib.util
 import json

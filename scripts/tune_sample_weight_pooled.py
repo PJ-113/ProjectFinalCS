@@ -1,10 +1,6 @@
 """
-Phase A2 — sample weighting ให้แถวฝุ่นสูงบนโมเดล pooled (ต่อจาก A1: ใช้ hyperparameter ที่ดีที่สุดจาก
-tune_model_hyperparams_pooled.py เป็นฐาน — lgb cfg06, xgb cfg02) โมเดลเก่า (ขอนแก่น) เคยได้ผลจาก weighting
-(retrain_weighted.py) แต่ pooled ไม่เคยลอง; เป้าคือจุดอ่อน >p90
-weight ตัดสินจากค่าจริงของ target (pm25_t+h) > HIGH_THRESHOLD (37.5) — binary w in {1,2,3,5} และ continuous 1+y/37.5
-Selection บน calib split เท่านั้น (ไม่แตะ test) รายงาน MAE 4 มุม + bias (pred-actual) ที่ <=p50 และ >p90
-เพราะ weight ทำให้ P50 เอนขึ้นได้
+Sample weighting สำหรับแถวฝุ่นสูง (pm25_t+h > HIGH_THRESHOLD): binary w in {1,2,3,5} และ continuous 1+y/37.5
+วัด MAE รวม/ฤดูฝุ่น/>p90 บน calib split + bias (pred-actual) ที่ <=p50 และ >p90
 """
 import os
 

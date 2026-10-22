@@ -1,8 +1,7 @@
 """
-วิเคราะห์ว่าฝนตก (precipitation) สัมพันธ์กับความคลาดเคลื่อนของโมเดล (abs_error) จริงไหม —
-ดึง prediction_log ทั้งหมด (ที่มี actual_pm25 แล้ว) join กับ precipitation รายชั่วโมงจาก
-Open-Meteo (forecast endpoint + past_days, ครอบคลุมช่วงเวลาที่ prediction_log มีข้อมูล)
-ต่อจังหวัด แล้วดู correlation + เทียบ mean abs_error ระหว่างช่วงฝนตก/ไม่ตก
+วัดความสัมพันธ์ระหว่างฝนตก (precipitation จาก Open-Meteo) กับความคลาดเคลื่อนของโมเดล
+(abs_error จาก prediction_log) ต่อจังหวัด ด้วย correlation และเทียบ mean abs_error
+ระหว่างช่วงฝนตก/ไม่ตก
 """
 import os
 import sys

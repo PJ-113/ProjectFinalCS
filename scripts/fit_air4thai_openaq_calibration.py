@@ -1,15 +1,6 @@
 """
 Fit a linear calibration mapping Air4Thai's live pm25 readings onto the OpenAQ scale
-that all 3 models are trained on.
-
-Root cause (confirmed earlier this investigation): app.py's fetch_recent_pm25() pulls
-LIVE inference data from Air4Thai (station 46t), but every model is trained on OpenAQ
-(location 7747 / sensor 1304249) data. Same physical station (identical coordinates),
-but the two sources disagree substantially (correlation ~0.54, mean abs diff ~3-5 ug/m3),
-which explains why live MAE is much worse than backtest MAE.
-
-Fix: calibrate Air4Thai readings onto the OpenAQ scale at inference time, so the model
-sees inputs that resemble what it was trained on.
+that the models are trained on: openaq_equiv = a * air4thai + b.
 """
 import pickle
 import sys
@@ -29,8 +20,7 @@ STATION_ID_AIR4THAI = "46t"
 OPENAQ_CACHE_PATH = "scripts/_openaq_raw_5y_cache.csv"
 OUT_PATH = "models/air4thai_openaq_calibration.pkl"
 
-# Air4Thai's getHistoryData.php has a hard ~2-month retention limit (confirmed via direct
-# testing earlier this session). Fetch the longest window it will actually serve.
+# Air4Thai's getHistoryData.php has a hard ~2-month retention limit.
 FETCH_DAYS_BACK = 75
 
 

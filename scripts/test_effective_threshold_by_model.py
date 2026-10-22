@@ -1,6 +1,6 @@
 """
 ทดสอบ EFFECTIVE_THRESHOLD_BY_HORIZON_BY_MODEL — threshold แจ้งเตือนมลพิษสูงต้องแยกตามโมเดล
-เพราะแต่ละโมเดลมี bias_high ไม่เท่ากัน (ก่อนแก้ทุกโมเดลใช้ threshold เดียวที่ calibrate จาก LightGBM เท่านั้น)
+เพราะแต่ละโมเดลมี bias_high ไม่เท่ากัน
 """
 import importlib.util
 

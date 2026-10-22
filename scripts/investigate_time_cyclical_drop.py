@@ -1,19 +1,12 @@
 """
-ตรวจสอบ*สาเหตุ*ที่การตัด time_cyclical (hour/month/dayofweek cyclical features) ออกช่วยให้ MAE
-ดีขึ้น (ยืนยันซ้ำแล้ว 2 รอบ: CHANGELOG 90, 96) — ที่ผ่านมามีแค่*สมมติฐาน*ว่า "ซ้ำซ้อนกับ
-pm25_lag/rolling ซึ่งมี autocorrelation แฝง diurnal/seasonal pattern อยู่แล้วในตัว" แต่ไม่เคย
-ตรวจสอบจริง งานนี้ทำ 2 ขั้น:
+ตรวจสอบสาเหตุที่การตัด time_cyclical (hour/month/dayofweek cyclical features) ออกช่วยให้ MAE ดีขึ้น
 
 ขั้น A (ไม่ retrain): correlation matrix ระหว่าง time_cyclical (hour_sin/cos, month_sin/cos,
-dayofweek) กับกลุ่ม pm25_lag_rolling (9 ตัว) — คอลัมน์เหล่านี้ยังอยู่ในไฟล์ raw dataset ปัจจุบัน
-(ไม่ได้ถูกลบออกจากไฟล์ แค่ไม่ได้อยู่ใน FEATURE_COLS ที่ใช้เทรนจริงแล้ว) ไม่ต้องคำนวณใหม่
+dayofweek) กับกลุ่ม pm25_lag_rolling (9 ตัว)
 
-ขั้น B (retrain เบา ๆ): add-one-back-in ablation — ตรงข้ามกับ ablation_individual_features.py
-(leave-one-out) ทดสอบใส่ time_cyclical กลับเข้าไปทีละกลุ่มย่อยเชิงแนวคิด (hour cyclical pair,
-month cyclical pair, dayofweek เดี่ยว) บน baseline 19-feature ปัจจุบัน เพื่อหาว่าตัวไหนเป็น
-ตัวการจริง ๆ แทนที่จะมองเป็นก้อนเดียวแบบ ablation_feature_groups.py (CHANGELOG 90) ซึ่งเป็น
-ปัญหา aggregation เดียวกับที่ entry 107 แก้ให้กลุ่ม pm25_lag_rolling ไปแล้ว (ตัดทั้งกลุ่ม +9%
-แต่ตัดทีละตัว +0.34% เฉลี่ย — ผลกลุ่มไม่เท่ากับผลรวมของทีละตัวเสมอไป)
+ขั้น B (retrain เบา ๆ): add-one-back-in ablation — ใส่ time_cyclical กลับเข้าไปทีละกลุ่มย่อย
+(hour cyclical pair, month cyclical pair, dayofweek เดี่ยว) บน baseline feature ปัจจุบัน
+วัด MAE/R2 ที่ horizon ตัวแทน 5 จุด
 """
 import importlib.util
 import os

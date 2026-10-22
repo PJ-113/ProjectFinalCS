@@ -1,20 +1,13 @@
 """
-Track B/C ของการทดลอง Data Imputation (คอมเมนต์กรรมการข้อ 4) — "เติมค่าแล้วพยากรณ์ต่อ ดีกว่าใช้ Persistence/โมเดลสำรองไหม"
+วัดว่าเติมค่าแล้วพยากรณ์ต่อ ดีกว่าใช้ Persistence/โมเดลสำรองหรือไม่
 
-สถานการณ์ S-B (สถานีเงียบ k ชม. ก่อนเวลาพยากรณ์ t; k = 1,3,6,12,24,48): ณ เวลา t รู้ค่าจริงของสถานีตัวเองล่าสุดที่ t0 = t-k เท่านั้น
-ส่วนสภาพอากาศ/จุดความร้อน/จังหวัดข้างเคียง ณ t มีครบเหมือน live เทียบวิธีต่อไปนี้ที่ x(t+h), h = 1,6,12,18,24 (โมเดล v3 P50):
-  P0_persistence   x(t0) ตลอด = naive_fallback ปัจจุบัน
-  P3_stale_origin  โมเดลหลักที่ origin t0 ด้วย horizon k+h (ทำได้เมื่อ k+h<=24) = สิ่งที่ live ทำเมื่อข้อมูลเก่า
-  C_complete       โมเดลหลักกับข้อมูลครบ (เพดานบน ไม่ใช่วิธีที่ใช้ได้จริงเมื่อข้อมูลขาด)
-  I_M0..I_M9       เติมค่าช่วง (t0, t] ด้วยวิธี M* (จาก experiment_imputation_accuracy.py) แล้วสร้าง lag/rolling/ฐาน residual ใหม่
-                   ณ t ป้อนโมเดลหลัก  (I_M0 = ค้างค่า t0 แล้วป้อนโมเดล ไม่ใช่ Persistence ตรงๆ)
-สถานการณ์ S-C (ช่องว่างภายในหน้าต่าง lag/rolling ขณะที่ค่า ณ t มี; L = 3,6,12,24): M1 linear (ที่ใช้อยู่) M2 PCHIP M3i M4i เทียบ C_complete
-Track C: coverage ของช่วงความเชื่อมั่น 90% (q_hat จาก conformal เดิม) เมื่อ input ถูกเติม
-
-พารามิเตอร์ที่จูน/น้ำหนักผสมอ่านจาก models/imputation_tuned_params_*.json (จูนบน calib โดย experiment_imputation_accuracy.py) —
-ไฟล์นี้ไม่จูนอะไรบน test  ความต่างของ MAE รายงานเป็น % เทียบ P0 และ P3 พร้อม block-bootstrap 95% CI (บล็อก = จังหวัด x สัปดาห์)
-เกณฑ์ตัดสินที่ตั้งไว้ก่อนดูผล: วิธี "ชนะ" ถ้า MAE (เฉลี่ย 5 horizon) ลด >=3% เมื่อ k>=6 ทั้งช่วงปกติและฤดูฝุ่น (ก.พ.-เม.ย.),
-ไม่แย่ลงที่ช่วง >p90 (delta<=0) และ CI ของ delta รวมไม่คร่อมศูนย์
+สถานการณ์ S-B (สถานีเงียบ k ชม. ก่อนเวลาพยากรณ์ t; k=1,3,6,12,24,48): เทียบ P0_persistence,
+P3_stale_origin (โมเดลหลักจาก origin t0), C_complete (ข้อมูลครบ, เพดานบน), และ I_M0..I_M9
+(เติมค่าช่องว่างด้วยวิธี M* จาก experiment_imputation_accuracy.py แล้วสร้าง feature ใหม่ป้อนโมเดลหลัก)
+ที่ horizon h = 1,6,12,18,24
+สถานการณ์ S-C (ช่องว่างภายในหน้าต่าง lag/rolling ขณะที่ค่า ณ t มี; L=3,6,12,24): M1/M2/M3i/M4i เทียบ C_complete
+วัด coverage ของช่วงความเชื่อมั่น 90% (conformal) เมื่อ input ถูกเติม
+รายงานส่วนต่าง MAE เป็น % เทียบ P0/P3 พร้อม block-bootstrap 95% CI (บล็อก = จังหวัด x สัปดาห์)
 รัน: python scripts/experiment_imputation_downstream.py [--quick]
 """
 import glob
@@ -107,7 +100,7 @@ def impute_window(P, tr, blend, ds_ix, models, p, t, k, only_h=False):
         col = 24 + (j - k)
         jj = np.full(n, j)
         F = ea.make_feats(P, p, t0, jj)
-        if only_h:  # ใช้ใน experiment_imputation_interval_recalibration.py (สนใจแค่วิธี H-lite ที่ใช้จริงใน app.py — เร็วกว่ามาก)
+        if only_h:  # เฉพาะวิธี H-lite (ใช้ใน experiment_imputation_interval_recalibration.py)
             out = ea.impute_trailing(P, tr, F, ("HL",))
         else:
             out = ea.impute_trailing(P, tr, F, ("M0", "M3", "M4", "M5", "M6", "M7", "H", "HL"))
@@ -150,7 +143,7 @@ def main():
     feats = tm.FEATURE_COLS
     ds_frame = ea.build_ds_index(P)
 
-    class _Ix:  # ห่อ index + เก็บ frame ให้ m8_model_from_origin ใช้ (หลีกเลี่ยงสร้างซ้ำ)
+    class _Ix:  # ห่อ index + เก็บ frame ให้ m8_model_from_origin ใช้
         pass
     ds_ix = _Ix()
     ds_ix.index = ds_frame.index
@@ -179,7 +172,7 @@ def main():
         W0 = P["filled"][t[:, None] + np.arange(-24, 1)[None, :], p[:, None]]
         f0, b0 = feats_from_window(W0)
         for c, v in f0.items():
-            # rolling std ของ pandas ใช้อัลกอริทึมออนไลน์ ต่างจาก np.std เล็กน้อย (~1e-6) เมื่อซีรีส์คงที่ -> เผื่อ 1e-4 เฉพาะ std
+            # เผื่อ tolerance 1e-4 เฉพาะ std (ต่างจาก np.std เล็กน้อย)
             tol = 1e-4 if "_std_" in c else 1e-6
             assert np.nanmax(np.abs(v - Xds[c].values)) < tol, f"parity ล้มเหลวที่ {c}"
         assert np.nanmax(np.abs(b0 - base_ds)) < 1e-6
@@ -239,7 +232,7 @@ def main():
                     d["blocks"].append(blocks[okm]); d["h"].append(np.full(okm.sum(), h))
         print(f"    เสร็จ k={k}", flush=True)
 
-    # ---------- paired vs P0 / P3 (pooled ข้าม h; เฉลี่ยข้าม h แบบเท่ากันตามเกณฑ์ที่ตั้งไว้) ----------
+    # ---------- paired vs P0 / P3 (pooled ข้าม h) ----------
     for (kind, k, name), d in pooled.items():
         if name in ("P0_persistence",):
             continue
@@ -313,7 +306,7 @@ def main():
     cov = pd.DataFrame(cov_rows)
     cov.to_csv(os.path.join(MODEL_DIR, f"imputation_coverage_{TIMESTAMP}{suffix}.csv"), index=False)
 
-    # ---------- สรุปตามเกณฑ์ที่ตั้งไว้ ----------
+    # ---------- สรุปผล ----------
     print("\n" + "=" * 100 + "\nMAE เฉลี่ย 5 horizon (LGB) แยกตาม k — S-B, ทุกช่วงเวลา\n" + "=" * 100)
     t1 = agg[(agg.scenario == "S-B") & (agg.kind == "lgb") & (agg.group == "all")].groupby(["method", "k"])["mae"].mean().unstack().round(3)
     print(t1.to_string())

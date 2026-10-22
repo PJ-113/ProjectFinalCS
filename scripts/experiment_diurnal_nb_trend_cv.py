@@ -1,17 +1,10 @@
 """
-Phase B (feedback อาจารย์ 2026-09-30, ข้อ 2) — ต่อจาก Phase A (scripts/experiment_diurnal_nb_trend_hypothesis.py, ผ่านเกณฑ์: r(กลางวัน)
-สูงกว่า r(กลางคืน) ชัดเจนสำหรับ pm25_t+1/2/3 ตอน t=06:00 ไทย ทั้ง 3 มุมมอง diff 0.08-0.13 >= เกณฑ์ 0.05 ทั้งหมด significant)
+ทดสอบว่าแยก nb_trend_12h ปัจจุบันออกเป็น 2 feature — nb_trend_12h เดิม (แนวโน้ม 12 ชม.ล่าสุด)
++ nb_trend_prev12h (แนวโน้ม 12 ชม.ก่อนหน้านั้น) — ช่วยพยากรณ์ตอนเช้า (06:00-09:00 ไทย) ได้จริงไหม
+วัด MAE รวม/เฉพาะช่วงเช้า/เฉพาะฤดูฝุ่น ด้วย time-blocked CV (4 fold ครอบคลุม 2 ฤดูฝุ่น)
 
-ทดสอบว่าแยก nb_trend_12h ปัจจุบัน (= แนวโน้ม 12 ชม.ล่าสุด, "ช่วงกลางคืน" เมื่อ t=06:00) ออกเป็น 2 feature — แนวโน้ม 12 ชม.ล่าสุด
-(nb_trend_12h เดิม) + แนวโน้ม 12 ชม.ก่อนหน้านั้น (nb_trend_prev12h = nb_trend_12h ของแถวเดียวกันเมื่อ 12 ชม.ก่อน, "ช่วงกลางวันเมื่อวาน"
-ตอน t=06:00) — ช่วยพยากรณ์ตอนเช้า (06:00-09:00 ไทย, ใช้แจ้งเตือนจริง) ได้จริงไหม เมื่อ retrain ทั้งโมเดลจริง
-
-ใช้โครง/fold/เกณฑ์แบบเดียวกับ scripts/validate_features_timeblocked_cv.py (4 fold ครอบคลุม 2 ฤดูฝุ่น, hyperparameter จูนแล้วเดิม)
-เพิ่มตัวชี้วัดใหม่ที่ยังไม่เคยทำ: MAE เฉพาะแถวที่ target ตกช่วงเช้า (06:00-09:00 ไทย) แยกต่างหาก ต่อ fold
-
-เกณฑ์ตัดสิน (ตั้งก่อนรัน): ใช้ชุดแยก 2 feature แทนชุดเดิมได้ ถ้า MAE เฉพาะช่วงเช้า (macro เฉลี่ย 4 fold) ดีขึ้น >=1% ทั้ง LGB และ XGB
-และ MAE รวม (ทุกชั่วโมง) ไม่แย่ลงเกิน 0.5% ในโมเดลใดเลย และ MAE ฤดูฝุ่น (fold A,C) ไม่แย่ลงเกิน 0.5%
-รัน: python scripts/experiment_diurnal_nb_trend_cv.py
+เกณฑ์ตัดสิน: ใช้ชุดแยก 2 feature แทนชุดเดิมได้ ถ้า MAE ช่วงเช้า (macro เฉลี่ย 4 fold) ดีขึ้น >=1%
+ทั้ง LGB และ XGB และ MAE รวม/MAE ฤดูฝุ่น ไม่แย่ลงเกิน 0.5% ในโมเดลใดเลย
 """
 import glob
 import importlib.util
@@ -30,7 +23,7 @@ FOLDS = [("A ฤดูฝุ่น 2025", "2025-02-01", "2025-04-30"), ("B ป�
          ("C ฤดูฝุ่น 2026", "2026-02-01", "2026-04-30"), ("D ต้นฝน 2026", "2026-05-01", "2026-07-01")]
 BURNING_FOLDS = ["A ฤดูฝุ่น 2025", "C ฤดูฝุ่น 2026"]
 PASS_MORNING, PASS_OVERALL, PASS_BURN = 1.0, 0.5, 0.5  # เปอร์เซ็นต์ (delta% ที่ยอมรับได้)
-MORNING_HOURS = {6, 7, 8, 9}  # เวลาไทยของ "เป้าหมาย" (datetime_utc + h) ที่ถือว่าเป็น "ช่วงเช้า"
+MORNING_HOURS = {6, 7, 8, 9}  # เวลาไทยของ target ที่ถือว่าเป็น "ช่วงเช้า"
 
 
 def load_tm():
@@ -50,8 +43,7 @@ def fit_p50(kind, X, y, tm):
 
 
 def add_prev12h_trend(df):
-    """nb_trend_prev12h(t) = nb_trend_12h(t-12h) (แถวเดียวกัน จังหวัดเดียวกัน) — time-indexed lookup ไม่ leak อนาคต
-    ตรวจซ้ำผ่าน pivot recompute อิสระ (เหมือน compute_neighbor_trend_feature.py/experiment_diurnal_nb_trend_hypothesis.py)"""
+    """nb_trend_prev12h(t) = nb_trend_12h(t-12h) (แถวเดียวกัน จังหวัดเดียวกัน) ตรวจซ้ำผ่าน pivot recompute อิสระ"""
     lag = df[["province_en", "datetime_utc", "nb_trend_12h"]].copy()
     lag["datetime_utc"] = lag["datetime_utc"] + pd.Timedelta(hours=12)
     lag = lag.rename(columns={"nb_trend_12h": "nb_trend_prev12h"})
@@ -77,7 +69,7 @@ def main():
 
     baseline = tm.FEATURE_COLS
     assert "nb_trend_12h" in baseline
-    diurnal = baseline + ["nb_trend_prev12h"]  # เก็บ nb_trend_12h เดิมไว้ (= "12 ชม.ล่าสุด") เพิ่ม prev12h (= "12 ชม.ก่อนหน้านั้น")
+    diurnal = baseline + ["nb_trend_prev12h"]
     variants = {"baseline (21, nb_trend_12h)": baseline, "diurnal (+nb_trend_prev12h)": diurnal}
     cols = sorted({c for v in variants.values() for c in v})
     d = df[~df["is_zero_shot"]].dropna(subset=cols).reset_index(drop=True)

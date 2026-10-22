@@ -1,13 +1,6 @@
 """
-ดึงความหนาแน่นของอาคาร (จำนวนอาคารในรัศมี 3 กม. รอบพิกัดสถานีจริง) เข้า
-data/province_station_registry.json — ตอบ feedback อาจารย์เรื่องเขตเมือง vs เขตนอกเมือง
-(ประเด็นสุดท้ายที่เหลือจาก spatial correlation feedback)
-
-ใช้ OpenStreetMap Overpass API (https://overpass-api.de/api/interpreter) — ฟรี ไม่ต้อง API key
-สำหรับ casual use (<10,000 query/วัน, เราใช้แค่ 20) ใส่ User-Agent ตาม usage policy + sleep
-ระหว่าง request กันโดน rate limit ของ free server (ไม่ยิง parallel requests)
-
-นับที่พิกัดสถานีจริง (ไม่ใช่ค่าเฉลี่ยทั้งจังหวัด) เพราะสถานีอาจอยู่ใจกลางเมืองหรือชานเมืองก็ได้
+ดึงความหนาแน่นของอาคาร (จำนวนอาคารในรัศมี 3 กม. รอบพิกัดสถานีจริง) ผ่าน OpenStreetMap Overpass API
+บันทึกกลับเข้า data/province_station_registry.json
 """
 import json
 import os
@@ -19,7 +12,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REGISTRY_PATH = os.path.join(_ROOT, "data", "province_station_registry.json")
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 RADIUS_M = 3000
-REQUEST_SLEEP_S = 6  # free public server เจอ 429 ถ้ายิงถี่เกินไป — เว้นช่วงให้กว้างขึ้น
+REQUEST_SLEEP_S = 6
 HEADERS = {"User-Agent": "pm25-forecast-capstone-project (educational use, 20 one-off queries)"}
 
 
@@ -72,7 +65,7 @@ def main():
         count = query_building_count(p["lat"], p["lon"])
         p["building_count_3km"] = count
         print(f"  [{i+1}/{len(provinces)}] {p['province_th']} ({p['province_en']}): {count} อาคาร")
-        save_registry(registry)  # checkpoint ทันทีต่อจังหวัด กันพัง Overpass rate-limit แล้วเสียของเดิม
+        save_registry(registry)
         if i < len(provinces) - 1:
             time.sleep(REQUEST_SLEEP_S)
 

@@ -1,13 +1,7 @@
 """
-Step 2b (retrain plan): เทรน weighted LightGBM ใหม่บนข้อมูลดิบที่แก้แล้ว
-(data/khonkaen_pm25_features_raw_*.csv) — grid search ใหม่ทั้งหมด (ไม่ reuse weight เดิม
-จาก retrain_weighted.py เพราะเทรนบนคนละ distribution)
-
-Logic เดียวกับ retrain_weighted.py เป๊ะ ต่างแค่ 2 จุด:
-1. DATA_PATH ชี้ไปข้อมูลดิบชุดใหม่ + baseline comparison ชี้ไป eval_high_pollution_by_horizon_v2.csv
-   (จาก train_baseline_lgb_v2.py ไม่ใช่ eval_high_pollution_by_horizon.csv ตัวเก่า)
-2. แต่ละ horizon dropna(subset=[target]) แยกกัน (เหมือน train_baseline_lgb_v2.py) เพราะข้อมูลดิบ
-   มี long-gap ที่ถูกตัดทิ้ง ทำให้แต่ละ horizon เหลือแถวไม่เท่ากัน ต่างจาก CSV เก่าที่ไม่มี NaN เลย
+เทรน weighted LightGBM ด้วย sample-weight grid search บนข้อมูลดิบ (แก้ bias ช่วงมลพิษสูง)
+เลือก weight ต่อ horizon ตัวแทน (t+1/t+12/t+24) ด้วย train_tune/valid_tune แล้ว interpolate ไปทั้ง 24 horizon
+เทียบ MAE/bias กับ baseline (unweighted) ต่อ horizon
 """
 import os
 import pickle
@@ -43,7 +37,7 @@ split_idx = int(len(df_final) * 0.8)
 train = df_final.iloc[:split_idx]
 test = df_final.iloc[split_idx:]
 
-# same 85/15 tuning split used for weight selection, never touches the real test set
+# 85/15 split ของ train สำหรับหา weight (ไม่แตะ test set จริง)
 tune_split_idx = int(len(train) * 0.85)
 train_tune = train.iloc[:tune_split_idx]
 valid_tune = train.iloc[tune_split_idx:]
@@ -88,7 +82,7 @@ for h in REP_HORIZONS:
 grid_df = pd.DataFrame(grid_results)
 print()
 
-# pick weight per representative horizon: smallest |bias_high| without MAE_all increasing more than 8% vs weight=1.0 baseline
+# เลือก weight ต่อ horizon ตัวแทน: |bias_high| น้อยสุด โดย MAE_all ไม่แย่ลงเกิน 8% เทียบ weight=1.0
 chosen_weights = {}
 for h in REP_HORIZONS:
     sub = grid_df[grid_df["horizon"] == h].reset_index(drop=True)
@@ -99,7 +93,7 @@ for h in REP_HORIZONS:
     chosen_weights[h] = best["weight"]
     print(f"t+{h}: เลือก weight={best['weight']:.1f} (MAE_all +{best['mae_increase_pct']:.1f}%, bias_high={best['bias_high']:.3f})")
 
-# interpolate weight across all 24 horizons from the 3 representative points (linear interpolation)
+# interpolate weight ไปทั้ง 24 horizon จาก 3 จุดตัวแทน
 xs = REP_HORIZONS
 ys = [chosen_weights[h] for h in xs]
 final_weight_by_horizon = {h: float(np.interp(h, xs, ys)) for h in range(1, 25)}
@@ -143,7 +137,7 @@ for h in range(1, 25):
 
 results_final_df = pd.DataFrame(results_final)
 
-# load baseline (unweighted) comparison numbers computed in Step 2a (train_baseline_lgb_v2.py)
+# load baseline (unweighted) comparison numbers
 baseline_csv = os.path.join(MODEL_DIR, "eval_high_pollution_by_horizon_v2.csv")
 baseline_df = pd.read_csv(baseline_csv)
 

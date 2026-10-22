@@ -1,9 +1,7 @@
 """
-Phase C1 — ดึงตัวแปร weather เพิ่ม (boundary_layer_height, shortwave_radiation, cloud_cover) จาก Open-Meteo archive
-ทุกจังหวัด (20) ตามช่วงข้อมูลเทรน — diagnose_boundary_layer_height.py พบว่า boundary_layer_height ของปี 2024 มีค่าแค่ ~50%
-(2025+ ครบ), cape ไม่มีใน archive (มีแต่ forecast) ส่วน shortwave_radiation/cloud_cover ครบทั้งช่วง
-ช่วงเต็มครั้งเดียวคืน body ว่าง → แบ่งดึงรายปี + retry/backoff แบบ fetch_weather ใน build_raw_dataset_multiprovince.py
-output: data/extra_weather_isaan_{timestamp}.csv (province_en, datetime_utc, 3 คอลัมน์) ไม่ทับไฟล์เดิม
+ดึงตัวแปร weather เพิ่ม (boundary_layer_height, shortwave_radiation, cloud_cover) จาก Open-Meteo archive
+ทุก 20 จังหวัด ตามช่วงข้อมูลเทรน แบ่งดึงรายปี พร้อม retry/backoff
+output: data/extra_weather_isaan_{timestamp}.csv (province_en, datetime_utc, 3 คอลัมน์)
 """
 import json
 import os

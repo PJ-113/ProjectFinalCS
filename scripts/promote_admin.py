@@ -1,6 +1,5 @@
 """
-ตั้งค่า role='admin' ให้ user ที่มีอยู่แล้ว (ผ่าน UPDATE ตรงๆ) — เป็นทางเดียวที่จะมี admin ได้ในระบบ
-ไม่มี self-serve signup เป็น admin ผ่าน /api/auth/register เลย (ดู migrate_users_role() ใน app.py)
+ตั้งค่า role='admin' ให้ user ที่มีอยู่แล้ว ผ่าน UPDATE ตรงๆ ใน DB
 
 Usage: python scripts/promote_admin.py user@example.com
 """

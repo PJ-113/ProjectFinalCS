@@ -9,10 +9,10 @@ OUT_PATH = os.path.join(_ROOT, r"figures\mae_comparison_baseline_vs_weighted.png
 
 df = pd.read_csv(CSV_PATH).sort_values("horizon")
 
-# --- palette (validated: blue/aqua categorical pair, CVD-safe) ---
+# --- palette ---
 COL_SURFACE = "#fcfcfb"
-COL_BASELINE = "#2a78d6"   # categorical slot 1 (blue)
-COL_WEIGHTED = "#1baf7a"   # categorical slot 2 (aqua)
+COL_BASELINE = "#2a78d6"   # blue
+COL_WEIGHTED = "#1baf7a"   # aqua
 COL_INK_PRIMARY = "#0b0b0b"
 COL_INK_SECONDARY = "#52514e"
 COL_MUTED = "#898781"
@@ -54,7 +54,7 @@ for baseline_col, weighted_col, title, ax in panels:
             marker="s", markersize=5, markerfacecolor=COL_WEIGHTED, markeredgewidth=0,
             label="Weighted (sample-weighted)", zorder=3)
 
-    # direct end-of-line labels (mitigates low-contrast aqua vs surface)
+    # direct end-of-line labels
     last_h = df["horizon"].iloc[-1]
     ax.annotate(f"{df[baseline_col].iloc[-1]:.2f}", xy=(last_h, df[baseline_col].iloc[-1]),
                 xytext=(6, 0), textcoords="offset points", va="center",

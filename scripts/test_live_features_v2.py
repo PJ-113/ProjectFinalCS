@@ -1,10 +1,9 @@
 """
-ทดสอบ feature live ของโมเดล v2 (CHANGELOG 141): compute_neighbor_features (นโยบายเพื่อนบ้าน), count_fire_hotspots,
-get_fire_hotspots (ไม่ล่ม/ไม่รั่วคีย์), get_recent_series (cache), select_model(force_naive), build_feature_row (21 feature)
+ทดสอบ feature live ของโมเดล v2: compute_neighbor_features (นโยบายเพื่อนบ้าน), count_fire_hotspots,
+get_fire_hotspots (ไม่ล่ม/ไม่รั่วคีย์), get_recent_series (cache), select_model(force_naive), build_feature_row,
+offset ป้ายเวลา OpenAQ, และ get_forecast() ตลอดเส้นทาง
 
-ใช้ข้อมูลสังเคราะห์ + ฉีดฟังก์ชัน fetch เอง: ไม่เรียก API ภายนอก และไม่เขียนแถวลง prediction_log/notification_log
-(โหลด app.py ผ่าน importlib จะรัน init_db() ที่เป็น CREATE TABLE IF NOT EXISTS เหมือนทุก test เดิมในโปรเจกต์)
-รัน: python scripts/test_live_features_v2.py
+ใช้ข้อมูลสังเคราะห์ + ฉีดฟังก์ชัน fetch เอง ไม่เรียก API ภายนอกและไม่เขียนแถวลง prediction_log/notification_log จริง
 """
 import contextlib
 import importlib.util
@@ -165,7 +164,7 @@ def main():
         return make_df(T)
     app.fetch_recent_pm25_openaq = fake_fetch
     real_fb = app.USE_INPUT_FALLBACK
-    app.USE_INPUT_FALLBACK = False  # T9 = ความหมายเดิม (strict ไม่ใช้ cache เก่า, ไม่ยิง /hours, ไม่เขียนไฟล์ cache); ทางสำรองทดสอบใน test_input_fallback.py
+    app.USE_INPUT_FALLBACK = False  # strict ไม่ใช้ cache เก่า, ไม่ยิง /hours, ไม่เขียนไฟล์ cache
     app._SERIES_CACHE.clear()
     app.get_recent_series("loei")
     app.get_recent_series("loei")
@@ -224,7 +223,7 @@ def main():
     assert X_bad[nb_cols].isna().all(axis=None), "ไม่มีเพื่อนบ้าน -> NaN (ต้อง force_naive ที่ get_forecast)"
     print(f"T11 ผ่าน: build_feature_row ได้ {len(app.FEATURE_COLS)} feature ตรง FEATURE_COLS, โมเดลทั้ง 2 ทำนายได้")
 
-    # --- T13: offset ป้ายเวลา OpenAQ (CHANGELOG 149) ---
+    # --- T13: offset ป้ายเวลา OpenAQ ---
     class FakeResp:
         status_code = 200
 

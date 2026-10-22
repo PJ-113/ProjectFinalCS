@@ -1,8 +1,8 @@
 """
-ทดสอบ /api/notifications (ประวัติการแจ้งเตือน, CHANGELOG ถัดจาก 57)
+ทดสอบ /api/notifications (ประวัติการแจ้งเตือน)
 
-เขียนแถวทดสอบลง notification_log + prediction_log จริงใน Postgres โดยใช้ predicted_at_utc /
-recorded_at_utc ปี 2100 (marker เดียวกับ test_dynamic_routing.py) แล้วลบทิ้งทั้งก่อน/หลังใน finally
+เขียนแถวทดสอบลง notification_log + prediction_log จริงด้วย predicted_at_utc /
+recorded_at_utc ปี 2100 แล้วลบทิ้งทั้งก่อน/หลังใน finally
 
 ครอบคลุม:
 - risk_horizons คำนวณสดตาม risk_group ของผู้เรียก ไม่ใช่ค่าที่ freeze ไว้ตอนบันทึก — ชั่วโมงที่

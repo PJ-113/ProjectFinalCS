@@ -1,13 +1,6 @@
 """
-Tune จำนวนจังหวัดเพื่อนบ้าน (k) ใน pm25_neighbor_avg (spatial-lag feature) — ปัจจุบันใช้ k=3
-คงที่มาตั้งแต่ validate ครั้งแรก (CHANGELOG 94, scripts/validate_spatial_lag_feature.py) ไม่เคย
-ลองค่าอื่นเทียบกันจริง งานนี้กวาด k หลายค่าเพื่อดูว่า k=3 เป็นค่าที่ดีที่สุดจริงไหม
-
-ไม่ต้องเรียก API ใหม่เลย — คอลัมน์ pm25 ดิบของทุกจังหวัด (รวม zero-shot) มีอยู่แล้วใน
-DATA_PATH (train_multiprovince_models.DATA_PATH) พอสำหรับ pivot คำนวณเพื่อนบ้านที่ k ใดๆ
-
-สมมติฐานตั้งไว้ล่วงหน้า: MAE ควรดีขึ้นตาม k จนถึงจุดหนึ่งแล้วแย่ลง (เพื่อนบ้านไกลเกินไปเริ่มเป็น
-noise ไม่ใช่สัญญาณ spatial correlation จริง ตาม task B ที่ยืนยันว่า correlation ลดลงตามระยะทาง)
+กวาดค่า k (จำนวนจังหวัดเพื่อนบ้าน) ใน pm25_neighbor_avg (spatial-lag feature) หลายค่า
+วัด MAE/R² ที่ horizon ตัวแทน 5 จุด เทียบกับ baseline ไม่มี spatial-lag และกับ k ปัจจุบัน
 """
 import importlib.util
 import json
@@ -33,8 +26,8 @@ def load_module(name, filename):
 
 
 def build_neighbor_avg_feature(df_all_provinces, registry_provinces, haversine_km, k):
-    """คัดลอกจาก validate_spatial_lag_feature.py — คืน DataFrame (index=datetime_utc,
-    columns=province_en) ของค่าเฉลี่ย pm25 ปัจจุบันของ k จังหวัดที่ใกล้ที่สุด ณ เวลาเดียวกัน"""
+    """คืน DataFrame (index=datetime_utc, columns=province_en) ของค่าเฉลี่ย pm25 ปัจจุบัน
+    ของ k จังหวัดที่ใกล้ที่สุด ณ เวลาเดียวกัน"""
     pivot = df_all_provinces.pivot_table(index="datetime_utc", columns="province_en", values="pm25")
     all_provinces = pivot.columns.tolist()
 
@@ -95,7 +88,7 @@ def main():
     df_all = pd.read_csv(train_mod.DATA_PATH)
     df_all["datetime_utc"] = pd.to_datetime(df_all["datetime_utc"])
 
-    df = df_all[~df_all["is_zero_shot"]].reset_index(drop=True)  # 17 จังหวัดเทรน (เหมือนทุกงานก่อนหน้า)
+    df = df_all[~df_all["is_zero_shot"]].reset_index(drop=True)  # 17 จังหวัดเทรน
 
     baseline_features = [c for c in train_mod.FEATURE_COLS if c != "pm25_neighbor_avg"]
     print(f"baseline feature (ไม่มี spatial-lag, {len(baseline_features)} ตัว): {baseline_features}")

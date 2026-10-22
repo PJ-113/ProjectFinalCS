@@ -1,8 +1,6 @@
 """
-พฤติกรรมจริงของ Dynamic Routing (objective 2 ของ proposal) — สัดส่วนที่ select_model() ใน app.py
-เลือก LightGBM vs XGBoost vs naive_fallback (circuit breaker) จริงในการใช้งาน (ไม่ใช่ backtest)
-
-ดึงจาก prediction_log ตั้งแต่ deploy v3 (2026-09-19) เท่านั้น (แถวก่อนหน้าเป็นโมเดล v2/เก่ากว่าปนกัน)
+วัดสัดส่วนจริงที่ Dynamic Routing (select_model() ใน app.py) เลือกใช้ LightGBM vs XGBoost vs
+naive_fallback จากข้อมูล prediction_log จริง (live, ไม่ใช่ backtest) ตั้งแต่ deploy v3 (2026-09-19)
 """
 import os
 

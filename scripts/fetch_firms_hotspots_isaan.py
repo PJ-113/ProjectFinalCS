@@ -1,14 +1,9 @@
 """
-ดึงข้อมูลจุดความร้อน (fire hotspot) จาก NASA FIRMS ย้อนหลังเต็มช่วงที่ training dataset มี
-(2024-01-02 ถึง 2026-07-02, ตรงกับ data/multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv)
-ต่อจาก scripts/diagnose_firms_hotspot_access.py (entry 122) ที่ยืนยันแล้วว่า API ใช้ได้จริง,
-day_range สูงสุด/request = 5 วัน, ต้องสลับ source ระหว่าง archive (_SP) กับ near-real-time (_NRT)
+ดึงข้อมูลจุดความร้อน (fire hotspot) จาก NASA FIRMS ย้อนหลังเต็มช่วงที่ training dataset มี (2024-01-02 ถึง 2026-07-02)
 
-วิธีทำ: วน request ทีละ 5 วัน (~183 request รวม) ด้วย source _SP ก่อนเสมอ (ข้อมูล archive คุณภาพดี
-กว่า reprocessed แล้ว) ถ้า response ว่างเปล่า (SP ยังไม่ประมวลผลถึงช่วงนั้น เช่นช่วง 2-3 เดือนล่าสุด)
-ให้ fallback ไป _NRT แทนสำหรับ chunk นั้น บันทึกว่าแต่ละ chunk ใช้ source ไหนไว้ด้วยเพื่อตรวจสอบย้อนหลังได้
-
-Bounding box เดียวกับ diagnose script (ครอบคลุมอีสาน + กันชนฝั่งลาว/กัมพูชา)
+วน request ทีละ 5 วัน ด้วย source archive (_SP) ก่อนเสมอ ถ้า response ว่างเปล่าให้ fallback ไป
+near-real-time (_NRT) แทนสำหรับ chunk นั้น บันทึกว่าแต่ละ chunk ใช้ source ไหนไว้ตรวจสอบย้อนหลังได้
+Bounding box ครอบคลุมอีสาน + กันชนฝั่งลาว/กัมพูชา
 """
 import os
 import time
@@ -24,7 +19,7 @@ TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
 START_DATE = pd.Timestamp("2024-01-02")
 END_DATE = pd.Timestamp("2026-07-02")
-DAY_RANGE = 5  # max ต่อ request ตาม entry 122
+DAY_RANGE = 5  # max ต่อ request
 AREA = "100.5,13.5,106.5,19.0"
 SOURCE_SP = "VIIRS_NOAA20_SP"
 SOURCE_NRT = "VIIRS_NOAA20_NRT"

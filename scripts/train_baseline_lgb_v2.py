@@ -1,11 +1,6 @@
 """
-Step 2a (retrain plan): เทรน unweighted baseline LightGBM ใหม่บนข้อมูลดิบที่แก้แล้ว
-(data/khonkaen_pm25_features_raw_*.csv) เพื่อใช้เป็น baseline เปรียบเทียบกับ weighted
-model ใน scripts/retrain_weighted_v2.py — โมเดล baseline เดิม
-(lgb_pm25_multistep_20260708_153732.pkl) เทรนจาก CSV เก่าที่ถูก interpolate ไปแล้ว
-ใช้เทียบกับข้อมูลชุดใหม่ไม่ได้ ต้องเทรนใหม่
-
-Logic เดียวกับ train_models.ipynb (baseline cells) + eval_high_pollution.py รวมในสคริปต์เดียว
+เทรน unweighted baseline LightGBM บน PM2.5 ดิบของ Khon Kaen (24 horizon แยกโมเดล)
+วัด MAE/RMSE/R2 ทั้งหมดและเฉพาะช่วงมลพิษสูง (pm25 > 37.5)
 """
 import os
 import pickle

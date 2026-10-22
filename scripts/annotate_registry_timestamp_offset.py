@@ -1,12 +1,8 @@
 """
-P0 ของแผนแก้ป้ายเวลา OpenAQ (CHANGELOG 144-145): วัด "ป้ายเวลาเลื่อนกี่ชั่วโมง" ของแต่ละสถานีจากการเทียบ /hours (เวลาถูก) กับ /measurements
-แล้วบันทึกเป็น field `openaq_timestamp_offset_hours` ต่อจังหวัดใน data/province_station_registry.json — ค่า offset นี้ต้อง "บวกเข้า" datetime_utc
-ของ /measurements เพื่อให้ตรงเวลาจริง (สถานีปกติ = 0, 9 สถานี Air4Thai รุ่นใหม่ = 23)
-
-วัด 2 ช่วง/สถานี (ล่าสุด 400 ชม. และ 2025-03-01..20) ต้องได้ค่าเดียวกัน + ค่าต่างเฉลี่ยของ 2 ซีรีส์หลังเลื่อน < DIFF_TOL จึงเขียน field;
-สถานีที่วัดไม่ได้/ไม่ตรงกัน -> ไม่เขียน (app/สคริปต์อ่านด้วย .get(..., 0)) และรายงานเป็น "ต้องตรวจ" — สคริปต์ออกด้วย exit code 1
-รันซ้ำได้เสมอ (ถ้า OpenAQ แก้ป้ายเวลา upstream ค่าจะกลับเป็น 0 เอง) สำรองไฟล์เดิมเป็น data/province_station_registry_backup_{ts}.json ก่อนเขียนทุกครั้ง
-ไม่พิมพ์คีย์
+วัดป้ายเวลาที่เลื่อนกี่ชั่วโมงของแต่ละสถานี OpenAQ (เทียบ /hours กับ /measurements บน 2 ช่วงเวลา)
+แล้วเขียนเป็น field `openaq_timestamp_offset_hours` ต่อจังหวัดใน data/province_station_registry.json
+สถานีที่วัดไม่ได้/ไม่ตรงกันในสองช่วง จะไม่เขียนและรายงานเป็น "ต้องตรวจ" (exit code 1)
+สำรองไฟล์เดิมเป็น data/province_station_registry_backup_{ts}.json ก่อนเขียนทุกครั้ง
 """
 import importlib.util
 import json

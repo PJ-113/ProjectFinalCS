@@ -1,15 +1,9 @@
 """
-Ablation study แบบทีละ feature เดี่ยว (ไม่ใช่ทีละกลุ่มแบบ ablation_feature_groups.py, CHANGELOG 90)
-— ตอบ feedback อาจารย์ตรงตัวอักษร ("ทดสอบทีละตัวแปร") ให้ครบ 19 feature ปัจจุบัน
+Ablation study แบบทีละ feature เดี่ยว (leave-one-out) วัดผลต่อ MAE/R² (P50 only)
+ของทุก feature ที่ horizon ตัวแทน 5 จุด (t+1, t+6, t+12, t+18, t+24)
 
-**คำเตือนสำคัญที่ต้องอ่านคู่กับผลลัพธ์เสมอ**: หลาย feature มีความสัมพันธ์กันสูงโดยธรรมชาติของ
-การออกแบบ (multicollinearity) — ผลตัดทีละตัวของ feature ในกลุ่มเหล่านี้อาจดูเหมือน "ไม่ช่วย
-เลย" เพราะ feature ที่เหลือในกลุ่มชดเชยกันได้ ทั้งที่ทั้งกลุ่มสำคัญจริง (ยืนยันจาก ablation กลุ่ม
-เดิม: pm25_lag_rolling ทั้งกลุ่ม +8-9% MAE ถ้าตัดออกหมด):
-  - pm25_lag_1/3/6/12/24 + pm25_roll_mean/std_6/24 (9 ตัว) — ค่าจาก series เดียวกัน
-  - wind_dir_sin/wind_dir_cos — คู่ circular encoding มุมเดียวกัน
-  - lat/lon — คู่พิกัดภูมิศาสตร์เดียวกัน
-ต้องนำเสนอผลทีละตัวควบคู่กับผลกลุ่มเดิม (CHANGELOG 90) ไม่ใช่แทนที่กัน
+หมายเหตุ: บาง feature มีความสัมพันธ์กันสูง (multicollinearity) เช่น pm25_lag/roll ทั้งกลุ่ม,
+wind_dir_sin/cos, lat/lon — ผลตัดทีละตัวจึงควรดูคู่กับผล ablation ทีละกลุ่ม
 """
 import importlib.util
 import os

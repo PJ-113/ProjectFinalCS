@@ -1,25 +1,16 @@
 """
-SHAP analysis (proposal 4.1.3 / 5.3.4) — เดิมทำกับโมเดล single-station เก่า (ก่อน CHANGELOG 78)
-ตอนนี้แก้ให้ใช้กับโมเดล pooled จริง (task E ตาม feedback อาจารย์ ข้อ 2: ตรวจสอบว่าโมเดลเรียนรู้
-ความสัมพันธ์ทางอุตุนิยมวิทยาสมเหตุสมผลไหม) — ไม่ใช่แค่สลับ path เพราะโครงสร้าง pkl ต่างกัน:
-โมเดลเก่า models[h] = model เดียว, โมเดล pooled models[h][quantile] (nested อีกชั้น, quantile ใน
-{0.05, 0.5, 0.95}) — สคริปต์นี้อธิบายเฉพาะ P50 (จุดพยากรณ์หลัก) เท่านั้น
-
-สำคัญ: โมเดล pooled ทายค่า **residual** (pm25_t+h - pm25_now) ไม่ใช่ค่าจริง — SHAP values
-ที่ได้จึงอธิบายอิทธิพลต่อ "ส่วนต่าง" ไม่ใช่ค่า PM2.5 สัมบูรณ์ ตีความทิศทาง (+/-) ได้ตามปกติ
-แค่ต้องระบุให้ชัดว่าเป็น residual เวลารายงานผล
+SHAP analysis สำหรับโมเดล pooled (LightGBM/XGBoost) — อธิบายค่าพยากรณ์ P50 เฉพาะ
+โมเดล pooled ทายค่า **residual** (pm25_t+h - pm25_now) ไม่ใช่ค่าจริง — SHAP values ที่ได้จึง
+อธิบายอิทธิพลต่อ "ส่วนต่าง" ไม่ใช่ค่า PM2.5 สัมบูรณ์
 
 ไฟล์นี้ทำ 3 หน้าที่แยกกัน:
-1. Batch analysis (รันเมื่อเรียกเป็นสคริปต์โดยตรง): คำนวณ SHAP บน test set จริง (split เดียวกับ
-   task A/D — reuse split_train_calib_test()) ที่ horizon ตัวแทน t+1/t+12/t+24 ของทั้ง 2 โมเดล
-   สรุป top-5 feature ต่อ (model, horizon)
+1. Batch analysis (รันเมื่อเรียกเป็นสคริปต์โดยตรง): คำนวณ SHAP บน test set ที่ horizon ตัวแทน
+   t+1/t+12/t+24 ของทั้ง 2 โมเดล สรุป top-5 feature ต่อ (model, horizon)
 2. Meteorological plausibility check: ตั้งสมมติฐานทิศทางไว้ก่อนต่อ feature อุตุนิยมวิทยาหลัก
    (precipitation, pressure, wind_speed) แล้วเช็คว่า SHAP value จริงไปทิศทางเดียวกับสมมติฐานไหม
 3. get_shap_explanation(): ฟังก์ชัน reusable สำหรับอธิบายค่าพยากรณ์ "จุดเดียว" ตามโมเดลที่
    Dynamic Routing เลือกใช้จริง (model_used ใน app.py: "lightgbm_pooled_v3"/"xgboost_pooled_v3"/
    "naive_fallback") — import ได้โดยไม่ trigger batch analysis
-
-ยังไม่ integrate เข้า app.py/get_forecast() — เป็นขั้นตอนแยกต่างหากทีหลัง
 """
 import importlib.util
 import os
@@ -42,9 +33,9 @@ OUT_CSV_PATH = os.path.join(_ROOT, "models", f"shap_top_features_by_horizon_{TIM
 REP_HORIZONS = [1, 12, 24]
 TOP_N = 5
 EXPLAIN_QUANTILE = 0.5  # อธิบายเฉพาะ P50 (จุดพยากรณ์หลัก)
-SUBSAMPLE_STRIDE = 3  # ใช้ทุกๆ 3 แถวของ test (เรียงตามเวลาต่อจังหวัด) เพื่อคุม runtime ของ TreeSHAP บนโมเดลใหญ่ (XGB 800 ต้น ลึก 8)
+SUBSAMPLE_STRIDE = 3  # ใช้ทุกๆ 3 แถวของ test เพื่อคุม runtime ของ TreeSHAP
 
-# สมมติฐานทิศทางเชิงอุตุนิยมวิทยา (ต้องระบุก่อนเห็นผล ตามที่อาจารย์ขอ) —
+# สมมติฐานทิศทางเชิงอุตุนิยมวิทยา —
 # "+"=ค่า feature สูง ควรทำให้ residual (และ pm25) ทายสูงขึ้น, "-"=ตรงข้าม
 METEOROLOGICAL_HYPOTHESES = {
     "precipitation": ("-", "ฝนตกชะล้าง PM2.5 ออกจากอากาศ (scavenging effect) — ฝนมาก ควรทายฝุ่นลดลง"),
@@ -56,7 +47,7 @@ METEOROLOGICAL_HYPOTHESES = {
                        "(hygroscopic growth) และมักเกิดร่วมกับ temperature inversion ตอนเช้าหน้าหนาว — "
                        "ควรทายฝุ่นสูงขึ้น (เป็น feature ที่อาจารย์ระบุเจาะจงเรื่องหน้าหนาว จึงเช็คแยกฤดูเพิ่มด้านล่าง)"),
 }
-WINTER_MONTHS = {11, 12, 1, 2}  # หน้าหนาวไทย (พ.ย.-ก.พ.) — ตามที่อาจารย์ระบุเจาะจงเรื่องน้ำค้าง/ความชื้น
+WINTER_MONTHS = {11, 12, 1, 2}  # หน้าหนาวไทย (พ.ย.-ก.พ.)
 WINTER_STRATIFIED_FEATURES = ["humidity"]
 
 with open(LGB_MODEL_PATH, "rb") as f:
@@ -75,8 +66,8 @@ _EXPLAINER_CACHE = {}
 
 
 def _load_test_split():
-    """reuse split_train_calib_test() จาก train_multiprovince_models.py ตรงๆ ให้ได้ test rows
-    ชุดเดียวกับที่ใช้ backtest ฤดูฝุ่น (task A) และ ablation study (task D)"""
+    """reuse split_train_calib_test() จาก train_multiprovince_models.py เพื่อได้ test rows
+    ชุดเดียวกับที่ใช้ training/evaluation อื่นๆ"""
     spec = importlib.util.spec_from_file_location(
         "train_multiprovince_models", os.path.join(_ROOT, "scripts", "train_multiprovince_models.py")
     )
@@ -123,7 +114,7 @@ def get_shap_explanation(model_used, horizon, feature_row):
 def _meteorological_plausibility_check(model_name, h, X_test, shap_values, datetime_series=None):
     """เช็คว่าทิศทางที่โมเดลเรียนรู้จริง (correlation ระหว่างค่า feature กับ SHAP value ของมัน)
     ตรงกับสมมติฐานเชิงฟิสิกส์ที่ตั้งไว้ล่วงหน้าไหม + เช็คแยกหน้าหนาวสำหรับ feature ที่ระบุใน
-    WINTER_STRATIFIED_FEATURES (อาจารย์ระบุเจาะจงว่าความชื้น/น้ำค้างหน้าหนาวควรตรวจสอบแยก)"""
+    WINTER_STRATIFIED_FEATURES"""
     print(f"\n  -- meteorological plausibility check ({model_name} t+{h}) --")
     for feat, (expected_sign, reason) in METEOROLOGICAL_HYPOTHESES.items():
         idx = FEATURE_COLS.index(feat)

@@ -1,13 +1,10 @@
 """
-ส่งออกตาราง climatology สภาพอากาศ (จังหวัด x เดือน x ชั่วโมง UTC) ให้ app.py ใช้เป็น "ทางสุดท้าย" เมื่อดึง Open-Meteo ไม่ได้
-และไม่มีค่าที่ cache ไว้ (CHANGELOG 172) — ผลทดลอง scripts/experiment_weather_fallback.py: ยังดีกว่า Persistence ทุก horizon (t+1..t+24)
+ส่งออกตาราง climatology สภาพอากาศ (จังหวัด x เดือน x ชั่วโมง UTC) ให้ app.py ใช้เป็นทางสุดท้ายเมื่อดึง Open-Meteo ไม่ได้
+และไม่มีค่า cache (ใช้ 7 feature สภาพอากาศเดียวกับที่โมเดลใช้)
 
-ต่างจากในการทดลองโดยตั้งใจ: การทดลองคำนวณจากแถวใน dataset (เฉพาะชั่วโมงที่มี PM2.5) ซึ่งบางช่อง (เช่น ก.ค./ส.ค./ต.ค. ของหลายจังหวัด, เลย ต.ค. ไม่มีเลย)
-บางมาก ส่วนไฟล์ที่ระบบใช้จริงดึงสภาพอากาศ "ครบทุกชั่วโมง" ของ 20 จังหวัดจาก Open-Meteo archive (พิกัดสถานี ช่วงเดียวกับตอนเทรน = WINDOW_START..WINDOW_END
-ของ build_raw_dataset_multiprovince.py) โดยไม่ขึ้นกับว่ามี PM2.5 หรือไม่ — สภาพอากาศไม่ควรขาดตามช่องว่างของเซ็นเซอร์ฝุ่น
-สูตรเฉลี่ยเหมือนการทดลอง (7 feature ที่โมเดลใช้ตรงๆ รวม wind_dir_sin/cos เฉลี่ยแยกกัน ไม่แปลงกลับเป็นองศา)
-ผลลัพธ์: models/weather_climatology_<timestamp>.json (ไฟล์เล็ก เก็บใน git ได้) แล้วแก้ WEATHER_CLIMATOLOGY_PATH ใน app.py
-รัน: python scripts/export_weather_climatology.py   (เรียก Open-Meteo archive 20 ครั้ง ~1 นาที)
+ดึงสภาพอากาศครบทุกชั่วโมงของ 20 จังหวัดจาก Open-Meteo archive (ช่วงเดียวกับตอนเทรน) แล้วเฉลี่ยต่อ (เดือน, ชั่วโมง UTC)
+ผลลัพธ์: models/weather_climatology_<timestamp>.json แล้วแก้ WEATHER_CLIMATOLOGY_PATH ใน app.py
+รัน: python scripts/export_weather_climatology.py
 """
 import importlib.util
 import json
@@ -31,7 +28,7 @@ def main():
     out, n_rows = {}, 0
     for p in reg:
         slug = p["province_en"]
-        w = bd.fetch_weather(p["lat"], p["lon"])  # ฟังก์ชันเดียวกับที่สร้างข้อมูลเทรน (คอลัมน์ wind_dir_deg เป็นองศา)
+        w = bd.fetch_weather(p["lat"], p["lon"])  # คอลัมน์ wind_dir_deg เป็นองศา
         w = w.dropna(subset=["temp", "humidity", "wind_speed", "precipitation", "wind_dir_deg", "pressure"]).copy()
         rad = w["wind_dir_deg"] * 3.141592653589793 / 180.0
         w["wind_dir_sin"], w["wind_dir_cos"] = rad.map(math.sin), rad.map(math.cos)

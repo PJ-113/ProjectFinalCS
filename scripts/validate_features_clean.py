@@ -1,12 +1,10 @@
 """
-P3 ของแผนแก้ป้ายเวลา OpenAQ (CHANGELOG 145): ประเมิน feature ใหม่/เดิมบน dataset ที่ "ถูกเวลา" (rebuild_dataset_clean.py) — ตัวเลขเดิมของ feature
-จังหวัดข้างเคียง/nb_trend ปนเปื้อนจากการรั่วของข้อมูลอนาคต (CHANGELOG 144) จึงวัดใหม่ทั้งหมด ไม่เชื่อผลเดิม
-baseline = 18 feature (ทั้งชุดปัจจุบันตัด pm25_neighbor_avg/fire/nb_trend_12h ออก) แล้วเพิ่มทีละตัว/ชุด:
-  +nb_k1 / +nb_k2 / +nb_k3 / +nb_k5  (ค่าเฉลี่ย pm25 ของ k จังหวัดใกล้สุด ณ เวลาเดียวกัน — สูตรเดียวกับ add_spatial_lag_feature)
-  +fire, +nb_k1+nb_trend, +nb_k1+nb_trend+fire (ชุดปัจจุบัน), +time_cyclical (ตรวจซ้ำ: ตัดออกไปตอนข้อมูลปนเปื้อน)
-วิธี: เทรนบน train, "เลือกบน calib" (ไม่แตะ test), P50, horizon [1,12,24], LGB+XGB (hyperparameter ชุดเดิมเป็นค่าตั้งต้น — จะจูนซ้ำใน P4),
-วัด 4 มุม (รวม/ปกติ/ฤดูฝุ่น ก.พ.-เม.ย./>p90) ใช้แถวชุดเดียวกันทุก variant (dropna รวมทุกคอลัมน์ candidate)
-เกณฑ์ผ่านเดิม: MAE รวมดีขึ้น >=0.5% ทั้ง 2 โมเดล หรือ >p90 ดีขึ้น >=2% โดย MAE รวมไม่แย่ลง >0.3%
+Validate feature set บน dataset ที่แก้ timestamp offset แล้ว: baseline = 18 feature (ตัด
+pm25_neighbor_avg/fire/nb_trend_12h) แล้วเพิ่มทีละตัว/ชุด:
+  +nb_k1 / +nb_k2 / +nb_k3 / +nb_k5 (ค่าเฉลี่ย pm25 ของ k จังหวัดใกล้สุด ณ เวลาเดียวกัน)
+  +fire, +nb_k1+nb_trend, +nb_k1+nb_trend+fire (ชุดปัจจุบัน), +time_cyclical
+เทรนบน train, เลือกบน calib (ไม่แตะ test), P50, horizon [1,12,24], LGB+XGB
+วัด MAE รวม/ปกติ/ฤดูฝุ่น (ก.พ.-เม.ย.)/>p90 ต่อ variant เทียบ baseline
 """
 import glob
 import importlib.util

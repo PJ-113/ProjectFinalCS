@@ -1,15 +1,6 @@
 """
-Step 3 (retrain plan): เทรน XGBoost + Prophet ใหม่บนข้อมูลดิบที่แก้แล้ว
-(data/khonkaen_pm25_features_raw_20260712_191249.csv — เวอร์ชันที่แก้บั๊ก duplicate
-"pm25" column แล้ว ดู scripts/build_raw_dataset.py)
-
-Logic เดียวกับ train_xgb_prophet.py เป๊ะ ต่างแค่:
-1. DATA_PATH ชี้ไปข้อมูลดิบชุดใหม่, LGB_PKL_PATH ชี้ไป weighted LightGBM ที่เพิ่งเทรนใน
-   Step 2b (scripts/retrain_weighted_v2.py) แทนที่จะเป็นตัวเก่า
-2. XGBoost แต่ละ horizon dropna(subset=[target]) แยกกัน (เหมือน train_baseline_lgb_v2.py /
-   retrain_weighted_v2.py) เพราะข้อมูลดิบมี long-gap ที่ถูกตัดทิ้ง
-3. Prophet ใช้คอลัมน์ "pm25" ตรงๆ ได้แล้ว (หลังแก้บั๊ก ไม่ต้องกังวลเรื่อง duplicate column)
-   ไม่มี NaN เพราะเป็น pm25_filled (short-gap interpolated) — Prophet ไม่รองรับ NaN ใน y อยู่แล้ว
+เทรน XGBoost (24 horizon) และ Prophet บน PM2.5 ดิบของ Khon Kaen
+วัด MAE/RMSE/R2 บน test set และยืนยันผลพยากรณ์ 1 จุดจากโมเดลที่โหลดกลับมา
 """
 import os
 import pickle
@@ -29,7 +20,7 @@ DATA_PATH = os.path.join(_ROOT, r"data\khonkaen_pm25_features_raw_20260712_19124
 LGB_PKL_PATH = os.path.join(_ROOT, r"models\lgb_pm25_multistep_weighted_20260712_191056.pkl")
 MODEL_DIR = os.path.join(_ROOT, r"models")
 
-# โหลด feature_cols/target_cols/station_id จาก metadata ของ LightGBM (Step 2b) ให้ตรงกันเป๊ะ
+# โหลด feature_cols/target_cols/station_id จาก metadata ของ LightGBM ให้ตรงกันเป๊ะ
 with open(LGB_PKL_PATH, "rb") as f:
     lgb_package = pickle.load(f)
 FEATURE_COLS = lgb_package["feature_cols"]
@@ -39,7 +30,7 @@ STATION_ID = lgb_package["station_id"]
 df_final = pd.read_csv(DATA_PATH)
 df_final["datetime_utc"] = pd.to_datetime(df_final["datetime_utc"])
 
-# split แบบ time-based 80/20 เดียวกับ Step 2a/2b (ตำแหน่ง index เดียวกันเป๊ะ เพราะไฟล์เดียวกัน)
+# split แบบ time-based 80/20
 split_idx = int(len(df_final) * 0.8)
 train = df_final.iloc[:split_idx]
 test = df_final.iloc[split_idx:]

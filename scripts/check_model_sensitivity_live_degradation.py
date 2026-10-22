@@ -1,13 +1,11 @@
 """
-E4 (แผน deploy feasibility) — โมเดล _20260919_135655 ทนต่อข้อมูล live ที่ไม่สมบูรณ์แค่ไหน
-จำลองสถานการณ์ live บน test set เดียวกับตอนเทรน (P50 เท่านั้น, ไม่ต้องเทรนใหม่ แค่ predict ด้วย pkl เดิม) แล้ววัด MAE ที่เสียหาย:
-  - pm25_neighbor_avg เก่ากว่าจริง k=1/2/3 ชม. (สถานีเพื่อนบ้านรายงานช้า; live ค้างค่าท้ายสาย = neighbor(t-k)
-    ส่วน nb_trend_12h ปรับให้สอดคล้อง = neighbor(t-k) - neighbor(t-12))
-  - pm25_neighbor_avg = NaN / = pm25 ของจังหวัดตัวเอง / = ค่าเฉลี่ยของจังหวัดอื่นทั้งหมด ณ เวลาเดียวกัน (แทนเมื่อไม่มีเพื่อนบ้าน)
+วัดว่าโมเดล (_20260919_135655) ทนต่อข้อมูล live ที่ไม่สมบูรณ์แค่ไหน: จำลองสถานการณ์ live บน test set
+เดียวกับตอนเทรน (P50 เท่านั้น, predict ด้วย pkl เดิมไม่เทรนใหม่) แล้ววัด MAE ที่เสียหายของแต่ละ variant:
+  - pm25_neighbor_avg เก่ากว่าจริง k=1/2/3 ชม. (nb_trend_12h ปรับให้สอดคล้อง)
+  - pm25_neighbor_avg = NaN / = pm25 ของจังหวัดตัวเอง / = ค่าเฉลี่ยของจังหวัดอื่นทั้งหมด ณ เวลาเดียวกัน
   - nb_trend_12h = NaN / 0
-  - fire_hotspot_count x0.5/x0.8/x1.2 (จำลอง NRT != SP) และ = 0 (FIRMS ใช้ไม่ได้)
-เทียบกับ naive persistence (พยากรณ์ = ค่าปัจจุบัน) ที่เป็นเพดานของ fallback ของ app.py
-baseline ต้องได้ MAE ตรงกับ confirm_improvements_on_test.py (LGB 2.538 / XGB 2.542 ที่ 5 horizon)
+  - fire_hotspot_count x0.5/x0.8/x1.2 และ = 0
+เทียบกับ naive persistence (พยากรณ์ = ค่าปัจจุบัน)
 """
 import importlib.util
 import os
@@ -66,7 +64,7 @@ def main():
         nb_tk = shifted(df, "pm25_neighbor_avg", k, test_df)
         nb_t12 = nb_t - test_df["nb_trend_12h"].values  # = neighbor(t-12)
         variants[f"nb_stale_{k}h"] = {"pm25_neighbor_avg": nb_tk, "nb_trend_12h": nb_tk - nb_t12}
-    # stale ยาว (ตรงกับที่ E3 พบ: เพื่อนบ้านค้างค่าเก่า ~23-25 ชม.): live "ค้างค่าท้ายสาย" (hold) => avg = neighbor(t-k),
+    # stale ยาว: live "ค้างค่าท้ายสาย" (hold) => avg = neighbor(t-k),
     # trend = neighbor(t-k) - neighbor(t-12) เมื่อ k<12; เมื่อ k>=12 ทั้งสองจุดเป็นค่าที่ค้างเดียวกัน => trend = 0
     nb_t12_all = test_df["pm25_neighbor_avg"].values - test_df["nb_trend_12h"].values
     for k in (6, 12, 24):

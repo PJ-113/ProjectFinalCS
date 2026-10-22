@@ -1,18 +1,11 @@
 """
-ทดสอบ "เพดานผลลัพธ์" ของการใช้สภาพอากาศ ณ เวลาเป้าหมาย (t+h) แทนสภาพอากาศปัจจุบัน (t) ที่ใช้ซ้ำทุก horizon
+ทดสอบเพดานผลลัพธ์ของการใช้สภาพอากาศ ณ เวลาเป้าหมาย (t+h, "oracle") แทนสภาพอากาศปัจจุบัน (t, "baseline")
+ที่โมเดล pooled ใช้ซ้ำทุก horizon — วัดว่าพยากรณ์อากาศแม่นสมบูรณ์แบบจะช่วยลด MAE ได้แค่ไหน
 
-ที่มา: โมเดล pooled ใช้ 7 feature สภาพอากาศ (temp/humidity/wind_speed/precipitation/wind_dir_sin/cos/pressure) เป็นค่า ณ เวลาปัจจุบัน
-เดียวกันไม่ว่าจะทำนาย t+1 หรือ t+24 — ข้อจำกัดนี้เขียนไว้ตั้งแต่ยุค Prophet ("ยังไม่มี weather forecast รายชั่วโมงจริง") ไม่เคยถูกแก้
-การทดลองนี้ตอบคำถาม "ถ้าพยากรณ์อากาศแม่นสมบูรณ์แบบ (= ใช้ค่าจริงที่เกิดขึ้น ณ เวลาเป้าหมาย) จะช่วยได้แค่ไหน" — เป็นเพดานบนสุด ไม่ใช่สิ่งที่
-deploy ได้จริง (live ต้องใช้พยากรณ์จาก Open-Meteo ซึ่งแม่นน้อยกว่านี้เสมอ) ถ้าเพดานยังช่วยน้อย แปลว่าไม่คุ้มสร้างระบบดึงพยากรณ์จริงต่อ
+oracle variant: แทนที่ 7 คอลัมน์สภาพอากาศด้วยค่าจริง ณ t+h (time-shift จาก dataset) ทั้งตอนเทรนและตอนประเมิน
+fit ใหม่ต่อ horizon ด้วย hyperparameter ที่จูนแล้ว (BEST) ไม่ retune
 
-วิธี: dataset เทรน (`train_multiprovince_models.DATA_PATH`) มีสภาพอากาศเป็นค่ารายชั่วโมงต่อแถวอยู่แล้ว (มาจาก fetch_weather() merge
-เข้ากริดรายชั่วโมงเต็มช่วง) จึง "สภาพอากาศที่เวลา t+h" ของแถว t = ค่าที่แถว t+h ของจังหวัดเดียวกัน (time-shift ธรรมดา ไม่ต้องดึงข้อมูลใหม่)
-oracle variant: แทนที่ 7 คอลัมน์สภาพอากาศด้วยค่า ณ t+h ทั้งตอนเทรนและตอนประเมิน (fit ใหม่ต่อ horizon เหมือน baseline)
-ใช้ hyperparameter ที่จูนแล้ว (BEST, เดียวกับ scripts/validate_feature_refinements.py) ไม่ retune เพื่อแยกผลของ feature ล้วนๆ
-
-เกณฑ์ตัดสิน (ตั้งก่อนรัน): บน calib, oracle ต้องลด MAE เฉลี่ยที่ h in {18,24} >= 2% เทียบ baseline ทั้ง LGB และ XGB พร้อมกัน
-จึงไปยืนยันบน test (เกณฑ์เดียวกัน ไม่ผ่อน) ไม่ผ่าน calib -> หยุดที่ calib รายงานผลลบตามจริง ไม่แตะ test
+วัดบน calib: oracle ต้องลด MAE เฉลี่ยที่ h in {18,24} >= 2% เทียบ baseline ทั้ง LGB และ XGB พร้อมกัน จึงไปยืนยันบน test
 รัน: python scripts/experiment_weather_horizon_oracle.py
 """
 import importlib.util
@@ -31,7 +24,7 @@ BURNING_MONTHS = {2, 3, 4}
 WEATHER_COLS = ["temp", "humidity", "wind_speed", "precipitation", "wind_dir_sin", "wind_dir_cos", "pressure"]
 PASS_THRESHOLD_PCT = 2.0  # ลด MAE เฉลี่ยที่ LONG_HORIZONS อย่างน้อยเท่านี้ % ทั้ง 2 โมเดล
 
-BEST = {  # เดียวกับ scripts/validate_feature_refinements.py (hyperparameter ที่จูนแล้วของโมเดล production)
+BEST = {  # hyperparameter ที่จูนแล้ว (เดียวกับ scripts/validate_feature_refinements.py)
     "lgb": {"learning_rate": 0.05, "num_leaves": 63, "min_child_samples": 50, "reg_lambda": 1.0, "n_estimators": 400},
     "xgb": {"learning_rate": 0.03, "max_depth": 8, "min_child_weight": 20, "reg_lambda": 10.0, "n_estimators": 800},
 }

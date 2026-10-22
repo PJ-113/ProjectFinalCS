@@ -1,18 +1,13 @@
 """
-Phase 1 (แผนขยาย 17+3 จังหวัด): สร้าง raw feature dataset หลายจังหวัด ต่อยอดจาก pattern
-เดิมของ scripts/build_raw_dataset.py (สถานีเดียวขอนแก่น) แต่วนลูปทุกสถานีใน
-data/province_station_registry.json (ต้องรัน scripts/province_registry.py ก่อน)
+สร้าง raw feature dataset หลายจังหวัด: วนลูปทุกสถานีใน data/province_station_registry.json
 
-Pipeline ต่อจังหวัด (เหมือนเดิมทุกจุด แค่ทำซ้ำต่อสถานี):
-1. ดึง pm25 รายชั่วโมงจาก OpenAQ v3 /v3/sensors/{id}/measurements ตรงๆ (ไม่ใช้ cache เดิม
-   เพราะเป็นคนละสถานี) ช่วง 2024-01-01 ถึง 2026-07-02
-2. ดึง weather รายชั่วโมงจาก Open-Meteo archive API ที่ lat/lon ของสถานีจริง (ไม่ใช่จุดค้นหา)
-   รวม wind_direction_10m/surface_pressure ที่เพิ่มเข้ามาใหม่ (ของเดิมมีแค่ temp/humidity/
-   wind_speed/precipitation)
-3. gap <=48h -> interpolate, gap >48h -> mask ทิ้ง (สูตรเดียวกับสคริปต์เดิมเป๊ะ)
+Pipeline ต่อจังหวัด:
+1. ดึง pm25 รายชั่วโมงจาก OpenAQ v3 /v3/sensors/{id}/measurements ช่วง 2024-01-01 ถึง 2026-07-02
+2. ดึง weather รายชั่วโมงจาก Open-Meteo archive API ที่ lat/lon ของสถานี
+3. gap <=48h -> interpolate, gap >48h -> mask ทิ้ง
 4. คำนวณ feature แบบ vectorized: weather(4) + cyclical เวลา(5) + pm25 lag/rolling(9) +
    wind_dir_sin/cos + pressure(3) + lat/lon(2) = 23 features, target 24 horizon
-5. รวมทุกจังหวัดเป็น CSV เดียว, self-check ด้วย np.allclose แบบเดิม, log แถว/gap ต่อจังหวัด
+5. รวมทุกจังหวัดเป็น CSV เดียว, self-check, log แถว/gap ต่อจังหวัด
 """
 import functools
 import json
@@ -47,7 +42,7 @@ PM25_FEATURE_COLS = [
 ]
 ENV_FEATURE_COLS = ["wind_dir_sin", "wind_dir_cos", "pressure"]
 STATION_FEATURE_COLS = ["lat", "lon"]
-SPATIAL_FEATURE_COLS = ["pm25_neighbor_avg"]  # task F (CHANGELOG 94) — validate ก่อนแล้วว่าช่วย MAE จริง (-4.1% ถึง -4.3%)
+SPATIAL_FEATURE_COLS = ["pm25_neighbor_avg"]
 # BASE_FEATURE_COLS คำนวณได้ต่อสถานีเดี่ยวๆ (ใช้ใน build_one_station) ส่วน pm25_neighbor_avg
 # ต้องเห็นข้อมูลข้ามจังหวัดพร้อมกัน เพิ่มทีหลังตอน main() รวมทุกจังหวัดแล้วเท่านั้น
 BASE_FEATURE_COLS = WEATHER_FEATURE_COLS + TIME_FEATURE_COLS + PM25_FEATURE_COLS + ENV_FEATURE_COLS + STATION_FEATURE_COLS
@@ -60,8 +55,7 @@ assert len(FEATURE_COLS) == 24, f"expected 24 features (23 เดิม + pm25_n
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    """สูตรเดียวกับ scripts/province_registry.py:haversine_km() — คัดลอกมาแยกต่างหากตามธรรมเนียม
-    เดิมของไฟล์นี้ที่ implement feature formula ของตัวเองแบบ self-contained (ดู CLAUDE.md)"""
+    """คำนวณระยะทาง (km) ระหว่างสองจุดพิกัด lat/lon"""
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -71,9 +65,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 def add_spatial_lag_feature(combined, registry_provinces, k=K_NEAREST_NEIGHBORS):
-    """เพิ่ม pm25_neighbor_avg = ค่าเฉลี่ย pm25 (หลัง interpolate/mask แล้ว) ของ k จังหวัดที่ใกล้
-    ที่สุด ณ เวลาเดียวกัน (contemporaneous, ไม่ leak อนาคต) — ต้องทำหลัง concat ทุกจังหวัดแล้ว
-    เพราะต้องเห็นข้อมูลข้ามจังหวัดพร้อมกัน (ต่างจาก feature อื่นที่คำนวณต่อสถานีได้เลย)"""
+    """เพิ่ม pm25_neighbor_avg = ค่าเฉลี่ย pm25 ของ k จังหวัดที่ใกล้ที่สุด ณ เวลาเดียวกัน"""
     pivot = combined.pivot_table(index="datetime_utc", columns="province_en", values="pm25")
     all_provinces = pivot.columns.tolist()
 
@@ -109,9 +101,8 @@ HEADERS = {"X-API-Key": OPENAQ_KEY}
 
 
 def fetch_pm25(sensor_id, offset_hours=0):
-    """offset_hours (CHANGELOG 144-145): ป้ายเวลาของ /measurements ของบาง 9 สถานีเลื่อนไป 23 ชม. (ค่าที่ป้าย t คือค่าจริงของ t+23)
-    วัดโดย scripts/annotate_registry_timestamp_offset.py แล้วเก็บใน registry field openaq_timestamp_offset_hours — บวกเข้า datetime_utc
-    ให้ตรงเวลาจริง และดึงช่วง label เลื่อนลง offset เพื่อให้ครอบเวลาจริง [WINDOW_START, WINDOW_END] ครบ (offset=0 = พฤติกรรมเดิมทุกอย่าง)"""
+    """ดึง pm25 จาก OpenAQ แล้วแก้ offset_hours: บางสถานีป้ายเวลาของ /measurements เลื่อนไป
+    offset_hours ชม. บวกเข้า datetime_utc ให้ตรงเวลาจริง (offset=0 = พฤติกรรมเดิม)"""
     offset = pd.Timedelta(hours=offset_hours)
 
     def fetch_chunk(dt_from, dt_to):
@@ -212,7 +203,7 @@ def build_one_station(province, pm25_raw, weather):
 
     grid["pm25_filled"] = grid["pm25"].interpolate(method="linear", limit_direction="both")
     if grid["pm25_filled"].isna().any():
-        # ทั้งช่วงไม่มีข้อมูลเลยสักจุด (สถานีนี้ไม่มีข้อมูลในช่วงที่ต้องการเลย) -> คืน None ให้ caller
+        # ไม่มีข้อมูลเลยสักจุดในช่วงที่ต้องการ -> คืน None ให้ caller
         return None, n_short_gap, n_long_gap, len(grid)
 
     grid["hour"] = grid["datetime_utc"].dt.hour
@@ -270,11 +261,7 @@ def build_one_station(province, pm25_raw, weather):
 
 def self_check(df):
     """ยืนยัน feature ที่คำนวณเองตรงกับสูตร lag/rolling ที่ควรจะเป็น สุ่มเช็คสัก 1 จังหวัด
-
-    หมายเหตุ: แถวในไฟล์สุดท้ายถูกตัดทิ้งไปแล้ว (dropna แถวที่ lookback ไม่พอ/แตะ long-gap)
-    ดังนั้นแถวติดกันใน df ไม่ได้แปลว่าติดกันจริงในเวลา (อาจมี gap ที่ถูกตัดออกคั่นกลาง) ต้อง
-    กรองเฉพาะคู่แถวที่ datetime_utc ห่างกันพอดี 1 ชม.ก่อนเทียบ shift(1) ไม่งั้นจะ false-positive
-    ตรง edge ของ gap ที่ถูกตัดออก"""
+    (เทียบเฉพาะคู่แถวที่ datetime_utc ห่างกันพอดี 1 ชม.)"""
     sample_province = df["province_en"].iloc[0]
     sub = df[df["province_en"] == sample_province].sort_values("datetime_utc").reset_index(drop=True)
     if len(sub) < 30:

@@ -1,7 +1,7 @@
 """
-ดึงจุดความร้อน FIRMS (VIIRS NOAA20 SP, fallback NRT) กรอบกว้าง lon 97-108.5, lat 9.5-22 (ครอบคลุมลาว กัมพูชาเหนือ
-เมียนมาตะวันออก เวียดนามตะวันตก ไทยตอนบน) ช่วงเดียวกับ fetch_firms_hotspots_isaan.py (2024-01-02..2026-07-02)
-เพื่อทดสอบ feature ไฟข้ามพรมแดน/ต้นลม (CHANGELOG 153) ไม่พิมพ์ URL/คีย์ (ข้อความ exception ถูกกลืนใน fetch_chunk)
+ดึงจุดความร้อน FIRMS (VIIRS NOAA20 SP, fallback NRT) กรอบกว้าง lon 97-108.5, lat 9.5-22
+(ครอบคลุมลาว กัมพูชาเหนือ เมียนมาตะวันออก เวียดนามตะวันตก ไทยตอนบน) ช่วง 2024-01-02..2026-07-02
+สำหรับทดสอบ feature ไฟข้ามพรมแดน/ต้นลม
 """
 import os
 import time
@@ -17,7 +17,7 @@ TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 
 START_DATE = pd.Timestamp("2024-01-02")
 END_DATE = pd.Timestamp("2026-07-02")
-DAY_RANGE = 5  # max ต่อ request ตาม entry 122
+DAY_RANGE = 5  # max ต่อ request
 AREA = "97.0,9.5,108.5,22.0"
 SOURCE_SP = "VIIRS_NOAA20_SP"
 SOURCE_NRT = "VIIRS_NOAA20_NRT"

@@ -16,7 +16,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 import os
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(_ROOT, r"backups\predictions.db")  # sqlite เดิม ก่อน migrate ไป Postgres (ดู CHANGELOG (30))
+DB_PATH = os.path.join(_ROOT, r"backups\predictions.db")  # sqlite เดิม ก่อน migrate ไป Postgres
 STATION_ID_AIR4THAI = "46t"
 OUT_FIG = os.path.join(_ROOT, r"figures\debug_horizon11_predicted_vs_actual.png")
 TARGET_HORIZON = 11

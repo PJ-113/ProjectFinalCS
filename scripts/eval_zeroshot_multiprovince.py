@@ -1,9 +1,7 @@
 """
-Phase 2b — รายละเอียดวิธีทดลอง zero-shot transfer ดู CHANGELOG (75) ข้อ 5
-
-สคริปต์นี้ใช้ P50-only (ไม่มี quantile P05/P95 + conformal เหมือน train_multiprovince_models.py
-เพราะการทดลองนี้วัดแค่ MAE/R² ของ zero-shot transfer) แต่ยังคง residual forecasting + bagging
-(subsample/colsample) เหมือนโมเดล deploy จริง
+ทดลอง zero-shot transfer: เทรนโมเดล P50-only (residual forecasting + bagging) บน pool ที่รวม
+จังหวัด held-out (udonthani/ubonratchathani/chaiyaphum) เทียบกับ pool ที่ตัดออก แล้ววัด MAE/R²
+บน test rows ของจังหวัด held-out เดียวกันทั้งสองฝั่ง
 """
 import os
 
@@ -32,9 +30,7 @@ FEATURE_COLS = [
 
 
 def split_train_test(df, train_frac=0.65 + 0.15):
-    """เหมือน split_train_calib_test ใน train_multiprovince_models.py แต่รวม calibration เข้ากับ
-    train เป็นก้อนเดียว (การทดลองนี้ไม่ต้องใช้ calibration split) ให้ test portion (20% ท้าย)
-    ตรงกันเป๊ะกับของโมเดล deploy จริง เพราะ split ต่อจังหวัดแบบ chronological เหมือนกัน"""
+    """split ต่อจังหวัดแบบ chronological: train+calib รวมเป็นก้อนเดียว, test คือ 20% ท้าย"""
     trains, tests = [], []
     for _, g in df.groupby("province_en", sort=False):
         g = g.sort_values("datetime_utc").reset_index(drop=True)
@@ -81,10 +77,10 @@ def main():
     print(f"โหลดข้อมูล: {DATA_PATH}")
     df = pd.read_csv(DATA_PATH)
     df["datetime_utc"] = pd.to_datetime(df["datetime_utc"])
-    df = df[~df["is_zero_shot"]].reset_index(drop=True)  # ตัด 3 จังหวัด zero-shot จริงออกจาก pool เสมอ
+    df = df[~df["is_zero_shot"]].reset_index(drop=True)
 
     in_training_pool = df  # 17 จังหวัด รวม held-out
-    zero_shot_pool = df[~df["province_en"].isin(HELD_OUT)].reset_index(drop=True)  # 14 จังหวัด ไม่รวม held-out เลย
+    zero_shot_pool = df[~df["province_en"].isin(HELD_OUT)].reset_index(drop=True)  # 14 จังหวัด ไม่รวม held-out
 
     print(f"in_training_pool: {in_training_pool['province_en'].nunique()} จังหวัด, {len(in_training_pool)} แถว")
     print(f"zero_shot_pool  : {zero_shot_pool['province_en'].nunique()} จังหวัด, {len(zero_shot_pool)} แถว")
@@ -92,8 +88,7 @@ def main():
     train_in, test_in = split_train_test(in_training_pool)
     train_zs, test_zs_pool = split_train_test(zero_shot_pool)
 
-    # test rows ของ 3 จังหวัด held-out ต้องเหมือนกันทั้งสองฝั่ง (split ต่อจังหวัดแบบ chronological
-    # ไม่ขึ้นกับว่าจังหวัดอื่นถูกรวม/ตัดออก) -> ยืนยันด้วย assert ก่อนประเมินจริง
+    # ยืนยันว่า test rows ของจังหวัด held-out เหมือนกันทั้งสองฝั่งก่อนประเมินจริง
     held_out_test_in = test_in[test_in["province_en"].isin(HELD_OUT)].reset_index(drop=True)
     held_out_only = df[df["province_en"].isin(HELD_OUT)].reset_index(drop=True)
     _, held_out_test_direct = split_train_test(held_out_only)

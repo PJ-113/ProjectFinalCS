@@ -1,31 +1,15 @@
 """
-Backtest Dynamic Routing (select_model() ตัวจริงจาก app.py) แบบ online ทีละชั่วโมงตามลำดับเวลา
-บน held-out test set ของโมเดล v3 (_20260919_203455) — ไม่ใช่ oracle-hindsight เหมือน
-scripts/eval_ensemble_vs_routing_clean.py (ที่ oracle_routing รู้ผล MAE จริงของทั้ง 2 โมเดลก่อน
-เลือก) สคริปต์นี้จำลองแบบ partial-feedback ให้ตรงกับของจริง: prediction_log เก็บแค่ผลของโมเดลที่
-ถูกเลือกในแต่ละครั้งเท่านั้น ไม่ใช่ log ทั้ง lgb และ xgb ทุกครั้ง ดังนั้น rolling R2 (fetch_rolling_
-r2_lookup ใน app.py) ของโมเดลที่ไม่ถูกเลือกที่ (province, horizon) นั้นจะไม่ได้รับข้อมูลใหม่ในรอบ
-นั้น — นี่คือเหตุผลที่มี EXPLORATION_RATE (epsilon-greedy) ในโค้ดจริง ผลลัพธ์ของ Dynamic Routing
-ตัวจริงจึงควรอยู่ระหว่าง lgb_only/xgb_only กับ oracle_routing (ไม่เท่ากับ oracle_routing)
+Backtest Dynamic Routing (select_model() จาก app.py) แบบ online ทีละชั่วโมงตามลำดับเวลา บน
+held-out test set ของโมเดล v3 จำลองแบบ partial-feedback: prediction_log เก็บผลเฉพาะโมเดลที่ถูก
+เลือกในแต่ละครั้ง ไม่ใช่ log ทั้ง lgb และ xgb ทุกครั้ง
 
-วิธีจำลอง (ต่อจังหวัด, เดินเวลาไปข้างหน้าทีละ anchor time t เรียงตามจริง):
-  1. ที่เวลา t ก่อนตัดสินใจ: resolve prediction เก่าที่ target_time <= t เข้า rolling window
-     (maxlen=24) ของ (model ที่เคยถูกเลือกตอนนั้น, horizon) นั้น — เหมือน backfill_actuals()
-  2. คำนวณ r2_lookup จาก rolling window ปัจจุบัน (ต้อง >=5 คู่ ถึงเชื่อถือได้ เหมือน
-     fetch_rolling_r2_lookup()) แล้วเรียก app.select_model() ของจริงตรงๆ (import ผ่าน importlib
-     แบบเดียวกับ scripts/test_dynamic_routing.py กัน logic drift ถ้า select_model() ถูกแก้ในอนาคต)
-  3. บันทึก prediction ของโมเดลที่ถูกเลือกไว้ resolve ที่ t+h ชั่วโมง (ยังไม่เปิดเผย actual ให้ router
-     จนกว่าจะถึงเวลานั้นตามลำดับการจำลอง)
+ต่อจังหวัด เดินเวลาไปข้างหน้าทีละ anchor time t:
+  1. resolve prediction เก่าที่ target_time <= t เข้า rolling window (maxlen=24) ของ (model, horizon)
+  2. คำนวณ r2_lookup จาก rolling window ปัจจุบัน แล้วเรียก app.select_model() ของจริง
+  3. บันทึก prediction ของโมเดลที่ถูกเลือกไว้ resolve ที่ t+h ชั่วโมง
 
-ข้อจำกัดสำคัญที่ต้องอ่านคู่กับผลลัพธ์เสมอ:
-- dataset offline (multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv)
-  ไม่มี NaN ใน FEATURE_COLS อยู่แล้ว (คัดออกตอนสร้าง dataset) และไม่มีแนวคิด "neighbor freshness"
-  แบบ live fetch ในไฟล์ static ดังนั้น naive_fallback แทบไม่มีทาง trigger ในการจำลองนี้ — ไม่ครอบคลุม
-  เส้นทาง circuit-breaker/naive fallback ซึ่งวัดได้จาก live เท่านั้น (evaluate_live_v2_vs_persistence.py)
-- select_model() สุ่ม (cold-start + epsilon-greedy) จึงรันซ้ำ 3 seed รายงานเฉลี่ย ± ส่วนเบี่ยงเบน
-  มาตรฐาน ตามธรรมเนียม multi-seed ของโปรเจกต์
-
-รัน: python scripts/backtest_dynamic_routing_offline.py   (ไม่แก้ DB/ไม่แก้ app.py ใช้เวลาไม่กี่นาที)
+รันซ้ำ 3 seed (select_model() มีการสุ่มจาก cold-start/epsilon-greedy) รายงานเฉลี่ย ± ส่วนเบี่ยงเบน
+มาตรฐาน วัด MAE/R2 เทียบ lgb_only/xgb_only/oracle_routing/persistence ต่อ horizon และต่อจังหวัด
 """
 import heapq
 import importlib.util
@@ -42,9 +26,7 @@ TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 SEEDS = [0, 1, 2]
 REPORT_HORIZONS = [1, 6, 12, 18, 24]
 ROLLING_N = 24
-# ไม่มี default ตายตัว — ต้องตรงกับ app.MIN_R2_PAIRS เสมอ (set ใน main() หลังโหลด app.py จริง)
-# เคยพลาดมาก่อน: ไฟล์นี้คำนวณ rolling R2 เองจากข้อมูลจำลอง (ไม่ query DB) จึงมีค่าซ้ำแยกจาก
-# app.py ถ้าไม่ sync กัน backtest จะไม่ได้สะท้อนพฤติกรรมจริงของ select_model()
+# ต้องตรงกับ app.MIN_R2_PAIRS (set ใน main() หลังโหลด app.py จริง)
 MIN_PAIRS = None
 
 
@@ -64,7 +46,7 @@ def load_app():
 
 def build_merged_predictions(ens_mod, bt_mod, df_test_all):
     """p50 ของ lgb/xgb (ดิบ ไม่ conformal) + actual + pm25 (persistence "ตอนนี้") ต่อ (province,
-    anchor time, horizon) — ไม่ retrain ใหม่ ใช้ pkl ที่ deploy จริงตรงๆ"""
+    anchor time, horizon)"""
     pkgs = {tag: bt_mod.load_model_pkg(tag) for tag in ("lgb", "xgb")}
     preds = {tag: ens_mod.predict_raw_quantiles(pkgs[tag], df_test_all, pkgs[tag]["feature_cols"])
              for tag in ("lgb", "xgb")}
@@ -90,12 +72,9 @@ def simulate_province(province, df_prov, app, model_lgb, model_xgb, model_naive,
 
     windows = {}   # (model, horizon) -> list [(pred, actual), ...] maxlen=ROLLING_N
     pending = []   # heap of (resolve_time, horizon, model, pred, actual)
-    dummy_row = pd.DataFrame([{c: 0.0 for c in app.FEATURE_COLS}])  # no NaN -> circuit breaker never fires (matches this offline dataset's reality)
+    dummy_row = pd.DataFrame([{c: 0.0 for c in app.FEATURE_COLS}])  # no NaN -> circuit breaker never fires
 
-    # r2_cache ถูก resolve ใหม่เฉพาะคู่ (model, horizon) ที่เพิ่งมีการเฉลยผลเข้ามาในรอบนี้เท่านั้น
-    # (เดิมเรียก rolling_r2()/r2_score() ซ้ำทุก horizon ที่มีอยู่ทุกจุดเวลา แม้ window จะไม่เปลี่ยน —
-    # ช้ามากเพราะ r2_score() ถูกเรียกหลักล้านครั้งโดยไม่จำเป็น ค่าที่ cache ไว้ตรงกับการคำนวณใหม่ทุก
-    # ครั้งเป๊ะ เพราะ rolling_r2() เป็น pure function ของ window ปัจจุบันเท่านั้น)
+    # r2_cache: resolve ใหม่เฉพาะคู่ (model, horizon) ที่เพิ่งมีผลเข้ามาในรอบนี้
     r2_cache = {}
     out = []
     for t in anchor_times:
@@ -172,7 +151,7 @@ def compute_by_province(sim_df, model_lgb, model_xgb, model_naive):
 
 def compute_by_horizon(sim_df, merged, model_lgb, model_xgb):
     """เฉลี่ยทุกจังหวัดรวมกัน ต่อ horizon ตัวแทน — เทียบ Dynamic Routing (จากการจำลอง) กับ
-    lgb_only/xgb_only/oracle_routing (คำนวณสดจาก merged เดียวกัน ไม่ง้อไฟล์ eval เก่า)"""
+    lgb_only/xgb_only/oracle_routing"""
     rows = []
     for h in REPORT_HORIZONS:
         sim_h = sim_df[sim_df["horizon"] == h]
@@ -181,7 +160,7 @@ def compute_by_horizon(sim_df, merged, model_lgb, model_xgb):
         pool_h = merged[merged["horizon"] == h]
         lgb_mae = (pool_h["p50_lgb"] - pool_h["actual"]).abs().mean()
         xgb_mae = (pool_h["p50_xgb"] - pool_h["actual"]).abs().mean()
-        oracle_mae = min(lgb_mae, xgb_mae)  # perfect-hindsight per-horizon upper bound (เหมือน eval_ensemble_vs_routing_clean.py)
+        oracle_mae = min(lgb_mae, xgb_mae)  # perfect-hindsight per-horizon upper bound
         persist_mae = (pool_h["pm25"] - pool_h["actual"]).abs().mean()
 
         rows.append({
@@ -200,8 +179,7 @@ def main():
 
     print(f"โหลดข้อมูล: {train_mod.DATA_PATH}")
     df = pd.read_csv(train_mod.DATA_PATH)
-    # normalize เป็น tz-naive ให้แน่นอน (บาง path ของ pandas คืน datetime64[us] เฉยๆ บาง path คืน
-    # datetime64[us, UTC] แล้วแต่ว่าค่าดิบใน CSV มี offset ติดมาหรือไม่ — ถ้าปล่อยไว้จะ merge ไม่ได้)
+    # normalize เป็น tz-naive ให้แน่นอน
     df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True).dt.tz_localize(None)
 
     df_trained = df[~df["is_zero_shot"]].reset_index(drop=True)

@@ -1,9 +1,6 @@
 """
-เปรียบเทียบโมเดล v3 (_20260919_203455) กับ persistence (=ค่า pm25 ณ เวลาพยากรณ์ คงที่ทุก horizon)
-บนชุด test set จริง (chronological holdout, ไม่ใช่ live 2 วัน) แบ่งผลตาม horizon bucket / ฤดู / severity
-เพื่อตอบคำถาม "โมเดลดีกว่า persistence แค่ไหนในแต่ละส่วน" อย่างครบและมีนัยสำคัญทางสถิติ (n ใหญ่)
-
-reuse โครงจาก analyze_burning_season_backtest_clean.py (โหลดโมเดล, split, predict_all_horizons)
+เปรียบเทียบโมเดล v3 กับ persistence (ค่า pm25 ณ เวลาพยากรณ์ คงที่ทุก horizon) บนชุด test set จริง
+(chronological holdout) วัด MAE แยกตาม horizon bucket / ฤดู / severity ของค่าจริง
 """
 import importlib.util
 import os

@@ -1,18 +1,7 @@
 """
-แปลงข้อมูล FIRMS hotspot events (จาก scripts/fetch_firms_hotspots_isaan.py, entry 123) เป็น
-feature ต่อจังหวัด/ต่อชั่วโมง: จำนวนจุดความร้อนในรัศมี RADIUS_KM ย้อนหลัง WINDOW_HOURS ชั่วโมง —
-ยังไม่ merge เข้า pipeline หลัก (build_raw_dataset_multiprovince.py) เพราะยังอยู่ขั้น validate
-แค่สร้างไฟล์ทดสอบแยกไว้ก่อนตามธรรมเนียมโปรเจกต์ (เทียบ scripts/augment_raw_dataset_with_spatial_lag.py
-ที่ทำแบบเดียวกันตอน validate spatial-lag feature ครั้งแรก, CHANGELOG 94)
-
-RADIUS_KM=100 (ไกลกว่า 3km ที่ใช้กับ amenity_density มาก เพราะควันจากการเผาไร่ลอยไปได้ไกลกว่า
-สิ่งปลูกสร้างเยอะ) WINDOW_HOURS=24 (ค่าเริ่มต้น เผื่อไว้ทดสอบ 48h เพิ่มถ้า 24h ไม่พอ) — ทั้งสองค่า
-เป็น hyperparameter ที่ validate_fire_hotspot_feature.py จะทดสอบเทียบกันต่อ
-
-วิธีคำนวณให้เร็ว (ข้อมูล hotspot อาจมีหลักแสนแถว x training row หลักแสนแถว ทำ nested loop ตรงๆ
-ไม่ไหว): กรองด้วย haversine แบบ vectorized เอาเฉพาะ hotspot ในรัศมีของแต่ละจังหวัดก่อน (ทำครั้ง
-เดียวต่อจังหวัด) แล้วใช้ np.searchsorted บน timestamp ที่ sort แล้วนับจำนวนในหน้าต่างเวลาแบบ
-binary search (O(log n) ต่อแถว แทนที่จะวนลูปตรงๆ)
+แปลงข้อมูล FIRMS hotspot events เป็น feature ต่อจังหวัด/ต่อชั่วโมง: จำนวนจุดความร้อนในรัศมี
+RADIUS_KM (=100 กม.) ย้อนหลัง WINDOW_HOURS (=24 ชม.) คำนวณด้วย haversine แบบ vectorized
+กรองหอตสปอตในรัศมีต่อจังหวัดก่อน แล้วนับช่วงเวลาด้วย np.searchsorted (binary search)
 """
 import glob
 import json
@@ -59,7 +48,7 @@ def compute_counts_for_province(province_lat, province_lon, hotspot_lat, hotspot
     return (idx_hi - idx_lo).astype(int), len(nearby_dt)
 
 
-# override ได้จากภายนอก (scripts/rebuild_dataset_clean.py ส่ง dataset ที่แก้ป้ายเวลาแล้วเข้ามา)
+# override ได้จากภายนอก
 K1_DATA_PATH = os.path.join(DATA_DIR, "multiprovince_pm25_features_raw_spatial_k1_20260917_001104.csv")
 OUT_PATH = os.path.join(DATA_DIR, f"multiprovince_pm25_features_raw_spatial_k1_with_firehotspot_{TIMESTAMP}.csv")
 

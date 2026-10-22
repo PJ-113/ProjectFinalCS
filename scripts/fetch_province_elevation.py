@@ -1,13 +1,6 @@
 """
-ดึงความสูงจากระดับน้ำทะเล (elevation) ของแต่ละจังหวัดเข้า data/province_station_registry.json
-— ตอบ feedback อาจารย์เรื่องภูมิประเทศ (ภาคอีสานที่สูง อาจมีผลต่อ pattern ของ PM2.5)
-
-ใช้ Open-Meteo Elevation API (https://open-meteo.com/en/docs/elevation-api) — ฟรี ไม่ต้อง API key
-สำหรับการใช้งานที่ไม่ใช่เชิงพาณิชย์ รับได้สูงสุด 100 พิกัดต่อ 1 request (comma-separated) จึงดึงครบ
-ทั้ง 20 จังหวัดได้ในการเรียกครั้งเดียว ข้อมูลจาก Copernicus DEM 2021 (ความละเอียด 90m)
-
-เขียน elevation_m กลับเข้า registry JSON เดิม in-place (ไฟล์นี้เป็น reference/config ไม่ใช่
-model/data output — province_registry.py เองก็ overwrite ไฟล์นี้เวลารันใหม่อยู่แล้ว)
+ดึงความสูงจากระดับน้ำทะเล (elevation) ของแต่ละจังหวัดผ่าน Open-Meteo Elevation API (Copernicus DEM 2021)
+เขียน elevation_m กลับเข้า data/province_station_registry.json
 """
 import json
 import os

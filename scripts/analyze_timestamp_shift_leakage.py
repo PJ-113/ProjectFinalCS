@@ -1,15 +1,11 @@
 """
-CHANGELOG 144 — 9 สถานีมีป้ายเวลาของ OpenAQ /measurements เลื่อน +23 ชม. (ดู check_openaq_timestamp_shift.py) ค่าที่ป้าย t คือค่าจริงของ t+23
-ผลที่ต้องวัด: จังหวัด "ปกติ" ที่เพื่อนบ้านอันดับ 1 เป็นสถานีเลื่อน -> pm25_neighbor_avg / nb_trend_12h ในแถวเทรน ณ เวลา t มี "ข้อมูลอนาคต 23 ชม." รั่วเข้าไป
-(ซึ่ง live ไม่มี) ทำให้ประโยชน์ของ feature จังหวัดข้างเคียงที่รายงานไว้ (CHANGELOG 94-110, 133-137) อาจถูกประเมินสูงเกินจริง โดยเฉพาะ horizon ไกล
-
-การทดลอง (แยกผลกระทบให้สะอาด): เทรน/ทดสอบเฉพาะจังหวัดที่ป้ายเวลาของตัวเองถูกต้อง (9 จังหวัดปกติที่เทรนได้) — target/lag ของจังหวัดเหล่านี้ตรงความจริง
-  A = feature เพื่อนบ้านตามที่เทรนจริง (มีรั่วสำหรับจังหวัดที่เพื่อนบ้านเป็นสถานีเลื่อน)
-  B = feature เพื่อนบ้านที่แก้ป้ายเวลาแล้ว (ซีรีส์สถานีเลื่อนถูกเลื่อน +23 ชม. ให้ตรงความจริง -> ไม่มีรั่ว, สูตรเดิมทุกอย่าง)
+วัดผลของ OpenAQ timestamp leak (9 สถานีมีป้ายเวลาเลื่อน +23 ชม.) ต่อ neighbour feature
+(pm25_neighbor_avg / nb_trend_12h): เทรน/ทดสอบ 4 variant บนจังหวัดที่ป้ายเวลาของตัวเองถูกต้อง
+  A = feature เพื่อนบ้านตามที่เทรนจริง (มีรั่วถ้าเพื่อนบ้านเป็นสถานีเลื่อน)
+  B = feature เพื่อนบ้านที่แก้ป้ายเวลาแล้ว (ไม่มีรั่ว)
   C = ไม่ใช้ feature เพื่อนบ้านเลย
-  D = เทรนแบบ A (มีรั่ว) แต่ตอนใช้งานจริงป้อน feature แบบ B (ไม่รั่ว) = สถานการณ์ live ของโมเดลที่ deploy (เทียบ C: ถ้า D แย่กว่า C แปลว่าโมเดลที่ deploy แย่กว่าไม่มี neighbor เลย)
-วัด MAE (P50, hyperparameter จูนแล้ว, 5 horizon) บน test แยก "จังหวัดที่เพื่อนบ้านเป็นสถานีเลื่อน (เสี่ยงรั่ว)" กับ "ไม่เสี่ยง"
-ถ้า A ดีกว่า B มากเฉพาะกลุ่มเสี่ยงและ horizon ไกล = หลักฐานว่าส่วนหนึ่งของผลเดิมมาจากการรั่ว
+  D = เทรนแบบ A แต่ใช้งานจริงด้วย feature แบบ B (สถานการณ์ live ของโมเดลที่ deploy)
+วัด MAE (P50, 5 horizon) บน test แยก "จังหวัดที่เพื่อนบ้านเป็นสถานีเลื่อน" กับ "ไม่เสี่ยง"
 """
 import importlib.util
 import json
@@ -57,7 +53,7 @@ def main():
     reg = {q["province_en"]: q for q in json.load(open(os.path.join(_ROOT, "data", "province_station_registry.json"), encoding="utf-8"))["provinces"]}
     nearest = {a: min((b for b in reg if b != a), key=lambda b: hav(a, b, reg)) for a in reg}
 
-    # ซีรีส์ pm25 รายชั่วโมงของทุกจังหวัด (ป้ายเวลาตามที่เทรน) และฉบับแก้ป้ายเวลา (สถานีเลื่อน: ค่าที่ป้าย t เป็นของ t+23 -> ค่าจริง ณ t = ค่าที่ป้าย t-23)
+    # ซีรีส์ pm25 รายชั่วโมงของทุกจังหวัด (ป้ายเวลาตามที่เทรน) และฉบับแก้ป้ายเวลา (สถานีเลื่อน: shift -23h)
     pv = df.pivot_table(index="datetime_utc", columns="province_en", values="pm25")
     pv = pv.reindex(pd.date_range(pv.index.min(), pv.index.max(), freq="h", tz="UTC"))
     pv_corr = pv.copy()
@@ -65,7 +61,7 @@ def main():
         if p in pv_corr:
             pv_corr[p] = pv[p].shift(SHIFT_H)
 
-    d = df[(~df["is_zero_shot"]) & (~df["province_en"].isin(SHIFTED))].copy()   # 9 จังหวัดที่ป้ายเวลาของตัวเองถูกต้อง
+    d = df[(~df["is_zero_shot"]) & (~df["province_en"].isin(SHIFTED))].copy()   # จังหวัดที่ป้ายเวลาของตัวเองถูกต้อง
     print("จังหวัดที่ใช้ (ป้ายเวลาถูกต้อง):", sorted(d["province_en"].unique()))
     exposed = {p for p in d["province_en"].unique() if nearest[p] in SHIFTED}
     print("เสี่ยงรั่ว (เพื่อนบ้านอันดับ 1 เป็นสถานีเลื่อน):", {p: nearest[p] for p in sorted(exposed)})
@@ -102,7 +98,7 @@ def main():
                 pred = m.predict(te[feats]) + te["pm25"].values
                 preds = [(vname, pred)]
                 if vname.startswith("A"):
-                    # D: โมเดลที่เทรนด้วย A (มีรั่ว) แต่ตอนใช้งานจริง feature เพื่อนบ้านไม่รั่ว (= ฉบับแก้ป้ายเวลา) -> สถานการณ์ live ของโมเดลที่ deploy
+                    # variant D: เทรนแบบ A แต่ใช้งานจริงด้วย feature แบบ B
                     te_live = te[feats].copy()
                     te_live["pm25_neighbor_avg"], te_live["nb_trend_12h"] = te["nb_avg_corr"].values, te["nb_trend_corr"].values
                     preds.append(("D: เทรนแบบ A แต่ใช้จริงแบบ B (live)", m.predict(te_live) + te["pm25"].values))

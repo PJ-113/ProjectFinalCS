@@ -1,20 +1,10 @@
 """
-ตรวจว่าโมเดล v2 ที่ deploy แล้ว (CHANGELOG 141) "ทำงานถูกต้องบนข้อมูลสด" ไหม โดยเทียบกับ persistence (พยากรณ์ = ค่าปัจจุบันตอนพยากรณ์)
-จากแถวจริงใน prediction_log ที่ได้ค่าจริงมาเติมแล้ว (actual_pm25 ไม่ NULL) — ไม่ต้องมีโมเดลรุ่นเก่า ไม่แก้ app.py/ตาราง อ่านอย่างเดียว
+เทียบโมเดลที่ deploy อยู่บนข้อมูลสด กับ persistence (พยากรณ์ = ค่าปัจจุบันตอนพยากรณ์) โดยอ่าน
+matched pairs จาก prediction_log/notification_log ที่มี actual_pm25 แล้ว (อ่านอย่างเดียว)
+วัด MAE/bias/coverage ต่อช่วง horizon, ต่อโมเดล, ต่อจังหวัด ที่ horizon 12-24 ชม.
 
-ค่า persistence ของแต่ละแถว = latest_pm25 ใน notification_log ที่ recorded_at_utc = predicted_at_utc (จังหวัดเดียวกัน)
-คือค่าที่โมเดลใช้เป็น "ตอนนี้" ตอนบวกกลับ residual — เปรียบเทียบบนชุดแถวเดียวกันเป๊ะ (matched pairs)
-
-เกณฑ์ตัดสิน (ตั้งไว้ก่อนดูผล): ที่ horizon 12-24 ชม. รวมทุกจังหวัด
-  - คู่ที่จับคู่ได้ < MIN_PAIRS_FAR                      -> "ข้อมูลยังไม่พอ" (ยังตัดสินไม่ได้)
-  - MAE ของ v2 ต่ำกว่า persistence >= IMPROVE_PASS (10%) -> PASS
-  - ต่ำกว่า persistence แต่ < 10%                        -> WARN
-  - MAE ของ v2 สูงกว่า persistence                       -> FAIL (สงสัยปัญหาของ pipeline ข้อมูลสด ไม่ใช่ตัวโมเดล)
-เหตุที่ใช้ horizon ไกล: ที่ t+1 ค่าแทบไม่เปลี่ยนจึงทุกวิธีเท่ากันเกือบหมด ใช้ตัดสินไม่ได้
-ข้อควรระวัง: ตัวเลขนี้ตอบว่า "ระบบสดไม่เพี้ยน" ไม่ได้ตอบว่า "ดีกว่ารุ่นเก่า" (อันนั้นดู CHANGELOG 137) และถ้าช่วงข้อมูลยังเป็น
-ฤดูฝุ่นต่ำ MAE ของทุกวิธีจะต่ำหมด ยังไม่ทดสอบความแม่นตอนฝุ่นสูง
-
-รัน: python scripts/evaluate_live_v2_vs_persistence.py   (ไม่พิมพ์รหัสผ่านฐานข้อมูล)
+เกณฑ์ตัดสิน: n < MIN_PAIRS_FAR -> "ข้อมูลยังไม่พอ"; improve_pct >= IMPROVE_PASS (10%) -> PASS;
+improve_pct > 0 แต่ < 10% -> WARN; improve_pct <= 0 -> FAIL
 """
 import os
 
@@ -23,7 +13,7 @@ import pandas as pd
 import psycopg2
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SINCE_UTC = "2026-09-19"  # วันที่ deploy v3 (CHANGELOG 150) — กรองเฉพาะแถว *_v3; แถว *_v2 ปนเปื้อน ห้ามนำมาประเมิน
+SINCE_UTC = "2026-09-19"  # วันที่ deploy v3 — กรองเฉพาะแถว *_v3
 MIN_PAIRS_FAR = 300
 IMPROVE_PASS = 0.10
 FAR_HORIZONS = (12, 24)
@@ -80,8 +70,7 @@ def summarize(sub):
 
 
 def evaluate(df):
-    """df: แถวจาก fetch_rows() -> dict(matched, pending, no_persistence, by_bucket, by_model_far, by_province_far, verdict, verdict_detail)
-    (ฟังก์ชันบริสุทธิ์ ไม่แตะ DB — มี scripts/test_evaluate_live_v2_vs_persistence.py ทดสอบ)"""
+    """df: แถวจาก fetch_rows() -> dict(matched, pending, no_persistence, by_bucket, by_model_far, by_province_far, verdict, verdict_detail)"""
     pending = int(df["actual_pm25"].isna().sum())
     with_actual = df[df["actual_pm25"].notna()]
     no_persistence = int(with_actual["latest_pm25"].isna().sum())

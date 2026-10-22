@@ -2,24 +2,14 @@
 ทดสอบ end-to-end การผูก risk_group เข้ากับ NLG รายวันและ alert threshold
 
 ครอบคลุม:
-  - Threshold: effective_threshold_for() ลด threshold ให้กลุ่มเปราะบางถูกต้องตาม
-    RISK_GROUP_THRESHOLD_OFFSET และ get_forecast(risk_group) ใช้ค่านี้จริงตอนคำนวณ risk_horizons/
-    high_pollution_risk
-  - NLG: _build_daily_nlg_prompt() ใส่โทนที่ถูกต้องตาม risk_group จริง (ตรวจจาก prompt ที่ส่งเข้า
-    _call_gemini ไม่ใช่ข้อความตอบกลับ เพราะข้อความจริงจาก Gemini ไม่ deterministic พอจะ assert ได้)
-    รวมถึง daily_nlg_log คีย์ composite (date_thai, risk_group) แยกกันจริงต่อกลุ่ม (สูงสุด 3
-    เรียก Gemini/วัน ไม่ใช่ 24 แบบที่เคย deferred ไว้)
+  - effective_threshold_for() ลด threshold ให้กลุ่มเปราะบางตาม RISK_GROUP_THRESHOLD_OFFSET
+    และ get_forecast(risk_group) ใช้ค่านี้จริงตอนคำนวณ risk_horizons/high_pollution_risk
+  - _build_daily_nlg_prompt() ใส่โทนที่ถูกต้องตาม risk_group (ตรวจจาก prompt ที่ส่งเข้า
+    _call_gemini) และ daily_nlg_log แยกคีย์ composite (date_thai, risk_group) ต่อกลุ่มจริง
   - Guest (ไม่ login) = "ทั่วไป" เสมอ ทั้งฝั่ง get_forecast() default arg และฝั่ง /api/forecast จริง
-    ผ่าน session (ไม่บังคับ login)
 
-Gemini/เวลาถูก mock (เหมือน test_daily_nlg.py) กันเรียกจริงซ้ำหลายครั้ง/รัน และกัน daily_nlg_log
-ชนข้อมูลจริง — ใช้ date_thai ปี 2199 (marker เดียวกับ test_daily_nlg.py) ผู้ใช้ทดสอบใช้ email ลงท้าย
-@test-marker.invalid (marker เดียวกับ test_auth_routes.py) ลบทิ้งทั้งก่อน/หลังใน finally
-
-หมายเหตุ: STEP B/D เรียก get_forecast()/​/api/forecast จริง (ไม่ mock fetch_recent_pm25/
-fetch_current_weather) ตาม convention เดิมของโปรเจกต์ที่ไม่ mock external boundary — ใช้ข้อมูลสดจริง
-ดังนั้น risk_horizons อาจว่างเปล่าทั้ง 3 กลุ่มได้ถ้าสภาพอากาศตอนรันสะอาดมาก (ไม่ใช่บั๊ก) — ความถูกต้อง
-ของกลไก threshold offset เองถูกพิสูจน์แบบ structural/unit ใน STEP A แยกต่างหาก ไม่ต้องพึ่งข้อมูลสด
+Gemini/เวลาถูก mock เขียนแถวทดสอบลง daily_nlg_log ด้วย date_thai ปี 2199 และผู้ใช้ทดสอบด้วย
+email ลงท้าย @test-marker.invalid แล้วลบทิ้งทั้งก่อน/หลังใน finally
 """
 import importlib.util
 import sys

@@ -1,8 +1,6 @@
 """
-ตรวจต่อจาก tune_quantile_heads_pooled.py: variant "regularize" ให้ coverage สูงขึ้นแต่ช่วงกว้างขึ้น 10-15% —
-เป็นการ "ปรับปรุงจริง" หรือแค่ทำช่วงกว้างขึ้น? เทียบที่ความกว้างเท่ากัน: ขยายช่วงของ base (บวก q_hat เพิ่ม)
-ให้กว้างเท่า variant แล้วดู coverage; และวัด Winkler interval score (ยิ่งต่ำยิ่งดี, ให้รางวัลช่วงแคบและโทษเมื่อพลาด)
-calibA คำนวณ q_hat, calibB วัด (ไม่แตะ test); horizon [1,12,24]
+เทียบ quantile-head variant ต่างๆ ที่ความกว้างช่วงเท่ากัน (ขยาย base ด้วย q_hat เพิ่ม) วัด coverage
+และ Winkler interval score; calibA คำนวณ q_hat, calibB วัดผล (ไม่แตะ test); horizon [1,12,24]
 """
 import importlib.util
 import os

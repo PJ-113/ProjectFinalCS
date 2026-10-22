@@ -1,19 +1,10 @@
 """
-Track A ของการทดลอง Data Imputation (คอมเมนต์กรรมการข้อ 4) — "ค่าที่เติมแม่นแค่ไหน"
-
-ซ่อนค่าที่ "วัดได้จริง" (จาก data/raw_pm25_isaan_*.csv ที่ไม่เคย interpolate) แล้วเติมด้วยวิธีต่างตระกูล เทียบกับค่าจริง
-สองสถานการณ์:
-  interior : ช่องว่างยาว L ชม. ที่รู้ค่าทั้งสองข้าง (L = 1,2,3,6,12,24,48)  — วิธี M0 LOCF, M1 linear (ที่ใช้อยู่), M2 PCHIP,
-             M3i diurnal-anomaly interp, M4i neighbor-informed interp, M5i ridge, M6i KNN, M7i MICE(IterativeImputer)
-  trailing : สถานีเงียบ j ชม. หลังค่าจริงล่าสุด รู้แค่ฝั่งซ้าย (j = 1,2,3,6,12,24,48) = กรณี live ที่ต้องเลือกระหว่างเติมกับ fallback
-             วิธี M0 Persistence/LOCF, M3 diurnal-anomaly, M4 spatial IDW-delta, M5 ridge, M6 KNN, M7 MICE, M8 model-based
-             (โมเดลหลัก v3 จากจุดสังเกตล่าสุด, j<=24), M9 ผสม (NNLS ต่อช่วง j)
-กฎกันรั่ว: วิธีที่ต้องเรียนรู้ fit บน train 65% ของ "17 จังหวัดที่เทรน" เท่านั้น (จึงทดสอบ zero-shot ของ 3 จังหวัดที่เหลือด้วย)
-จูนพารามิเตอร์บน calib 15% ประเมินบน test 20% ครั้งเดียว (split ตามเวลาต่อจังหวัดจาก train_multiprovince_models.split_train_calib_test)
-ข้อมูลจังหวัดข้างเคียงใช้ "ค่าที่วัดได้จริง ณ เวลานั้น" ไม่ interpolate ข้ามอนาคต; ไม่มีข้างเคียงที่ใช้ได้ -> ตกไป M3 (เรียงลำดับตายตัว)
-ไฟล์นี้ยังเป็นโมดูลให้ experiment_imputation_downstream.py / test_imputation_methods.py โหลดผ่าน importlib (ฟังก์ชัน load_panels,
-make_feats, fit_trailing, impute_trailing ...)
-รัน: python scripts/experiment_imputation_accuracy.py [--quick]   (--quick = ตัวอย่างน้อยลง สำหรับ smoke test เท่านั้น)
+วัดความแม่นยำของวิธีเติมค่า PM2.5 ที่ขาดหาย เทียบกับค่าจริงที่วัดได้ (data/raw_pm25_isaan_*.csv)
+สองสถานการณ์: interior (ช่องว่างรู้ค่าทั้งสองข้าง, L=1..48 ชม.) และ trailing (สถานีเงียบ รู้แค่ฝั่งซ้าย, j=1..48 ชม.)
+เทียบหลายวิธี: LOCF, linear, PCHIP, diurnal-anomaly, spatial IDW, ridge, KNN, MICE, model-based, blend (NNLS)
+fit บน train, จูนพารามิเตอร์บน calib, ประเมินบน test (split ตามเวลาต่อจังหวัด)
+ไฟล์นี้ยังเป็นโมดูลให้ experiment_imputation_downstream.py / test_imputation_methods.py โหลดผ่าน importlib
+รัน: python scripts/experiment_imputation_accuracy.py [--quick]
 """
 import glob
 import importlib.util
@@ -35,12 +26,12 @@ from sklearn.preprocessing import StandardScaler
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 MODEL_DIR = os.path.join(_ROOT, "models")
-MODEL_TAG = "20260919_203455"  # โมเดล v3 ที่ deploy (ใช้กับ M8 และ Track B)
+MODEL_TAG = "20260919_203455"  # โมเดล v3 ที่ deploy
 SEED = 42
 QUICK = "--quick" in sys.argv
 BURNING = {2, 3, 4}
 K_LIST = [1, 2, 3, 6, 12, 24, 48]  # ความยาวช่องว่าง L (interior) และระยะเงียบ j (trailing)
-N_NEIGHBORS = 5  # เพื่อนบ้านใกล้สุดที่พิจารณา (ใช้ที่ "ใช้ได้" ไม่เกิน 3 จังหวัด ตามนโยบายเดิม NEIGHBOR_AVG_K)
+N_NEIGHBORS = 5  # เพื่อนบ้านใกล้สุดที่พิจารณา
 PROFILE_DAYS = 14
 MIN_HISTORY = 24 * (PROFILE_DAYS + 3)  # ต้องมีประวัติพอสำหรับโปรไฟล์รายชั่วโมง
 
@@ -67,15 +58,14 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 # ============================================================ ข้อมูล
 def load_panels(need_full_dataset=False):
-    """panel รายชั่วโมง (T x P): obs = ค่าดิบที่วัดได้จริง (NaN = ไม่มี), filled = pm25 ใน dataset เทรน (เติมช่องว่าง <=48 ชม.แล้ว
-    เหมือนที่โมเดล/ live เห็น), weather (interpolate แล้ว — ใช้เป็น covariate), ranking เพื่อนบ้านตามระยะทางจากทั้ง 20 จังหวัด,
-    ขอบ train/calib/test ต่อจังหวัด (index ของกริดเวลา)"""
+    """panel รายชั่วโมง (T x P): obs = ค่าดิบที่วัดได้จริง, filled = pm25 ใน dataset เทรน, weather,
+    ranking เพื่อนบ้านตามระยะทาง, ขอบ train/calib/test ต่อจังหวัด"""
     tm = load_module("tm", "scripts/train_multiprovince_models.py")
     bm_window = (pd.Timestamp("2024-01-01 00:00:00", tz="UTC"), pd.Timestamp("2026-07-02 00:00:00", tz="UTC"))
     ds = pd.read_csv(tm.DATA_PATH)
     ds["datetime_utc"] = pd.to_datetime(ds["datetime_utc"], utc=True)
     provs = sorted(ds["province_en"].unique())
-    grid = pd.date_range(bm_window[0], bm_window[1], freq="h", tz="UTC")  # รวมปลายช่วง เหมือน build_one_station
+    grid = pd.date_range(bm_window[0], bm_window[1], freq="h", tz="UTC")
     raw = pd.read_csv(latest_raw_path())
     raw["datetime_utc"] = pd.to_datetime(raw["datetime_utc"], utc=True)
     obs = raw.pivot_table(index="datetime_utc", columns="province_en", values="pm25").reindex(index=grid, columns=provs)
@@ -280,8 +270,7 @@ def matrix_trailing(F):
 
 
 def matrix_trailing_lite(F):
-    """H-lite: เฉพาะ feature ที่ live มีอยู่แล้ว (ค่าล่าสุด, เพื่อนบ้าน ณ ตำแหน่งที่เติมและ ณ t0, ระยะเงียบ, ชั่วโมง UTC ของเวลาเป้าหมาย)
-    ตัดสภาพอากาศรายชั่วโมงย้อนหลังและโปรไฟล์ 14 วันที่ live ไม่มี"""
+    """H-lite: เฉพาะ feature ที่ live มีอยู่แล้ว (ค่าล่าสุด, เพื่อนบ้าน ณ ตำแหน่งที่เติมและ ณ t0, ระยะเงียบ, ชั่วโมง UTC ของเวลาเป้าหมาย)"""
     return np.column_stack([F["x0"], F["nb_now"], F["dnb"], F["nb_0"], F["j"], np.log1p(F["j"]), F["hs"], F["hc"]])
 
 
@@ -385,7 +374,7 @@ def fit_trailing(P, rng, n_train_rows=60000, tune=None, fast=False):
         "ridge": fit_learned(P, F, "ridge", matrix_trailing, "x0", alpha=tune["ridge_alpha"]),
         "ridge_lite": fit_learned(P, F, "ridge", matrix_trailing_lite, "x0", alpha=tune.get("ridge_alpha_lite", tune["ridge_alpha"])),
     }
-    if not fast:  # KNN/MICE ช้าและไม่ใช่ส่วนของ H-lite — ข้ามได้เมื่อจูน/ส่งออกเฉพาะ H-lite
+    if not fast:  # ข้าม KNN/MICE เมื่อ fast=True (ใช้เฉพาะ H-lite)
         fitted["knn"] = fit_learned(P, F, "knn", matrix_trailing, "x0", knn_k=tune["knn_k"], rng=rng)
         fitted["mice"] = fit_learned(P, F, "mice", matrix_trailing, "x0", rng=rng)
     return {"fitted": fitted, "tune": tune}
@@ -408,13 +397,13 @@ def impute_trailing(P, model, F, methods=("M0", "M3", "M4", "M5", "M6", "M7", "H
             v = apply_learned(P, model["fitted"][key], F, matrix_trailing, "x0")
             out[name] = clip0(np.where(np.isnan(v), base3, v))
     if "H" in methods:
-        # วิธีหลักที่เสนอ (H = hybrid): IDW-difference เมื่อ j <= switch_j แล้วเปลี่ยนเป็น Ridge (จุดสลับเลือกจาก calib)
+        # H (hybrid): IDW-difference เมื่อ j <= switch_j แล้วเปลี่ยนเป็น Ridge
         m4 = np.where(np.isnan(m4_spatial(F)), base3, m4_spatial(F))
         v5 = apply_learned(P, model["fitted"]["ridge"], F, matrix_trailing, "x0")
         m5 = np.where(np.isnan(v5), base3, v5)
         out["H"] = clip0(np.where(F["j"] <= tune.get("switch_j", 3), m4, m5))
     if "HL" in methods:
-        # H-lite = วิธีที่นำไปใช้ใน app.py: IDW-difference (j <= switch_j_lite) แล้ว Ridge-lite; ไม่มีเพื่อนบ้านที่ใช้ได้ -> Persistence
+        # H-lite: IDW-difference (j <= switch_j_lite) แล้ว Ridge-lite; ไม่มีเพื่อนบ้านที่ใช้ได้ -> Persistence
         m4l = np.where(np.isnan(m4_spatial(F)), F["x0"], m4_spatial(F))
         vl = apply_learned(P, model["fitted"]["ridge_lite"], F, matrix_trailing_lite, "x0")
         m5l = np.where(np.isnan(vl), F["x0"], vl)
@@ -528,7 +517,7 @@ def main():
             w, _ = nnls(np.vstack(Xs), np.concatenate(ys))
             blend[jb] = w
     print("  น้ำหนัก M9 ต่อ j:", {k: np.round(v, 2).tolist() for k, v in blend.items()}, flush=True)
-    # เก็บพารามิเตอร์ที่จูนบน calib ให้ experiment_imputation_downstream.py ใช้ต่อ (ห้ามจูนซ้ำบน test)
+    # เก็บพารามิเตอร์ที่จูนบน calib ให้ experiment_imputation_downstream.py ใช้ต่อ
     tuned_path = os.path.join(MODEL_DIR, f"imputation_tuned_params_{TIMESTAMP}{'_quick' if QUICK else ''}.json")
     with open(tuned_path, "w", encoding="utf-8") as f:
         json.dump({"tune": best, "blend_candidates": cand_names, "blend": {str(k): v.tolist() for k, v in blend.items()},

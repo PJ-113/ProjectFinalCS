@@ -31,7 +31,7 @@ BASE = "https://api.openaq.org/v3"
 PROVINCES = [
     # --- 17 จังหวัดเทรน ---
     {"th": "ขอนแก่น", "en": "khonkaen", "lat": 16.44538333, "lon": 102.83525, "zero_shot": False,
-     "known_location_id": 7747},  # ยืนยันจาก CLAUDE.md แล้ว ไม่ต้อง radius-search
+     "known_location_id": 7747},  # ไม่ต้อง radius-search
     {"th": "เลย", "en": "loei", "lat": 17.4860, "lon": 101.7223, "zero_shot": False},
     {"th": "หนองคาย", "en": "nongkhai", "lat": 17.8783, "lon": 102.7420, "zero_shot": False},
     {"th": "อุดรธานี", "en": "udonthani", "lat": 17.4156, "lon": 102.7859, "zero_shot": False},
@@ -52,7 +52,7 @@ PROVINCES = [
     {"th": "นครพนม", "en": "nakhonphanom", "lat": 17.4107, "lon": 104.7791, "zero_shot": True},
     {"th": "ร้อยเอ็ด", "en": "roiet", "lat": 16.0538, "lon": 103.6520, "zero_shot": True},
     {"th": "มหาสารคาม", "en": "mahasarakham", "lat": 16.1852, "lon": 103.3010, "zero_shot": True,
-     "expected_low_cost_sensor": True},  # ผู้ใช้ระบุว่าเป็นเซนเซอร์ AirGradient ไม่ใช่ reference-grade
+     "expected_low_cost_sensor": True},  # เซนเซอร์ AirGradient ไม่ใช่ reference-grade
 ]
 
 
@@ -80,7 +80,7 @@ def get_pm25_parameter_id():
 
 def find_pm25_sensor_in_location(loc):
     """คืน sensor id + parameter display name ของ pm25 ใน location detail หรือ None ถ้าไม่มี —
-    เลือก id ต่ำสุดเสมอถ้ามีซ้ำ (เหตุผล: ดู CHANGELOG 75)"""
+    เลือก id ต่ำสุดเสมอถ้ามีซ้ำ"""
     pm25_sensor_ids = [s["id"] for s in loc.get("sensors", []) if s.get("parameter", {}).get("name", "").lower() == "pm25"]
     if not pm25_sensor_ids:
         return None, None
@@ -152,7 +152,7 @@ def search_province(province, pm25_param_id):
             "provider": (loc.get("provider") or {}).get("name"),
             "distance_km_from_search_point": round(dist, 2),
         })
-    # เรียงก่อนด้วยระยะทาง แค่เพื่อจำกัดจำนวนที่ต้องยิง detail call เพิ่ม (เอาแค่ผู้เข้าชิงที่สมเหตุสมผล)
+    # เรียงด้วยระยะทางก่อน เพื่อจำกัดจำนวนที่ต้องยิง detail call เพิ่ม
     candidates.sort(key=lambda c: c["distance_km_from_search_point"])
     top = candidates[:6]
     for c in top:
@@ -161,8 +161,7 @@ def search_province(province, pm25_param_id):
         c["coverage_overlap_days"] = round(
             coverage_overlap_days(detail.get("datetimeFirst"), detail.get("datetimeLast")), 1
         )
-    # จัดอันดับจริง: ให้น้ำหนัก provider ที่ตรงเครือข่ายทางการ (Air4Thai) ก่อน แล้วค่อยดู
-    # ความครอบคลุมช่วงเวลาที่ต้องใช้เทรน (คุมด้วยข้อมูลจริง ไม่ใช่เดา) แล้วค่อยดูระยะทางเป็นตัวตัดสินสุดท้าย
+    # จัดอันดับ: provider Air4Thai ก่อน แล้ว coverage ช่วงเวลา แล้วระยะทาง
     top.sort(key=lambda c: (
         0 if c["provider"] == PREFERRED_PROVIDER else 1,
         -c["coverage_overlap_days"],
@@ -209,8 +208,8 @@ def main():
             continue
 
         best = candidates[0]
-        # ต้องตรวจสอบเอง 3 กรณี: (1) ไม่ใช่ provider ทางการ Air4Thai เลย (2) coverage ของช่วงเวลาที่ต้องใช้เทรนต่ำมาก
-        # (3) มีตัวเลือก Air4Thai อื่นที่ coverage ใกล้เคียงกันมาก (คลุมเครือจริง ไม่ใช่แค่ระยะทางใกล้กัน)
+        # ต้องตรวจสอบเอง 3 กรณี: (1) ไม่ใช่ provider Air4Thai (2) coverage ต่ำมาก
+        # (3) มีตัวเลือก Air4Thai อื่นที่ coverage ใกล้เคียงกันมาก
         reasons = []
         if best["provider"] != PREFERRED_PROVIDER:
             reasons.append(f"provider ที่เลือกไม่ใช่ {PREFERRED_PROVIDER} (เป็น {best['provider']!r})")

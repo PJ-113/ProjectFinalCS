@@ -1,11 +1,6 @@
 """
-Task B (feedback อาจารย์ ข้อ 1): ตรวจสอบว่าจังหวัดที่อยู่ใกล้กันทางภูมิศาสตร์มี PM2.5 สัมพันธ์กัน
-จริงไหม (spatial correlation) ก่อนตัดสินใจว่าคุ้มไหมที่จะ engineer feature เชิงพื้นที่เพิ่ม (task F)
-— ไม่ใช่แค่มอง lat/lon เป็นตัวเลขเฉยๆ ตามที่อาจารย์เตือน
-
-สมมติฐาน: correlation ของ PM2.5 ระหว่างจังหวัดคู่หนึ่งๆ ลดลงตามระยะทาง (Tobler's First Law of
-Geography) — ถ้าจริง เป็นหลักฐานว่าควรเพิ่ม spatial-lag feature (task F); ถ้าไม่จริง (correlation
-ไม่สัมพันธ์กับระยะทางเลย) แปลว่า lat/lon ที่มีอยู่แล้วอาจเพียงพอ ไม่คุ้มที่จะลงทุนเพิ่ม
+วัดความสัมพันธ์ระหว่างระยะทาง (haversine) กับ correlation ของ PM2.5 ระหว่างคู่จังหวัด
+(Pearson correlation ของ pairwise PM2.5 correlation matrix vs distance matrix)
 """
 import importlib.util
 import itertools

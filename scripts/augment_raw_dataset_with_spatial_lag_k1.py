@@ -1,9 +1,6 @@
 """
-รีบิลด์ pm25_neighbor_avg ด้วย k=1 (ผลจาก tune_spatial_lag_k.py, CHANGELOG 108: k=1 ดีกว่า k=3
-ที่ใช้อยู่ +1.43%/+2.07%) — ไม่ต้องเรียก API ใหม่ เพราะ pm25 ดิบทุกจังหวัดมีอยู่แล้วใน
-DATA_PATH เดิม (multiprovince_pm25_features_raw_spatial_20260914_203924.csv) แค่ทิ้งคอลัมน์
-pm25_neighbor_avg เดิม (คำนวณด้วย k=3) แล้วคำนวณใหม่ด้วย add_spatial_lag_feature(k=1)
-ที่ import มาจาก build_raw_dataset_multiprovince.py ตรงๆ (สูตรเดียวกัน แค่เปลี่ยน k)
+รีบิลด์คอลัมน์ pm25_neighbor_avg ของ dataset เดิมใหม่ด้วย k=1 โดยเรียก
+add_spatial_lag_feature(k=1) จาก build_raw_dataset_multiprovince.py ตรงๆ
 """
 import importlib.util
 import json
@@ -36,7 +33,7 @@ def main():
     combined["datetime_utc"] = pd.to_datetime(combined["datetime_utc"])
     print(f"แถวรวม (ก่อนคำนวณ neighbor ใหม่): {len(combined)}")
 
-    combined = combined.drop(columns=["pm25_neighbor_avg"])  # ของเดิมคำนวณด้วย k=3 ทิ้งไปเลย
+    combined = combined.drop(columns=["pm25_neighbor_avg"])
 
     with open(REGISTRY_PATH, encoding="utf-8") as f:
         registry = json.load(f)

@@ -1,13 +1,7 @@
 """
-ยืนยันบน test split "ครั้งเดียว" สำหรับ feature ไฟทิศต้นลม (fire_upwind_250km, C2) ที่ผ่านเกณฑ์ CV ใน CHANGELOG 153
-(validate_fire_wide_features_cv.py) — เทียบ base20 (โมเดล v3 ปัจจุบัน) กับ base20 + fire_upwind_250km
-(P50, 5 horizon ตัวแทน, LGB+XGB, hyperparameter จูนแล้วชุดเดียวกัน; วัด MAE รวม/ปกติ/ฤดูฝุ่น ก.พ.-เม.ย./>p90)
-
-หมายเหตุความโปร่งใส: CV ผ่านเกณฑ์ที่ตั้งไว้ก่อนรัน 3 ตัวเลือก (C1, C2, C4) — การเลือก C2 ตัวเดียวมายืนยันบน test
-เป็นการตัดสินใจ "หลังเห็นผล CV" (เหตุผล: ตัวเดียว MAE ดีขึ้นทุก fold ทั้ง 2 โมเดล; C1/C4 ทำให้ >p90 ของ fold B แย่ลง 2.6-4.0%)
-
-เกณฑ์ผ่านบน test (ตั้งไว้ก่อนรัน): ทั้ง LGB และ XGB  (1) MAE รวมไม่แย่ลง (delta% <= 0)  (2) MAE >p90 ไม่แย่ลง (delta% <= 0)
-ผ่านแล้วยังไม่ deploy ทันที — ต้องดูเรื่อง feature สดจากไฟกรอบกว้างและเวลา retrain (รอตัดสินใจกับผู้ใช้)
+ยืนยันบน test split (ครั้งเดียว) สำหรับ feature ไฟทิศต้นลม (fire_upwind_250km): เทียบ base20
+(โมเดล v3 ปัจจุบัน) กับ base20 + fire_upwind_250km (P50, 5 horizon ตัวแทน, LGB+XGB)
+วัด MAE รวม/ปกติ/ฤดูฝุ่น ก.พ.-เม.ย./>p90 เกณฑ์ผ่าน: ทั้ง LGB และ XGB ต้องไม่แย่ลงทั้ง MAE รวมและ MAE >p90
 """
 import glob
 import importlib.util

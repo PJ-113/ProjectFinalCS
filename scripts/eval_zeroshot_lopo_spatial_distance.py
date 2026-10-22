@@ -1,23 +1,8 @@
 """
-Task C ซ้ำแบบมีกำลังทางสถิติจริง — eval_zeroshot_spatial_distance.py (CHANGELOG 93) ทดสอบแค่
-3 จังหวัด held-out ตายตัว (n=3 จุดข้อมูล ไม่พอสรุปทางสถิติ, correlation ที่ได้ขัดสมมติฐานแต่ยอมรับ
-ว่าอาจเป็น noise) งานนี้ทำ **leave-one-province-out (LOPO)** ข้ามทั้ง 17 จังหวัดที่เทรนได้จริง —
-แต่ละรอบ "แสร้งทำ" ว่า 1 จังหวัดเป็น zero-shot (ตัดออกจาก training pool เทรนบน 16 จังหวัดที่เหลือ
-ประเมินบน test split ของจังหวัดที่ตัดออก) ได้ (distance, MAE) 17 คู่แทนที่จะเป็น 3 คู่ — พอสำหรับ
-คำนวณ correlation + p-value จริงเป็นครั้งแรก
-
-ใช้ dataset/feature set **ปัจจุบัน** (train_mod.DATA_PATH/FEATURE_COLS, k=1 spatial-lag 19
-feature) ไม่ใช่ dataset เก่า 23 feature ที่ eval_zeroshot_multiprovince.py ใช้ — เพื่อให้ผลตรงกับ
-โมเดลที่กำลังพิจารณา deploy จริง ไม่ต้องคำนวณ pm25_neighbor_avg ใหม่ต่อ fold เพราะ feature นี้
-คำนวณจาก pm25 ดิบของทั้ง 20 จังหวัดไว้ล่วงหน้าในไฟล์แล้ว ไม่ขึ้นกับว่าจังหวัดไหนถูกตัดออกจาก
-training pool (แค่ตัดออกจากการเทรน ไม่ได้ตัดออกจากการมองเห็นเป็นเพื่อนบ้าน)
-
-ใช้ REPRESENTATIVE_HORIZONS เดียวกับ ablation/tuning scripts อื่น (ไม่ใช่ 24 horizon เต็มแบบ
-สคริปต์ต้นฉบับ) เพื่อคุมงบประมาณ compute: 17 fold x 2 โมเดล x 5 horizon = 170 fit
-(เทียบเท่าสเกลกับ ablation_individual_features.py ที่ทำไป 200 fit แล้ว)
-
-3 จังหวัด zero-shot จริง (นครพนม/ร้อยเอ็ด/มหาสารคาม, is_zero_shot=True) ไม่เข้าร่วมทั้ง pool และ
-held-out เลยทุกรอบ เหมือนใน production จริงที่ไม่เคยเทรนบนจังหวัดเหล่านี้
+Leave-one-province-out (LOPO) ข้ามทั้ง 17 จังหวัดที่เทรนได้จริง: แต่ละรอบตัด 1 จังหวัดออกจาก
+training pool, เทรนบน 16 จังหวัดที่เหลือ, ประเมินบน test split ของจังหวัดที่ตัดออก แล้ววัด
+correlation + p-value ระหว่างระยะทางไปจังหวัดเทรนที่ใกล้ที่สุดกับ MAE (ที่ REPRESENTATIVE_HORIZONS)
+3 จังหวัด zero-shot จริง (นครพนม/ร้อยเอ็ด/มหาสารคาม) ไม่เข้าร่วมทั้ง pool และ held-out เลย
 """
 import importlib.util
 import json
@@ -64,7 +49,7 @@ def main():
     print(f"โหลดข้อมูล: {train_mod.DATA_PATH}")
     df = pd.read_csv(train_mod.DATA_PATH)
     df["datetime_utc"] = pd.to_datetime(df["datetime_utc"])
-    df = df[~df["is_zero_shot"]].reset_index(drop=True)  # 3 จังหวัด zero-shot จริงไม่เข้าร่วมเลย
+    df = df[~df["is_zero_shot"]].reset_index(drop=True)
 
     trainable_provinces = sorted(df["province_en"].unique().tolist())
     print(f"จังหวัดที่เทรนได้จริง (LOPO pool): {len(trainable_provinces)} จังหวัด")
@@ -77,8 +62,8 @@ def main():
         held_out_df = df[df["province_en"] == held_out].reset_index(drop=True)
 
         train_pool, calib_pool, _ = train_mod.split_train_calib_test(pool_df)
-        train_pool = pd.concat([train_pool, calib_pool], ignore_index=True)  # 16 จังหวัด, 80% แรกตามเวลา
-        _, _, held_out_test = train_mod.split_train_calib_test(held_out_df)  # 20% ท้ายของจังหวัดนี้เอง
+        train_pool = pd.concat([train_pool, calib_pool], ignore_index=True)
+        _, _, held_out_test = train_mod.split_train_calib_test(held_out_df)
 
         remaining = [p for p in trainable_provinces if p != held_out]
         p_meta = provinces_meta[held_out]

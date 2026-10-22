@@ -1,11 +1,9 @@
 """
 ทดสอบ Circuit Breaker + Dynamic Routing (select_model, compute_missing_ratio, compute_rolling_r2)
-สำหรับสถาปัตยกรรม pooled model (หลัง CHANGELOG 78) — เดิมทดสอบ "prophet" branch + ไม่มี province
-param เลย (ใช้ไม่ได้กับ app.py ปัจจุบันแล้ว ตัดทิ้งเปลี่ยนมาทดสอบ "naive_fallback" branch + ส่ง
-province ทุกจุดแทน)
+ต่อจังหวัด (province-scoped pooled model) — ครอบคลุม naive_fallback, circuit breaker,
+rolling R2 routing, cold-start exploration (ทั้งสองโมเดล และฝั่งเดียว), force_naive
 
-Test เขียนแถวทดสอบลง prediction_log จริงใน Postgres แต่ใช้ predicted_at_utc ปี 2100 (ไม่มีทางชน
-ข้อมูลจริง) แล้วลบทิ้งเองทั้งก่อน/หลังรัน (idempotent, safe to re-run)
+เขียนแถวทดสอบลง prediction_log จริงด้วย predicted_at_utc ปี 2100 แล้วลบทิ้งก่อน/หลังรัน
 """
 import importlib.util
 
@@ -52,8 +50,7 @@ def insert_rows(app, model_name, horizon, actual_values, predicted_values, start
     rows = []
     for i, (actual, pred) in enumerate(zip(actual_values, predicted_values)):
         t = base + pd.Timedelta(hours=start_hour + i)
-        # ไม่มี calibration อีกต่อไป (pooled model) — actual_pm25_calibrated เก็บค่าเดียวกับ
-        # actual_pm25 ตรงๆ ตาม backfill_actuals() จริง
+        # actual_pm25_calibrated เก็บค่าเดียวกับ actual_pm25 (ไม่มี calibration)
         rows.append((t.isoformat(), t.isoformat(), horizon, float(pred), float(actual), float(actual),
                      model_name, _TEST_PROVINCE))
     cur.executemany(
@@ -180,8 +177,8 @@ def test_4_single_none_explores(app):
 
 
 def test_5_force_naive(app):
-    """CHANGELOG 141: force_naive (ไม่มีจังหวัดข้างเคียงที่ข้อมูลสด) ต้องได้ naive_fallback ทุก horizon แม้ feature
-    ที่เหลือครบและ rolling R2 ของโมเดลจะดี — และ NaN เพียง 2 จาก 21 feature ไม่ trigger circuit breaker เอง"""
+    """force_naive ต้องได้ naive_fallback ทุก horizon แม้ feature อื่นครบและ rolling R2 ดี
+    และ NaN เพียง 2 จาก 21 feature ไม่ trigger circuit breaker เอง"""
     print("\n" + "=" * 90)
     print("TEST 5: force_naive -> naive_fallback ทุก horizon (ไม่อ่าน rolling R2)")
     print("=" * 90)

@@ -1,10 +1,7 @@
 """
-ด่านตรวจ G4 ของการ deploy โมเดล v2 (CHANGELOG 141): เรียก GET /api/forecast ทุก 20 จังหวัดผ่าน Flask test client ด้วยข้อมูลสดจริง
-(OpenAQ + Open-Meteo + FIRMS) แล้วตรวจ: HTTP 200, forecast 24 จุดไม่มี NaN/ติดลบ, lo<=hi, ชื่อโมเดลถูกต้อง, data_quality สอดคล้องกัน
-และตรวจ prediction_log ว่า "จังหวัดปกติ" ถูกบันทึก 24 แถวด้วยชื่อ _v2/naive_fallback พร้อม pm25_lo/pm25_hi ส่วน "จังหวัดข้อมูลเก่า" ต้องไม่ถูกบันทึก
-หมายเหตุ: แถวที่บันทึกคือ log จริงของระบบ (เหมือน scheduled job รอบหนึ่ง) ไม่ใช่แถวทดสอบ — ปิด NLG รายวัน (maybe_generate_daily_nlg)
-ระหว่างทดสอบ ไม่ให้เขียนสรุปประจำวันด้วยข้อความ fallback ลง daily_nlg_log
-ไม่พิมพ์คีย์ใดๆ
+เรียก GET /api/forecast ทุก 20 จังหวัดผ่าน Flask test client ด้วยข้อมูลสดจริง (OpenAQ + Open-Meteo + FIRMS) แล้วตรวจ:
+HTTP 200, forecast 24 จุดไม่มี NaN/ติดลบ, lo<=hi, ชื่อโมเดลถูกต้อง, data_quality สอดคล้องกัน
+และตรวจ prediction_log ว่าจังหวัดปกติถูกบันทึก 24 แถวพร้อม pm25_lo/pm25_hi ส่วนจังหวัดข้อมูลเก่าต้องไม่ถูกบันทึก
 """
 import importlib.util
 import math

@@ -2,15 +2,12 @@
 สรุปความหน่วงปกติของ reading ล่าสุด (observed_lag_k) เพื่อตัดสินค่า IMPUTATION_MIN_K ใน app.py
 
 อ่าน 2 แหล่ง (ถ้ามี):
-  models/target_latency_scheduler_log.csv  — app.py บันทึกให้อัตโนมัติทุกครั้งที่งานรายชั่วโมงรัน (log_target_latency)
-  models/target_data_latency_log.csv       — snapshot จาก scripts/measure_target_data_latency.py (รันมือ; เรียก /measurements ตรงๆ จึงนับเป็น live)
-k ปกติ = 0 (reading ของชั่วโมงที่เพิ่งจบมาแล้ว) k>=1 = ช้ากว่าปกติ (ความหน่วงของ OpenAQ หรือสถานีเงียบ)
-หลักตัดสิน (ตั้งไว้ก่อนดูข้อมูล): MIN_K ควรสูงกว่า k ของ "การรายงานปกติ" — ใช้ p99 ของ k เมื่อตัดจังหวัด/ช่วงที่เงียบยาว (k>=6 ถือว่าเป็นเหตุการณ์
-สถานีเงียบ ไม่ใช่ความหน่วงปกติ) แล้ว MIN_K = p99 + 1 ; แนะนำอย่างน้อย 2; ต้องมีตัวอย่างอย่างน้อย 200 ค่า และครอบคลุมหลายนาทีของชั่วโมง
+  models/target_latency_scheduler_log.csv  — บันทึกอัตโนมัติทุกครั้งที่งานรายชั่วโมงรัน
+  models/target_data_latency_log.csv       — snapshot จาก scripts/measure_target_data_latency.py
+k ปกติ = 0 (reading ของชั่วโมงที่เพิ่งจบมาแล้ว), k>=1 = ช้ากว่าปกติ
+MIN_K = p99 ของ k ปกติ (ตัดช่วงที่เงียบยาว, k>=6) + 1 ; ต้องมีตัวอย่างอย่างน้อย 200 ค่า และครอบคลุมหลายนาทีของชั่วโมง
 
-series_source (CHANGELOG 173): log ของ scheduler มีคอลัมน์ที่บอกว่า reading มาจากทางไหน — คำแนะนำคิดจากแถว `live` (= /measurements ทางหลัก) เท่านั้น
-เพราะ hours_endpoint ช้ากว่า /measurements ~1 ชม. และ stale_cache มี k โตตามอายุ cache (ทั้งคู่ไม่ใช่ความหน่วงปกติของ OpenAQ) แถวเก่าที่ไม่มีคอลัมน์นี้
-(เขียนก่อนมีทางสำรอง) นับเป็น live ; แถวที่ไม่ใช่ live รายงานแยกไว้ท้ายผลลัพธ์
+คำแนะนำคิดจากแถว series_source=live เท่านั้น (ไม่รวม hours_endpoint/stale_cache); แถวที่ไม่ใช่ live รายงานแยกไว้ท้ายผลลัพธ์
 รัน: python scripts/summarize_target_latency.py
 """
 import os
@@ -28,7 +25,7 @@ NORMAL_MAX_K = 5  # k >= 6 ถือเป็นสถานีเงียบ �
 def load():
     frames = []
     if os.path.exists(SCHED):
-        # header=0 + names=: ทนทั้งไฟล์ที่ย้าย header เป็น 6 คอลัมน์แล้วและไฟล์เก่า 5 คอลัมน์ ; แถวที่ขาดฟิลด์ท้าย (legacy) ได้ NaN -> live
+        # ทนทั้งไฟล์ใหม่ (6 คอลัมน์) และไฟล์เก่า (5 คอลัมน์); แถวที่ขาดฟิลด์ท้ายได้ NaN -> live
         d = pd.read_csv(SCHED, header=0, names=SCHED_COLS)
         d["origin"] = "scheduler"
         d["series_source"] = d["series_source"].fillna("live")

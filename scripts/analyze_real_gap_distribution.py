@@ -1,12 +1,11 @@
 """
-วิเคราะห์ "ช่องว่างจริง" ของข้อมูล PM2.5 ดิบ 20 จังหวัด (จาก scripts/fetch_raw_pm25_isaan.py) สำหรับการทดลอง Data Imputation
-(คอมเมนต์กรรมการข้อ 4) — ตอบ: ช่องว่างสั้น/ยาวแค่ไหน เกิดบ่อยเท่าไร ช่วงไหนของปี และ "ตอนพยากรณ์ สถานีเงียบมา k ชม." บ่อยแค่ไหน
+วิเคราะห์การกระจายตัวของช่องว่าง (gap) ในข้อมูล PM2.5 ดิบ 20 จังหวัด: ความยาวช่องว่าง
+(histogram/quantile) และ exposure ของ staleness k (จำนวนชั่วโมงนับจากค่าจริงล่าสุด) แยกตาม
+จังหวัด/ฤดูฝุ่น
 
 ผลลัพธ์:
-  models/gap_runs_<ts>.csv       ทุกช่องว่าง (province, เริ่ม, ความยาว ชม.)
-  models/gap_distribution_<ts>.csv  สรุป: ความยาวช่องว่าง (histogram/quantile), exposure ของ "อายุข้อมูลล่าสุด k" ที่ใช้ถ่วงน้ำหนัก
-                                     expected MAE ในการทดลอง downstream, แยกจังหวัด/ฤดูฝุ่น
-นิยาม k (staleness): ณ ชั่วโมง t ที่ไม่มีค่า k = จำนวนชั่วโมงนับจากค่าจริงล่าสุดก่อน t (ตรงกับกรณี live ที่สถานีหยุดส่งข้อมูล)
+  models/gap_runs_<ts>.csv          ทุกช่องว่าง (province, เริ่ม, ความยาว ชม.)
+  models/gap_distribution_<ts>.csv  สรุปการกระจายความยาวช่องว่างและ staleness exposure
 """
 import glob
 import os
@@ -92,7 +91,7 @@ def main():
                         "count": len(sub), "share": np.nan,
                         "note": f"{q[0.5]:.0f}/{q[0.9]:.0f}/{q[0.99]:.0f}/{sub['length_h'].max()}"})
 
-    # 2) exposure ของ staleness k (ต่อชั่วโมงที่ไม่มีค่า) — ใช้เป็นน้ำหนักถ่วง k ในการทดลอง downstream
+    # 2) exposure ของ staleness k (ต่อชั่วโมงที่ไม่มีค่า)
     kdf = pd.DataFrame(k_rows, columns=["province_en", "month", "k"])
     kdf["k_bin"] = kdf["k"].map(lambda v: bin_label(v, K_BINS))
     for scope, sub in (("all", kdf), ("burning_Feb-Apr", kdf[kdf["month"].isin(BURNING)]),

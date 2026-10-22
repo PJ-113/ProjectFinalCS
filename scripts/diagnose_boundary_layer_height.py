@@ -1,7 +1,6 @@
 """
-Phase C0 — เช็คว่า Open-Meteo คืน boundary_layer_height (และตัวแปรใกล้เคียง) ครบช่วงข้อมูลเทรนหรือไม่
-ก่อนลงทุนดึงทุกจังหวัด (ธรรมเนียม "diagnose ก่อน fetch เต็ม" เหมือน diagnose_firms_hotspot_access.py)
-เช็คทั้ง archive API (สำหรับเทรน) และ forecast API (สำหรับ live inference ในอนาคต) — ไม่ต้องใช้ API key
+เช็คว่า Open-Meteo คืน boundary_layer_height (และตัวแปรใกล้เคียง) ครบช่วงข้อมูลเทรนหรือไม่
+เช็คทั้ง archive API (สำหรับเทรน) และ forecast API (สำหรับ live inference)
 """
 import requests
 

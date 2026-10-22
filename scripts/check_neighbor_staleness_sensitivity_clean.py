@@ -1,16 +1,9 @@
 """
-วัดซ้ำ (บนโมเดล v3 + ข้อมูลสะอาด) ว่าเพื่อนบ้าน "ไม่สด" ไกลแค่ไหนยัง MAE ดีกว่า naive persistence — เพื่อหาค่า
-NEIGHBOR_STALE_MAX_HOURS สำหรับ tier ใหม่ใน compute_neighbor_features() (แทนที่จะตกไป naive_fallback ทันทีเมื่อไม่มีเพื่อนบ้านสด)
+วัดว่าเพื่อนบ้าน "ไม่สด" ไกลแค่ไหนยัง MAE ดีกว่า naive persistence (บนโมเดล v3 + ข้อมูลสะอาด)
+เพื่อหาค่า NEIGHBOR_STALE_MAX_HOURS สำหรับ tier ใหม่ใน compute_neighbor_features()
 
-ที่มา: scripts/check_model_sensitivity_live_degradation.py (CHANGELOG 140) เคยวัดเรื่องเดียวกันนี้แล้ว แต่ใช้โมเดล v2
-(`_20260919_135655`) ซึ่งเทรนบน dataset ที่ป้ายเวลา 9 สถานีเพี้ยน 23 ชม. (ก่อน CHANGELOG 144-145 แก้) — CHANGELOG 144 เตือนตรงๆ ว่า
-ผลที่เกี่ยวกับ neighbor feature จาก dataset เก่ากว่า `..._nbtrend_20260919_174805.csv` ปนเปื้อน ห้ามเชื่อ และไม่เคยถูกวัดซ้ำบน v3 เลย
-สคริปต์นี้คือ copy ที่แก้แค่ TAG ให้ชี้ v3 (dataset `tm.DATA_PATH` เป็นตัวสะอาดอยู่แล้วโดยปริยาย) + ตัด variant ที่ไม่เกี่ยวกับงานนี้
-(fire/own-pm25/mean-of-others/2nd-nearest) ออก + เพิ่มจุด 48 ชม. ให้ครอบคลุมเท่า IMPUTATION_MAX_K/stale-cache tier อื่นๆ ที่มีอยู่แล้ว
-
-เกณฑ์ตัดสิน (ตั้งก่อนรัน): ค่าความไม่สด (ชม.) มากที่สุดที่ยัง MAE ดีกว่า naive_persistence อย่างน้อย 10% ทั้ง LGB และ XGB
-(มาร์จิ้นกว้างกว่าปกติเพราะเป็น fallback ของ fallback ไม่ใช่ feature หลัก) = NEIGHBOR_STALE_MAX_HOURS ที่แนะนำ
-รัน: python scripts/check_neighbor_staleness_sensitivity_clean.py
+เกณฑ์ตัดสิน (ตั้งก่อนรัน): ค่าความไม่สด (ชม.) มากที่สุดที่ยัง MAE ดีกว่า naive_persistence อย่างน้อย 10%
+ทั้ง LGB และ XGB = NEIGHBOR_STALE_MAX_HOURS ที่แนะนำ
 """
 import importlib.util
 import os
@@ -22,7 +15,7 @@ from sklearn.metrics import mean_absolute_error
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_DIR = os.path.join(_ROOT, "models")
-TAG = "20260919_203455"  # v3 (ของเดิมที่วัดครั้งแรกคือ v2 "20260919_135655" ซึ่งปนเปื้อน — ดู docstring)
+TAG = "20260919_203455"  # v3
 TIMESTAMP = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
 HORIZONS = [1, 6, 12, 18, 24]
 BURNING = {2, 3, 4}
@@ -56,10 +49,8 @@ def main():
     test_df = test_df.reset_index(drop=True)
     feats = tm.FEATURE_COLS
 
-    # v3 (20 feature) ไม่ใช้ pm25_neighbor_avg เป็น feature โดยตรงแล้ว (ตัดออกตั้งแต่ CHANGELOG 149 เพราะซ้ำซ้อนกับ
-    # nb_trend_12h) มีแค่ nb_trend_12h ตัวเดียวที่กระทบ live ถ้าเพื่อนบ้านไม่สด — เพื่อนบ้านไม่สด k ชม. = เห็นข้อมูลล่าสุดแค่ถึง
-    # t-k จึงคำนวณ trend ได้แค่ nb_trend_12h ที่ประเมิน ณ เวลา t-k (ซึ่งก็คือค่าในคอลัมน์เดิม shift ไป k ชม. ตรงๆ ไม่ต้องคิดแยก
-    # "exact"/"hold" เหมือนตอนที่ยังมี pm25_neighbor_avg เป็น feature แยก)
+    # v3 ไม่ใช้ pm25_neighbor_avg เป็น feature โดยตรง มีแค่ nb_trend_12h ที่กระทบ live ถ้าเพื่อนบ้านไม่สด —
+    # เพื่อนบ้านไม่สด k ชม. = เห็นข้อมูลล่าสุดแค่ถึง t-k จึงคำนวณ trend ได้แค่ nb_trend_12h ที่ประเมิน ณ เวลา t-k
     variants = {"baseline": {}}
     for k in (1, 2, 3, 4, 5, 6, 12, 24, 48):
         variants[f"nb_stale_{k}h"] = {"nb_trend_12h": shifted(df, "nb_trend_12h", k, test_df)}
@@ -114,7 +105,6 @@ def main():
         core = name.replace("nb_stale_", "").replace(" (hold)", "").rstrip("h")
         return float(core)
 
-    # ไม่ break กลางทาง (MAE อาจไม่แย่ลงเป็นเส้นตรงเป๊ะ) พิมพ์ครบทุกตัวเพื่อความโปร่งใส แล้วค่อยหาค่ามากสุดที่ "ผ่านต่อเนื่องจาก 1 ชม." ทีหลัง
     passed_hours = []
     for name in sorted(stale_variants, key=hours_of):
         h_val = hours_of(name)
@@ -129,7 +119,7 @@ def main():
         passed_hours.append((h_val, ok_both))
 
     best_hours = 0.0
-    for h_val, ok_both in passed_hours:  # เรียงจากน้อยไปมากแล้ว (sorted ข้างบน) หาค่ามากสุดที่ผ่านต่อเนื่องไม่มีช่วงไม่ผ่านคั่น
+    for h_val, ok_both in passed_hours:  # เรียงจากน้อยไปมาก หาค่ามากสุดที่ผ่านต่อเนื่อง
         if ok_both:
             best_hours = h_val
         else:

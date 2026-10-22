@@ -1,13 +1,7 @@
 """
-ทำ group-conditional (Mondrian) conformal calibration ซ้ำบน**โมเดล v3 ข้อมูลสะอาด**
-(_20260919_203455, 20 feature: k=1 + fire_hotspot_count_100km_24h, CHANGELOG 127) — เช็คว่า
-config ที่ดีที่สุดเดิม (flat_3grp, entry 115) ช่วยแก้จุดที่ entry 128 พบว่า XGB coverage ที่ >p90
-แย่ลง (80.8%->79.5%) ตอนใช้ single q_hat ได้ไหม — ตรรกะเดียวกับ recalibrate_conformal_configs_k1.py
-เป๊ะ เปลี่ยนแค่ MODEL_TAG ให้ตรงกับโมเดลใหม่
-
-predict P05/P50/P95 ต่อ horizon ต่อโมเดลแค่ครั้งเดียว แล้วเอาไปใช้ซ้ำกับทุก config (ไม่ต้อง
-predict ใหม่ทุกรอบ) — จัดกลุ่มด้วย predicted P50 เท่านั้น (ไม่ใช่ actual) ตามหลัก conformal
-prediction เดิม — ไม่มีการ retrain โมเดลใดๆ ในงานนี้ (ใช้ pkg ที่เทรนไว้แล้วอย่างเดียว)
+Group-conditional (Mondrian) conformal calibration บนโมเดล v3 (20 feature: k=1 + fire_hotspot_count_100km_24h)
+ทดสอบหลาย config การแบ่งกลุ่มด้วย predicted P50 (2-3 กลุ่มตาม percentile)
+วัด coverage ต่อ horizon x severity bin เทียบกับ single q_hat
 """
 import importlib.util
 import os

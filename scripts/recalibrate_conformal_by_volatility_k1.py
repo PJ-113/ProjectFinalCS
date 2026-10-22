@@ -1,20 +1,8 @@
 """
-ต่อยอดจาก entry 120 (confounder analysis บนผล LOPO): พบว่า `pm25_std` (ความผันผวนของ PM2.5 ใน
-จังหวัดนั้นเอง) อธิบาย MAE ได้ดีกว่าระยะทางหรือ predicted-severity มาก (r=0.85-0.87, p<0.0001) —
-งานนี้ลอง Mondrian calibration แบบจัดกลุ่มด้วย **pm25_std ของจังหวัด** (ค่าคงที่ต่อจังหวัด ไม่ใช่
-per-row แบบ severity เดิม) แทน predicted P50 severity (entry 115) หรือ (province, severity)
-ร่วมกัน (entry 117-118) — ข้อดีสำคัญ: กลุ่มนี้ประกอบด้วยหลายจังหวัดรวมกัน (tertile ของ 17
-จังหวัด ~5-6 จังหวัด/กลุ่ม) ทำให้ calib sample ต่อกลุ่มใหญ่กว่ามาก (~13,000+ แถว/กลุ่ม) ไม่เจอ
-ปัญหาความแปรปรวนของ q_hat จากกลุ่มเล็กแบบ entry 117-118
-
-ทดสอบ 2 มุมพร้อมกันในสคริปต์เดียว (ไม่มีการ retrain โมเดลใดๆ ใช้ pkg `_20260917_001147` ที่เทรน
-ไว้แล้วอย่างเดียว):
-  (A) แก้ปัญหา coverage >p90 เดิม (entry 111-118) บน test split ทางการของ 17 จังหวัดเทรน —
-      เทียบกับ single_qhat และ flat_3grp (ดีที่สุดเดิมจาก entry 115)
-  (B) แก้ปัญหา coverage ต่ำของ 3 จังหวัด zero-shot จริง (entry 119) — คำนวณ pm25_std ของแต่ละ
-      จังหวัด zero-shot เอง แล้วจัดเข้ากลุ่ม volatility เดียวกับที่คำนวณจาก 17 จังหวัดเทรน (ใช้
-      bin edge เดียวกัน) แล้วใช้ q_hat ของกลุ่มนั้นแทน single_qhat เดิม — เทียบ coverage บนช่วง
-      test_period_only เดียวกับ entry 119
+Mondrian conformal calibration จัดกลุ่มด้วย pm25_std ของจังหวัด (tertile) แทน severity-based grouping
+วัด coverage เทียบ single_qhat / flat_3grp / volatility_grp:
+  (A) บน test split ของ 17 จังหวัดเทรน
+  (B) บน 3 จังหวัด zero-shot จริง (จัดกลุ่มด้วย pm25_std ของตัวเอง เทียบ bin edge จาก 17 จังหวัดเทรน)
 """
 import importlib.util
 import json
@@ -62,7 +50,7 @@ def quantile_qhat(scores, n):
 
 
 def compute_flat_group_qhat(p50_calib, lo_calib, hi_calib, y_calib, thresholds_pctl):
-    """severity-only, รวมทุกจังหวัด (entry 115, ดีที่สุดเดิม — เก็บไว้เทียบในตารางเดียวกัน)"""
+    """severity-only, รวมทุกจังหวัด"""
     thresholds_val = [np.percentile(p50_calib, p) for p in thresholds_pctl]
     group_calib = np.zeros(len(p50_calib), dtype=int)
     for t in thresholds_val:

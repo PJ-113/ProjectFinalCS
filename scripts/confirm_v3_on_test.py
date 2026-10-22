@@ -1,12 +1,10 @@
 """
-P5 ของแผนแก้ป้ายเวลา OpenAQ (CHANGELOG 145-147): ยืนยันบน test split "ครั้งเดียว" ก่อน retrain เต็ม — dataset สะอาด (train_multiprovince_models.DATA_PATH),
-ชุด feature 21 ตัว (ตัดสินด้วย CV บล็อกเวลาแล้ว) + hyperparameter จูนแล้ว (TUNED_PARAMS_* ยืนยันบนข้อมูลสะอาดใน P4)
-เทียบ 3 variant (P50, 5 horizon ตัวแทน, LGB+XGB; วัด MAE รวม/ปกติ/ฤดูฝุ่น ก.พ.-เม.ย./>p90):
-  18-default : 18 feature (ไม่มี neighbor/fire/nb_trend) + hyperparameter default (จุดอ้างอิงต่ำสุด)
-  18-tuned   : 18 feature + hyperparameter จูนแล้ว (สิ่งที่ได้โดยไม่มี feature ใหม่)
-  21-tuned   : 21 feature + hyperparameter จูนแล้ว (candidate v3)
-เกณฑ์ผ่าน (ตั้งไว้ก่อนรัน): 21-tuned ต้อง "ไม่แย่กว่า" 18-tuned ที่ MAE รวมในทั้ง LGB และ XGB (delta% <= 0.0) — การเลือก feature ตัดสินด้วย CV แล้ว
-รอบนี้ตรวจแค่ไม่ทำร้ายผล; ตัวเลขนี้คือ "ผลจริง" ของโมเดล v3 (ไม่ปนเปื้อน) ที่จะใช้รายงาน
+ยืนยันบน test split (ครั้งเดียว) เทียบ 3 variant (P50, 5 horizon ตัวแทน, LGB+XGB)
+วัด MAE รวม/ปกติ/ฤดูฝุ่น ก.พ.-เม.ย./>p90:
+  18-default : 18 feature (ไม่มี neighbor/fire/nb_trend) + hyperparameter default
+  18-tuned   : 18 feature + hyperparameter จูนแล้ว
+  21-tuned   : 21 feature + hyperparameter จูนแล้ว (โมเดล v3)
+เกณฑ์ผ่าน: 21-tuned ต้องไม่แย่กว่า 18-tuned ที่ MAE รวม ทั้ง LGB และ XGB
 """
 import importlib.util
 import os

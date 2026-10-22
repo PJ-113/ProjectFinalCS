@@ -1,5 +1,5 @@
 """
-ทดสอบทางสำรองเมื่อดึง OpenAQ / Open-Meteo ไม่ได้ (app.py, CHANGELOG 172) — assert ธรรมดา ไม่ยิงเครือข่ายจริง ไม่แตะ DB จริง
+ทดสอบทางสำรองเมื่อดึง OpenAQ / Open-Meteo ไม่ได้ (app.py) — assert ธรรมดา ไม่ยิงเครือข่ายจริง ไม่แตะ DB จริง
 ไม่เขียนไฟล์ cache จริง (SERIES_DISK_CACHE_DIR ชี้ไปโฟลเดอร์ชั่วคราว)
   1. สภาพอากาศ: ค่าที่ cache ไว้ใช้ซ้ำใน TTL / ดึงสดสำเร็จ / พลาด -> ค่าเก่า <=2 ชม. / เกิน -> climatology / ไม่มี climatology -> raise /
      ค่า null จาก API = ดึงไม่สำเร็จ / USE_INPUT_FALLBACK=False = ดึงสดอย่างเดียวเหมือนเดิม

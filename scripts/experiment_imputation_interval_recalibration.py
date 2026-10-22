@@ -1,17 +1,12 @@
 """
-แก้ปัญหา coverage ของช่วงความเชื่อมั่น 90% เมื่อ input ถูกเติมค่าด้วยวิธี H (พบใน experiment_imputation_downstream.py:
-h=1 ได้ 65% ที่ k=1 และ 11% ที่ k=24) — ช่วงเดิมสอบเทียบโดยถือว่าค่า "ปัจจุบัน" (ฐานของ residual) เป็นค่าจริง
+คำนวณ conformal recalibration ของช่วงความเชื่อมั่น 90% แยกตามระยะเงียบ k และ horizon h
+เมื่อ input ถูกเติมค่าด้วยวิธี H-lite
 
-วิธีแก้ = conformal recalibration ที่ "แยกตามระยะเงียบ k และ horizon h": ต่อ (kind, k, h)
-  1. สุ่มจุดเวลาจากช่วง calib (ไม่ใช่ test) เติมค่าด้วย H-lite (HL) แล้วสร้าง feature ใหม่ ณ t ป้อนโมเดล P05/P95 (ยังไม่บวก q_hat เดิม)
-  2. คะแนนความไม่สอดคล้อง s = max(lo - y, y - hi) แล้ว q_imp = ควอนไทล์ระดับ ceil((n+1)(1-alpha))/n (split conformal / CQR
-     เหมือน train_multiprovince_models.conformalize)  -> ช่วงใหม่ [lo - q_imp, hi + q_imp]
-  3. วัด coverage และความกว้างจริงบน test (จุดเวลาอื่น ครั้งเดียว) เทียบช่วงเดิม (q_hat เดิม) — รายงานแยกฤดูฝุ่น/ช่วงปกติ
+ต่อ (kind, k, h): เติมค่าด้วย H-lite บน calib แล้วหา q_imp จากคะแนนความไม่สอดคล้อง s = max(lo-y, y-hi)
+(split conformal / CQR) จากนั้นวัด coverage และความกว้างช่วงบน test เทียบกับช่วงเดิม (q_hat เดิม)
+แยกรายงานฤดูฝุ่น/ช่วงปกติ
 ผลลัพธ์: models/imputation_interval_recalibration_<ts>.csv และตาราง q_imp ต่อ (kind,k,h) ใน
-models/imputation_interval_qhat_<ts>.json (สำหรับนำไปใช้ใน live ทีหลัง: k จริงที่ไม่ตรงค่าที่ทดสอบให้ใช้ q ของ k ที่ถัดไป
-ที่มากกว่า เพื่อให้ conservative) ไม่แตะ app.py
-เกณฑ์ที่ตั้งไว้ก่อนดูผล: coverage บน test ต้องอยู่ในช่วง 88–92% ทุก (k,h) (ข้อมูลครบเดิมอยู่ ~86–89%) และไม่เพี้ยนจากเป้าเกิน 3 จุด
-เปอร์เซ็นต์ในทั้งฤดูฝุ่นและช่วงปกติ
+models/imputation_interval_qhat_<ts>.json
 รัน: python scripts/experiment_imputation_interval_recalibration.py [--quick]
 """
 import glob

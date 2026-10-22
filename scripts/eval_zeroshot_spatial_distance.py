@@ -1,18 +1,7 @@
 """
-Task C (feedback อาจารย์ ข้อ 1, ต่อยอดจาก task B): ทดสอบว่าโมเดลเรียนรู้ spatial pattern จริง
-ไม่ใช่แค่จำจังหวัดที่เห็นตอนเทรน — สมมติฐาน: จังหวัด zero-shot ที่อยู่ใกล้จังหวัดที่เทรนจริง ควรมี
-MAE ต่ำกว่าจังหวัดที่อยู่ไกล (ถ้าจริง = สอดคล้องกับ task B ที่พบว่า PM2.5 correlation ลดลงตาม
-ระยะทาง, r=-0.644)
-
-reuse `eval_zeroshot_multiprovince.py` ทั้งชุด (FEATURE_COLS, HELD_OUT, split_train_test,
-fit_p50) ผ่าน importlib แทนที่จะเขียนซ้ำ — ต่างจากสคริปต์เดิมตรงที่: (1) evaluate แยกต่อจังหวัด
-held-out แทนที่จะรวมเป็นก้อนเดียว (สคริปต์เดิมคำนวณ MAE รวม 3 จังหวัดเป็นค่าเดียวต่อ horizon)
-(2) save per-horizon ผลลง CSV จริง (สคริปต์เดิมคำนวณแล้วทิ้ง) (3) เพิ่มระยะทางไปจังหวัดเทรนที่
-ใกล้ที่สุดต่อจังหวัด held-out
-
-ข้อจำกัดสำคัญที่ต้องระบุชัด: มีแค่ 3 จังหวัด held-out = 3 จุดข้อมูล ไม่พอสำหรับ statistical
-significance test ใดๆ — ผลเป็นแค่เชิงคุณภาพ (illustrative) ใช้ประกอบ task B ไม่ใช่หลักฐานยืนยัน
-เดี่ยวๆ
+ทดสอบว่าโมเดลเรียนรู้ spatial pattern จริงหรือแค่จำจังหวัดที่เห็นตอนเทรน: วัด MAE/R² ต่อจังหวัด
+held-out (3 จังหวัด zero-shot) แยกต่อ horizon เทียบกับระยะทางไปจังหวัดเทรนที่ใกล้ที่สุด
+(n=3 จุด — ผลเป็นเชิงคุณภาพเท่านั้น ไม่มีนัยสำคัญทางสถิติ)
 """
 import importlib.util
 import json
@@ -35,9 +24,7 @@ def load_module(name, filename):
 
 
 def eval_per_province(model, eval_df, feature_cols, target_prefix="pm25_t+"):
-    """ประเมิน MAE/R2 ต่อ (province, horizon) จากโมเดลที่เทรนแล้ว 1 ตัว (ไม่ retrain ต่อ horizon
-    เพราะโมเดล zero-shot ในสคริปต์ต้นฉบับ fit แยกต่อ horizon อยู่แล้ว — ฟังก์ชันนี้รับโมเดลต่อ
-    horizon มาทีละตัว)"""
+    """ประเมิน MAE/R2 ต่อ (province, horizon) จากโมเดลที่เทรนแล้ว 1 ตัวต่อ horizon"""
     rows = []
     for province, g in eval_df.groupby("province_en"):
         target_col = target_prefix

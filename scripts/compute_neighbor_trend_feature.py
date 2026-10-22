@@ -1,9 +1,7 @@
 """
-เพิ่ม nb_trend_12h = pm25_neighbor_avg(t) - pm25_neighbor_avg(t-12h) ต่อจังหวัด (time-indexed ไม่ใช่ positional เพราะข้อมูลมี gap)
-ลงใน dataset ที่มี fire_hotspot แล้ว (ผลจาก validate_feature_refinements.py + validate_neighbor_trend_variants.py:
-หน้าต่าง 12h ดีที่สุดเล็กน้อย MAE -2.5%/-2.9% บน calib; หน้าต่างอื่นใกล้เคียงกัน) ใช้เฉพาะข้อมูล <= t ไม่ leak อนาคต
-output: ไฟล์ใหม่ (ไม่ทับ) — DATA_PATH ของ train_multiprovince_models.py จะชี้มาที่ไฟล์นี้
-ตรวจซ้ำด้วย np.allclose กับ recompute ผ่าน pivot (วิธีอิสระ)
+เพิ่ม feature nb_trend_12h = pm25_neighbor_avg(t) - pm25_neighbor_avg(t-12h) ต่อจังหวัด (time-indexed
+เพราะข้อมูลมี gap) ลงใน dataset ที่มี fire_hotspot แล้ว ใช้เฉพาะข้อมูล <= t ไม่ leak อนาคต
+ตรวจผลด้วย np.allclose เทียบกับ recompute ผ่าน pivot (วิธีอิสระ)
 """
 import os
 

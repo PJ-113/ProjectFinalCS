@@ -1,11 +1,7 @@
 """
-ตรวจซ้ำ finding จาก task D (time_cyclical ตัดออกแล้ว MAE ดีขึ้น) บนโมเดล 24-feature ที่มี
-pm25_neighbor_avg แล้ว (task F) — D ทดสอบตอนยังไม่มี spatial-lag feature, interaction ระหว่าง
-feature อาจเปลี่ยนไปได้ ต้องยืนยันซ้ำก่อน retrain รอบสุดท้ายจริง
-
-วิธีเดียวกับ ablation_feature_groups.py: P50-only, representative horizons, reuse
-split_train_calib_test() จาก train_multiprovince_models.py (ตอนนี้ FEATURE_COLS/DATA_PATH ของ
-ไฟล์นั้นเป็นเวอร์ชัน 24-feature/spatial แล้ว)
+Validate การตัด time_cyclical features (hour_sin/cos, month_sin/cos, dayofweek): เทียบ
+baseline (24 feature) vs without_time_cyclical (19 feature) ด้วย MAE/R² (P50-only)
+ที่ horizon ตัวแทน 5 จุด
 """
 import importlib.util
 import os

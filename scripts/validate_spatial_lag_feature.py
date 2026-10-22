@@ -1,15 +1,7 @@
 """
-Task F (feedback อาจารย์ ข้อ 1) — ก่อนลงทุนแก้ feature formula ที่ซ้ำกัน 4 จุด + retrain เต็มระบบ
-(งานใหญ่สุดในแผน) ทำ scaled-down validation ก่อน: เพิ่ม spatial-lag feature เดียว
-("pm25_neighbor_avg" = ค่าเฉลี่ย pm25 ปัจจุบันของ K จังหวัดที่ใกล้ที่สุด ณ เวลาเดียวกัน) แล้ววัดผล
-แบบเดียวกับ ablation study (task D) — ถ้าช่วยจริงค่อยลงทุนงานใหญ่ ถ้าไม่ช่วยก็ไม่เสียเวลา
-
-เหตุผลที่ทำแบบนี้: task B ยืนยันชัดเจนว่า PM2.5 มี spatial correlation จริง (r=-0.644, n=190 คู่)
-แต่ task C (n=3 จุด) ไม่ยืนยันในระดับโมเดลจริง — สัญญาณผสม จึงควร validate ราคาถูกก่อนลงทุนงานใหญ่
-
-Neighbor pm25 ใช้ค่า ณ เวลาเดียวกับแถวนั้น (contemporaneous, ไม่ใช่อนาคต) — ไม่ leak เพราะใน
-production จริง scheduled_forecast_job() ดึงข้อมูลทุกจังหวัดพร้อมกันอยู่แล้วทุกชั่วโมง (ดู app.py)
-จึงมีค่า pm25 ปัจจุบันของจังหวัดอื่นให้ใช้จริงตอน predict ไม่ใช่ข้อมูลที่รู้ทีหลัง
+Validate spatial-lag feature "pm25_neighbor_avg" (ค่าเฉลี่ย pm25 ปัจจุบันของ K จังหวัดที่ใกล้ที่สุด
+ณ เวลาเดียวกัน, contemporaneous ไม่ใช่อนาคต): เทียบ baseline (23 feature) vs +pm25_neighbor_avg
+(24 feature) ด้วย MAE/R² (P50-only) ที่ 5 horizon ตัวแทน
 """
 import importlib.util
 import json
@@ -37,8 +29,7 @@ def load_module(name, filename):
 
 def build_neighbor_avg_feature(df_all_provinces, registry_provinces, haversine_km, k):
     """คืน Series (index = (province_en, datetime_utc)) ของค่าเฉลี่ย pm25 ปัจจุบันของ k จังหวัด
-    ที่ใกล้ที่สุด ณ เวลาเดียวกัน (ใช้ข้อมูลจากทั้ง 20 จังหวัด รวม zero-shot เพราะ production จริง
-    มีข้อมูลจังหวัดเหล่านี้ให้ใช้เป็น context ด้วยเช่นกัน)"""
+    ที่ใกล้ที่สุด ณ เวลาเดียวกัน (ใช้ข้อมูลจากทั้ง 20 จังหวัด รวม zero-shot)"""
     pivot = df_all_provinces.pivot_table(index="datetime_utc", columns="province_en", values="pm25")
     all_provinces = pivot.columns.tolist()
 
@@ -106,7 +97,7 @@ def main():
     print(f"\nคำนวณ neighbor average feature (k={K_NEAREST}) จากทั้ง 20 จังหวัด:")
     neighbor_avg_wide = build_neighbor_avg_feature(df_all, provinces_meta, haversine_km, K_NEAREST)
 
-    df = df_all[~df_all["is_zero_shot"]].reset_index(drop=True)  # 17 จังหวัดเทรน (เหมือน task A/D)
+    df = df_all[~df_all["is_zero_shot"]].reset_index(drop=True)  # 17 จังหวัดเทรน
 
     neighbor_avg_long = (
         neighbor_avg_wide.stack(future_stack=True).rename("pm25_neighbor_avg").reset_index()

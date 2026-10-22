@@ -1,9 +1,8 @@
 """
-ช่องว่างที่เหลือของนโยบายสำรอง (CHANGELOG 141): check_model_sensitivity_live_degradation.py วัดแค่ MAE — ช่วงความเชื่อมั่น 90% ที่ live ใช้
-(P05/P95 + q_hat ต่อ horizon เหมือน app.py) ยังครอบคลุมค่าจริงเมื่อ feature เพื่อนบ้านมาจากนโยบายสำรองไหม?
-วัดบน test set เดียวกับตอนเทรน, 5 horizon ตัวแทน, ทั้ง LGB/XGB, q_hat จาก conformal_calibration_*_20260919_135655.csv (ตัวเดียวกับที่ deploy):
-  baseline | avg 3 nearest (นโยบายที่ใช้เมื่ออันดับ 1 ไม่สด) | stale 24h hold | nb=mean of others
-รายงาน coverage รวม / ฤดูฝุ่น (ก.พ.-เม.ย.) / >p90 และความกว้างช่วง — ไม่แก้ app.py
+วัดว่าช่วงความเชื่อมั่น 90% (P05/P95 + q_hat ต่อ horizon เหมือน app.py) ยังครอบคลุมค่าจริงไหม
+เมื่อ feature เพื่อนบ้านมาจากนโยบายสำรอง: baseline | avg 3 nearest | stale 24h hold | mean of others
+วัดบน test set เดียวกับตอนเทรน, 5 horizon ตัวแทน, ทั้ง LGB/XGB
+รายงาน coverage รวม / ฤดูฝุ่น (ก.พ.-เม.ย.) / >p90 และความกว้างช่วง
 """
 import importlib.util
 import json
@@ -36,7 +35,7 @@ def main():
     test_df = test_df.reset_index(drop=True)
     feats = tm.FEATURE_COLS
 
-    # ตัวแปรสมมติสถานการณ์ live (สร้างเหมือน E4)
+    # ตัวแปรสมมติสถานการณ์ live
     pv = df.pivot_table(index="datetime_utc", columns="province_en", values="pm25")
     reg = {q["province_en"]: q for q in json.load(open(os.path.join(_ROOT, "data", "province_station_registry.json"), encoding="utf-8"))["provinces"]}
     def hav(a, b):

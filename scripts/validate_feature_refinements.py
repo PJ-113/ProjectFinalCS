@@ -1,20 +1,14 @@
 """
-Phase B + C — ทดสอบ feature ใหม่/ปรับปรุงทีละตัว (baseline 20 feature + 1 candidate) ด้วย hyperparameter ที่จูนแล้วจาก A1
-(lgb cfg06, xgb cfg02) เพื่อให้ delta% วัดเทียบโมเดลที่ดีที่สุดตอนนี้ ไม่ใช่ค่า default
-Selection บน calib split เท่านั้น (ไม่แตะ test), P50-only, SCREEN_HORIZONS=[1,12,24]
+ทดสอบ feature candidate ใหม่ทีละตัว (baseline 20 feature + 1 candidate) บน calib split เท่านั้น
+(ไม่แตะ test), P50-only, horizon [1,12,24]
 
 candidate:
-  B1 (FIRMS, ใช้ frp + ทิศลม): fire_frp_sum_100km_24h, fire_upwind_count_100km_24h, fire_upwind_frp_100km_24h
-      (upwind = จุดไฟอยู่ในทิศที่ลมพัดมา ±60° ณ ชั่วโมงนั้น; wind_dir แบบ meteorological "ลมมาจาก")
-      หมายเหตุ: log1p(count) ไม่ทดสอบ เพราะ tree-based invariant ต่อ monotonic transform
-      หมายเหตุ: ไม่แยกในประเทศ/ข้ามพรมแดน เพราะไม่มี boundary data ในโปรเจกต์ (ทำแบบประมาณด้วย lon/lat จะไม่น่าเชื่อถือ)
-  B2 (spatial-lag): nb_upwind_avg (เพื่อนบ้าน <=200km ถ่วง cos(มุมลม)+/ระยะ), nb_trend_3h (neighbor_avg(t)-(t-3h)),
-      nb_max_150km (max pm25 ของจังหวัดภายใน 150km)
-  B3 (dry-spell): dry_hours (ชั่วโมงตั้งแต่ฝนตกล่าสุด precip>0.1, cap 336), precip_sum_24h, precip_sum_72h
-  C  (weather ใหม่): blh (boundary_layer_height), shortwave_radiation, cloud_cover (จาก fetch_extra_weather_isaan.py;
-      blh ปี 2024 ขาด ~50% → ปล่อย NaN ให้ tree จัดการเอง)
-ทุก feature ใช้ข้อมูล <= เวลา t เท่านั้น (ไม่ leak อนาคต) ยกเว้น neighbor/weather ณ เวลา t เอง (เหมือน pm25_neighbor_avg เดิม)
-บันทึก dataset ที่มีคอลัมน์ candidate ทั้งหมดเป็นไฟล์ใหม่ เพื่อใช้ต่อใน Phase D
+  B1 (FIRMS): fire_frp_sum_100km_24h, fire_upwind_count_100km_24h, fire_upwind_frp_100km_24h
+      (upwind = จุดไฟในทิศที่ลมพัดมา ±60°)
+  B2 (spatial-lag): nb_upwind_avg (เพื่อนบ้าน <=200km ถ่วง cos(มุมลม)/ระยะ), nb_trend_3h, nb_max_150km
+  B3 (dry-spell): dry_hours (ชั่วโมงตั้งแต่ฝนตกล่าสุด, cap 336), precip_sum_24h, precip_sum_72h
+  C  (weather ใหม่): blh, shortwave_radiation, cloud_cover
+วัด MAE รวม/ฤดูฝุ่น/>p90 ต่อ candidate เทียบ baseline
 """
 import glob
 import importlib.util

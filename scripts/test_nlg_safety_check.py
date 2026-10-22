@@ -1,8 +1,7 @@
 """
-ทดสอบ validate_health_message() (NLG Safety Check, proposal 6.1.4)
-
-Logic เดียวกับ test_dynamic_routing.py: โหลด app.py ผ่าน importlib เพื่อไม่ต้อง import
-แบบปกติ (ป้องกัน side effect จาก module-level code อื่นๆ ปนกับ test run อื่น)
+ทดสอบ validate_health_message() (NLG Safety Check) — ข้อความที่ Gemini สร้างต้องตรงกับระดับ
+PM2.5 จริงจาก pm25_status(), ไม่เกินจริง/ไม่ประเมินต่ำไป และกัน false-positive จาก keyword
+ที่เป็น substring ของระดับอื่น
 """
 import importlib.util
 import math

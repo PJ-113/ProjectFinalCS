@@ -1,17 +1,7 @@
 """
-เพิ่มแถว "Dynamic Routing" เข้าตารางที่ 14 ในเล่ม (ปัจจุบันมีแค่ LightGBM/XGBoost/Persistence)
-ให้ scope ตรงกับตารางที่ 14 เป๊ะ: 17 จังหวัดที่ใช้ฝึกโมเดล (ไม่รวม 3 zero-shot), เฉลี่ยทั้ง 24
-horizon ด้วย MAE/RMSE/R² — วิธีเฉลี่ยตามที่ train_multiprovince_models.py ใช้จริง (คำนวณ
-MAE/RMSE/R² แยกต่อ horizon ก่อน แล้วค่อยเฉลี่ย 24 ค่านั้นรวมกัน ไม่ใช่ pool แถวทั้งหมดคำนวณทีเดียว)
-เพื่อให้ตัวเลข LightGBM/XGBoost ที่ได้จากสคริปต์นี้ตรงกับ models/multiprovince_eval_rmse_
-20260919_203455.csv (ต้นทางจริงของตารางที่ 14) เป็นการ sanity check methodology ไปในตัว
-
-ใช้ simulate_province() ตัวเดียวกับ backtest_dynamic_routing_offline.py (select_model() ของจริง,
-3 seed) ไม่ต้องรันใหม่จากศูนย์ แค่ import ฟังก์ชันมาใช้ซ้ำ แล้วเปลี่ยนการ aggregate: เดิมสคริปต์นั้น
-กรองแค่ 5 horizon ตัวแทน (REPORT_HORIZONS) และไม่แยก zero-shot ออกตอนสรุปผลต่อ horizon — สคริปต์นี้
-กรองเฉพาะ 17 จังหวัดฝึกสอน (is_zero_shot == False) และใช้ทั้ง 24 horizon ให้ตรง scope ตารางที่ 14
-
-รัน: python scripts/compute_dynamic_routing_table14_row.py
+คำนวณ MAE/RMSE/R² ของ Dynamic Routing (select_model() ของจริง, 3 seed) บน 17 จังหวัดที่ใช้ฝึกโมเดล
+(ไม่รวม zero-shot) เฉลี่ยทั้ง 24 horizon (คำนวณแยกต่อ horizon ก่อนแล้วเฉลี่ยรวม) เพื่อเทียบกับแถว
+LightGBM/XGBoost/Persistence ที่มีอยู่
 """
 import importlib.util
 import os
@@ -74,8 +64,7 @@ def main():
     sim17 = sim_df[~sim_df["is_zero_shot"]].reset_index(drop=True)
     print(f"\nsim rows ทั้งหมด = {len(sim_df)}, เฉพาะ 17 จังหวัดฝึกสอน = {len(sim17)}")
 
-    # เฉลี่ยต่อ horizon ก่อน (เหมือน train_multiprovince_models.py) แล้วค่อยเฉลี่ย 24 horizon รวมกัน
-    # คำนวณแยกต่อ seed ก่อน แล้วเฉลี่ยข้าม seed ด้วย (ระบบมีสุ่ม cold-start/epsilon-greedy)
+    # เฉลี่ยต่อ horizon ก่อน แล้วค่อยเฉลี่ยรวม 24 horizon; คำนวณแยกต่อ seed ก่อนเฉลี่ยข้าม seed
     per_seed_horizon = []
     for seed in SEEDS:
         g_seed = sim17[sim17["seed"] == seed]
@@ -89,7 +78,7 @@ def main():
             per_seed_horizon.append({"seed": seed, "horizon": h, "mae": mae, "rmse": rmse, "r2": r2, "n": len(gh)})
     psh = pd.DataFrame(per_seed_horizon)
 
-    # เฉลี่ย 24 horizon รวมกัน ต่อ seed ก่อน (ให้ทุก horizon น้ำหนักเท่ากัน เหมือนตัวเลขต้นทางตารางที่ 14)
+    # เฉลี่ย 24 horizon รวมกันต่อ seed
     per_seed_mean = psh.groupby("seed")[["mae", "rmse", "r2"]].mean()
     print("\nต่อ seed (เฉลี่ยทั้ง 24 horizon, 17 จังหวัดฝึกสอน):")
     print(per_seed_mean.round(4).to_string())

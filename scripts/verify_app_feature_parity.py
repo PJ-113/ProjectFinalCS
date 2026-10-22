@@ -1,11 +1,7 @@
 """
-ด่านตรวจ G2 ของการ deploy โมเดล v2 (CHANGELOG 141): เรียก "ฟังก์ชันจริงใน app.py" (compute_neighbor_features,
-count_fire_hotspots) กับข้อมูล OpenAQ ย้อนหลังที่ slice ให้เห็นเฉพาะ <= t (72 ชม.) เหมือนตอน live แล้วเทียบกับแถวใน dataset เทรน
-(ต่างจาก check_live_feature_parity.py ที่ใช้โค้ดจำลองในสคริปต์ — อันนี้ตรวจตัวที่ deploy จริง เป็น regression check
-เมื่อแก้สูตรใน app.py)
-เกณฑ์: เคสที่ใช้เพื่อนบ้านอันดับ 1 (policy k1_exact) ตรง >= 99%, ภาพรวม >= 95%, fire 100%
-เคสที่ต้องใช้ policy สำรอง (เพื่อนบ้านอันดับ 1 ไม่สด/ไม่มี reading) คาดว่าไม่ตรง dataset โดยเจตนา — รายงานแยก
-ดึง OpenAQ 1 request ต่อจังหวัด (ไม่พิมพ์คีย์), ใช้ไฟล์ FIRMS SP เดิม (ทดสอบ "สูตร" ไม่ใช่ตัวแหล่ง)
+เรียกฟังก์ชันจริงใน app.py (compute_neighbor_features, count_fire_hotspots) กับข้อมูล OpenAQ ย้อนหลัง
+ที่ slice ให้เห็นเฉพาะ <= t (72 ชม.) เหมือนตอน live แล้วเทียบกับแถวใน dataset เทรน
+เกณฑ์: เคส policy k1_exact ตรง >= 99%, ภาพรวม >= 95%, fire 100% (เคส policy สำรองรายงานแยก)
 """
 import glob
 import importlib.util
@@ -49,7 +45,7 @@ def main():
     print("ดึง OpenAQ ย้อนหลังของ 20 จังหวัด...")
     series = {}
     for p in app.PROVINCE_REGISTRY:
-        off = pd.Timedelta(hours=int(p.get("openaq_timestamp_offset_hours", 0)))  # ป้ายเวลา /measurements ของบางสถานีเลื่อน (CHANGELOG 144-145)
+        off = pd.Timedelta(hours=int(p.get("openaq_timestamp_offset_hours", 0)))  # ป้ายเวลา /measurements ของบางสถานีเลื่อน
         s = e2.fetch_range(p["sensor_id_pm25"], headers, WIN_START - pd.Timedelta(days=3) - off, WIN_END + pd.Timedelta(days=1))
         if len(s):
             s = s.copy()

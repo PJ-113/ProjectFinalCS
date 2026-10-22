@@ -1,8 +1,6 @@
 """
-TASK 2: เทียบ live MAE กับ backtest MAE ของ LightGBM (weighted, deployed) แบบเทียบ
-horizon ต่อ horizon เป๊ะๆ (ไม่ใช่เทียบข้ามช่วง 0.445-4.25 แบบกว้างๆ) ใช้ test_mae_by_horizon
-ที่บันทึกไว้ในตัว pkl ของโมเดลที่ deploy อยู่จริงเป็น baseline (ค่าเดียวกับที่มาจาก
-eval ตอนเทรน ตรงกับที่ขอให้ใช้ lgb_results_summary/eval CSV)
+เทียบ live MAE (จาก prediction_log) กับ backtest MAE (จาก test_mae_by_horizon ในตัว pkl ของ
+โมเดลที่ deploy จริง) ของ LightGBM แยกตาม horizon
 """
 import pickle
 import sqlite3
@@ -12,7 +10,7 @@ import pandas as pd
 import os
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(_ROOT, r"models\lgb_pm25_multistep_weighted_20260709_004955.pkl")
-DB_PATH = os.path.join(_ROOT, r"backups\predictions.db")  # sqlite เดิม ก่อน migrate ไป Postgres (ดู CHANGELOG (30))
+DB_PATH = os.path.join(_ROOT, r"backups\predictions.db")  # sqlite เดิม ก่อน migrate ไป Postgres
 
 with open(MODEL_PATH, "rb") as f:
     model_package = pickle.load(f)

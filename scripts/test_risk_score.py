@@ -71,9 +71,8 @@ for pm25_test in [5, 20, 30, 50, 100]:
             assert result["level"] == expected_level, (pm25_test, rg, act, result)
 print("Test 7 ผ่าน: level ตรงกับ _classify_pm25_level(effective_pm25) ทุกชุด risk_group x activity ที่ทดสอบ")
 
-# Test 8: /api/forecast ต้องส่ง risk_score_config มาด้วย ตรงกับ risk_group ของ session จริง (login
-# จริงผ่าน /api/auth/register เหมือน test_risk_group_e2e.py STEP D — session ไม่มีคีย์ "risk_group"
-# ตรงๆ ต้อง resolve ผ่าน user_id -> DB เท่านั้น ดู resolve_risk_group_from_session())
+# Test 8: /api/forecast ต้องส่ง risk_score_config มาด้วย ตรงกับ risk_group ของ session จริง
+# (login ผ่าน /api/auth/register)
 app.app.testing = True
 
 

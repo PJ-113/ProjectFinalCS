@@ -9,20 +9,8 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, r2_score
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# task F (CHANGELOG 94) — เพิ่ม pm25_neighbor_avg (spatial-lag feature, validate แล้วว่าช่วย MAE
-# -4.1% ถึง -4.3%) ชี้ไปไฟล์ augmented ใหม่แทนไฟล์เดิม (ดู scripts/augment_raw_dataset_with_spatial_lag.py)
-# k tuning (CHANGELOG 108) — k=1 ดีกว่า k=3 เดิม +1.43%/+2.07% เปลี่ยนมาใช้ dataset ที่คำนวณ
-# pm25_neighbor_avg ด้วย k=1 แทน (ดู scripts/augment_raw_dataset_with_spatial_lag_k1.py)
-# fire hotspot (CHANGELOG 122-126) — validate แล้วว่าช่วย MAE ช่วงฤดูฝุ่น/severity สูงสุดชัดเจน
-# (>p90: -1.85%/-0.60%) แม้ MAE รวมก้ำกึ่ง เปลี่ยนมาใช้ dataset ที่มี fire_hotspot_count_100km_24h
-# ผสานแล้ว (ดู scripts/compute_fire_hotspot_feature.py) — ยังไม่ sync build_raw_dataset_multiprovince.py/
-# app.py (deploy ยังไม่ใช่ scope ตอนนี้ ตามที่ผู้ใช้ระบุ)
-# hyperparameter tuning + nb_trend_12h (CHANGELOG 133-137) — จูน LGB/XGB (A1, ไม่เคยจูนมาก่อน) และเพิ่ม nb_trend_12h
-# (แนวโน้ม pm25 เพื่อนบ้าน 12 ชม.) ยืนยันบน test แล้ว MAE -2.6%/-5.7% (LGB/XGB) เปลี่ยนมาใช้ dataset ที่ผสาน nb_trend_12h
-# (ดู scripts/compute_neighbor_trend_feature.py) — tuning ทำที่ P50 เท่านั้น P05/P95 ใช้ค่าเดียวกัน (conformal ชดเชย coverage)
-# แก้ป้ายเวลา OpenAQ (CHANGELOG 144-145): dataset เดิม (..._135009.csv) มี PM2.5 ของ 9 จังหวัดติดป้ายเวลาเร็วไป 23 ชม. ทำให้ feature จังหวัดข้างเคียง
-# รั่วข้อมูลอนาคต — โมเดลรุ่น _20260919_135655 (v2) เทรนจากชุดนั้น ห้ามอ้างผลของมัน; ชี้มา dataset ที่สร้างใหม่ด้วย offset ต่อสถานี
-# (scripts/rebuild_dataset_clean.py) ชุด feature 21 ตัวเดิม (ตัดสินด้วย rolling-origin CV ที่ครอบคลุมฤดูฝุ่น: scripts/validate_features_timeblocked_cv.py)
+# dataset นี้มี pm25_neighbor_avg (spatial-lag k=1), fire_hotspot_count_100km_24h, nb_trend_12h
+# ผสานแล้ว และแก้ offset ป้ายเวลา OpenAQ ของ 9 จังหวัดที่เคยคลาดเคลื่อน 23 ชม.
 DATA_PATH = os.path.join(
     _ROOT, "data", "multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv"
 )
@@ -31,15 +19,13 @@ TIMESTAMP = dt.now().strftime("%Y%m%d_%H%M%S")
 
 QUANTILES = [0.05, 0.5, 0.95]
 ALPHA = 0.10  # target coverage = 1 - ALPHA = 90%
-N_ESTIMATORS = 300  # ค่าเดิม (สคริปต์ validate อื่นอ้างถึง) — โมเดลจริงใช้ TUNED_PARAMS_* ด้านล่างแทน
+N_ESTIMATORS = 300  # สคริปต์ validate อื่นอ้างถึงค่านี้ — โมเดลจริงใช้ TUNED_PARAMS_* ด้านล่างแทน
 TUNED_PARAMS_LGB = dict(learning_rate=0.05, num_leaves=63, min_child_samples=50, reg_lambda=1.0, n_estimators=400)
 TUNED_PARAMS_XGB = dict(learning_rate=0.03, max_depth=8, min_child_weight=20, reg_lambda=10.0, n_estimators=800)
 BAGGING_PARAMS_LGB = dict(subsample=0.8, subsample_freq=1, colsample_bytree=0.8)
 BAGGING_PARAMS_XGB = dict(subsample=0.8, colsample_bytree=0.8)
 
-# time_cyclical (hour/month/dayofweek) ตัดออกจากที่นี่เพราะ ablation study (CHANGELOG 90) +
-# ตรวจซ้ำหลังเพิ่ม spatial-lag แล้ว (CHANGELOG 96) ยืนยันสม่ำเสมอทั้ง 2 โมเดลว่าตัดออกแล้ว MAE
-# ดีขึ้น — น่าจะเป็นเพราะ pm25_lag/rolling มี autocorrelation ที่แฝง seasonal pattern ไว้อยู่แล้ว
+# time_cyclical (hour/month/dayofweek) ไม่ได้ใช้เป็น feature — ablation study ยืนยันว่าตัดออกแล้ว MAE ดีขึ้น
 FEATURE_COLS = [
     "temp", "humidity", "wind_speed", "precipitation",
     "pm25_lag_1", "pm25_lag_3", "pm25_lag_6", "pm25_lag_12", "pm25_lag_24",
@@ -48,8 +34,7 @@ FEATURE_COLS = [
     "fire_hotspot_count_100km_24h",
     "nb_trend_12h",
 ]
-# v3 (CHANGELOG 149): ตัด pm25_neighbor_avg ออก — บนข้อมูลสะอาดมันซ้ำซ้อนกับ nb_trend_12h (ablation test: ตัดแล้ว MAE -0.04%/-0.11%, SHAP ขัดสมมติฐาน 3/6 จุด)
-# และ CV บล็อกเวลายืนยันว่าตัดแล้วดีกว่าเล็กน้อย (macro -0.51%/-0.38%, ฤดูฝุ่น -0.84%/-0.61%): scripts/validate_drop_neighbor_avg_cv.py
+# ไม่มี pm25_neighbor_avg ในชุด feature — ซ้ำซ้อนกับ nb_trend_12h, ตัดแล้ว MAE ดีขึ้นเล็กน้อย
 assert len(FEATURE_COLS) == 20
 TARGET_COLS = [f"pm25_t+{h}" for h in range(1, 25)]
 

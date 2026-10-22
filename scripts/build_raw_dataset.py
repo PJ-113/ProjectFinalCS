@@ -1,6 +1,6 @@
 """
-Step 1 (retrain plan): สร้าง dataset ใหม่จากข้อมูลดิบ (ไม่ผ่าน interpolation ที่ลบความ
-ผันผวนออก) สำหรับช่วง 2024-01-01 ถึง 2026-07-02
+สร้าง dataset จากข้อมูลดิบ (ไม่ผ่าน interpolation ที่ลบความผันผวนออก) สำหรับช่วง
+2024-01-01 ถึง 2026-07-02
 
 Pipeline:
 1. โหลด pm25 ดิบจาก OpenAQ (cache เดิม, สถานีเดียวกับที่ใช้เทรนโมเดล)
@@ -143,10 +143,7 @@ grid_final = grid.dropna(subset=["pm25_lag_24", "pm25_roll_mean_24", "pm25_roll_
 grid_final = grid_final.reset_index(drop=True)
 print(f"\nตัดแถวที่ feature ไม่ครบ (lookback ไม่พอ/แตะ long gap): {before_drop} -> {len(grid_final)}")
 
-# drop เอาคอลัมน์ "pm25" ดิบก่อน rename เพราะ merge ตอนต้น (บรรทัด 78) ยังทิ้ง "pm25" ดิบ
-# ไว้ใน grid ตลอด — ถ้า rename ตรงๆ โดยไม่ drop ก่อน จะได้ 2 คอลัมน์ชื่อ "pm25" ซ้ำกันใน CSV
-# (คอลัมน์นึงคือ raw มี NaN, อีกคอลัมน์คือ pm25_filled ไม่มี NaN) แล้ว out_cols เลือก "pm25"
-# จะได้ทั้งคู่มาปนกันแบบ ambiguous (บั๊กที่เจอตอนเตรียม Prophet ใน Step 3)
+# drop คอลัมน์ "pm25" ดิบก่อน rename pm25_filled -> pm25 (ไม่ให้มี 2 คอลัมน์ชื่อซ้ำ)
 grid_final = grid_final.drop(columns=["pm25"]).rename(columns={"pm25_filled": "pm25"})
 out_cols = ["datetime_utc", "pm25"] + FEATURE_COLS + TARGET_COLS
 grid_final = grid_final[out_cols]

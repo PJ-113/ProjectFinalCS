@@ -1,10 +1,6 @@
 """
-เวอร์ชันแก้ไขของ fetch_province_building_density.py — building footprint count เจอปัญหา OSM
-bulk-import artifact ชัดเจน (มหาสารคาม: อาคาร 2,125 หลังใน 1กม. tag "roof" ล้วน 100%, มีแค่
-0.05% ที่มี tag รายละเอียด = สัญญาณ import อัตโนมัติ ไม่ใช่ mapping โดยชุมชนจริง — ดู
-diagnose_building_count_anomaly.py) เปลี่ยนมานับ **amenity + shop POI** แทน เพราะต้องมีคน tag
-ธุรกิจ/สถานที่จริงทีละจุด ไม่ใช่สิ่งที่ import อัตโนมัติได้ง่าย — ตรวจสอบแล้ว (diagnose_amenity_
-density.py) ให้ลำดับเมืองที่สมเหตุสมผล (ขอนแก่น/โคราช สูงสุดจริง ตรงกับขนาดเมืองจริง)
+ดึงจำนวน amenity + shop POI จาก OpenStreetMap (Overpass API) รอบจุดแต่ละจังหวัด (รัศมี 3 กม.)
+เป็นตัวแทนความหนาแน่นของเมือง บันทึกกลับเข้า province_station_registry.json
 """
 import json
 import os

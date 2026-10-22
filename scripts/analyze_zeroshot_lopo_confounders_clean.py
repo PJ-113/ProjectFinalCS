@@ -1,15 +1,7 @@
 """
-วิเคราะห์เพิ่มเติมจากผล LOPO (entry 114, n=17 จังหวัด): ระยะทางไปจังหวัดเทรนที่ใกล้สุดสัมพันธ์กับ
-MAE แค่ r=0.28-0.30 (p ยังไม่ significant) — ลองดูว่ามีตัวแปรอื่นอธิบาย MAE ได้ดีกว่าระยะทางไหม
-ไม่ต้อง predict ใหม่ ไม่ต้อง retrain ใช้ผล MAE ที่คำนวณไว้แล้วจาก
-`models/zeroshot_lopo_distance_summary_20260919_191542.csv` (entry 114) ล้วนๆ แค่ดึงตัวแปรอธิบาย
-เพิ่มเติมมา correlate เทียบ:
-  - missing_ratio: สัดส่วน NaN ใน FEATURE_COLS ต่อจังหวัด (generalize จาก compute_missing_ratio()
-    ใน app.py ที่เดิมทำงานกับแถวเดียว มาเป็นค่าเฉลี่ยทั้ง batch ต่อจังหวัด)
-  - pm25_mean / pm25_std: ระดับฝุ่นเฉลี่ย/ความผันผวนของจังหวัดเอง
-  - elevation_m / amenity_density_3km: จาก registry (เคย validate แล้วว่าไม่ช่วย MAE ตอนเทรน
-    entry 98-99, 104-106 แต่ยังไม่เคยเช็คว่าอธิบาย zero-shot MAE ได้ไหม)
-  - n_rows: จำนวนแถวข้อมูลที่ใช้ได้ต่อจังหวัด (proxy ความสมบูรณ์/uptime ของเซนเซอร์)
+วัด Pearson correlation ระหว่าง LOPO (leave-one-province-out) MAE กับตัวแปรอธิบายต่อจังหวัด:
+distance_to_nearest_trained_km, missing_ratio (สัดส่วน NaN ใน FEATURE_COLS), pm25_mean/std,
+elevation_m, amenity_density_3km, n_rows
 """
 import importlib.util
 import json
