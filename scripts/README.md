@@ -1,6 +1,6 @@
 # scripts/ — ดัชนีไฟล์
 
-มี 175 ไฟล์ `.py` ใน `scripts/` สะสมมาตลอดการพัฒนาโปรเจกต์ (ไม่มีไลบรารีร่วม แต่ละไฟล์คือ entry point เดี่ยวๆ ตาม CLAUDE.md) ไฟล์นี้เป็นดัชนีช่วยหา — **ไม่มีการย้าย/ลบ/เปลี่ยนชื่อไฟล์ใดๆ** เพราะ 97 ไฟล์ผูก path กันแบบ hardcode ผ่าน `importlib.util.spec_from_file_location` + `os.path.join(_ROOT, "scripts", ...)` และ `app.py:29` เองก็ `sys.path.insert` ไปที่ `scripts/` ตรงๆ แบบ flat directory — การย้ายไฟล์เข้าโฟลเดอร์ย่อยจะพังเป็นลูกโซ่โดยไม่จำเป็น
+มี 170 ไฟล์ `.py` ใน `scripts/` สะสมมาตลอดการพัฒนาโปรเจกต์ (ไม่มีไลบรารีร่วม แต่ละไฟล์คือ entry point เดี่ยวๆ ตาม CLAUDE.md — ลด 5 ไฟล์จาก 175 เดิมเมื่อ 2026-10-22 โดยลบ `shap_analysis.py`/`shap_analysis_nbtrend.py`/`backfill_xgboost.py`/`retrain_weighted.py`/`train_xgb_prophet.py` ที่ CLAUDE.md/CHANGELOG ยืนยันแล้วว่าถูกแทนที่ด้วย `_clean`/`_v2` ไปเรียบร้อย — ไม่มีสคริปต์อื่นเหลือ import ไฟล์เหล่านี้) ไฟล์นี้เป็นดัชนีช่วยหา — **ไม่มีการย้าย/เปลี่ยนชื่อไฟล์ที่เหลือ** เพราะ ~90+ ไฟล์ผูก path กันแบบ hardcode ผ่าน `importlib.util.spec_from_file_location` + `os.path.join(_ROOT, "scripts", ...)` และ `app.py:29` เองก็ `sys.path.insert` ไปที่ `scripts/` ตรงๆ แบบ flat directory — การย้ายไฟล์เข้าโฟลเดอร์ย่อยจะพังเป็นลูกโซ่โดยไม่จำเป็น
 
 ## Core / production
 
@@ -56,7 +56,7 @@
 - `test_risk_group_e2e.py`
 - `test_risk_score.py`
 
-## Experiments / diagnostics (137 ไฟล์)
+## Experiments / diagnostics (132 ไฟล์)
 
 การทดลอง/ตรวจสอบแบบ one-off ตลอดการพัฒนา (ablation, validate, check, analyze ฯลฯ) — ผลลัพธ์ส่วนใหญ่ ไม่ได้ commit เข้า git (ตามธรรมเนียมเดิม ไม่ commit output ทุกไฟล์) จัดกลุ่มตาม prefix ชื่อไฟล์:
 
@@ -73,22 +73,22 @@
 **`compute_*`** (5): `compute_accuracy_mape.py`, `compute_accuracy_mape_clean.py`, `compute_accuracy_mape_nbtrend.py`, `compute_alert_capability_hourly.py`, `compute_dynamic_routing_table14_row.py`
 **`diagnose_*`** (5): `diagnose_amenity_density.py`, `diagnose_boundary_layer_height.py`, `diagnose_building_count_anomaly.py`, `diagnose_firms_hotspot_access.py`, `diagnose_mahasarakham_sensor_quality.py`
 **`tune_*`** (5): `tune_fire_hotspot_hyperparams.py`, `tune_model_hyperparams_pooled.py`, `tune_quantile_heads_pooled.py`, `tune_sample_weight_pooled.py`, `tune_spatial_lag_k.py`
-**`train_*`** (4): `train_baseline_lgb_v2.py`, `train_multiprovince_models_all20.py`, `train_xgb_prophet.py`, `train_xgb_prophet_v2.py`
 **`confirm_*`** (3): `confirm_fire_upwind_on_test.py`, `confirm_improvements_on_test.py`, `confirm_v3_on_test.py`
 **`plot_*`** (3): `plot_bias_comparison.py`, `plot_mae_comparison.py`, `plot_r2_3models.py`
-**`retrain_*`** (3): `retrain_weighted.py`, `retrain_weighted_v2.py`, `retrain_xgb_weighted.py`
-**`shap_*`** (3): `shap_analysis.py`, `shap_analysis_nbtrend.py`, `shap_divergence_by_horizon.py`
-**`backfill_*`** (2): `backfill_xgboost.py`, `backfill_xgboost_v2.py`
+**`train_*`** (3): `train_baseline_lgb_v2.py`, `train_multiprovince_models_all20.py`, `train_xgb_prophet_v2.py`
 **`backtest_*`** (2): `backtest_dayahead_dust_episodes.py`, `backtest_dynamic_routing_offline.py`
 **`compare_*`** (2): `compare_model_vs_persistence_test.py`, `compare_raw_vs_interpolated.py`
 **`evaluate_*`** (2): `evaluate_2024_2026_retrain_window.py`, `evaluate_live_v2_vs_persistence.py`
 **`measure_*`** (2): `measure_gemini_latency.py`, `measure_target_data_latency.py`
+**`retrain_*`** (2): `retrain_weighted_v2.py`, `retrain_xgb_weighted.py`
 **`verify_*`** (2): `verify_app_feature_parity.py`, `verify_forecast_all_provinces.py`
 **`augment_*`** (1): `augment_raw_dataset_with_spatial_lag.py`
+**`backfill_*`** (1): `backfill_xgboost_v2.py`
 **`debug_*`** (1): `debug_prediction_log.py`
 **`dryrun_*`** (1): `dryrun_deploy_latest_model.py`
 **`export_*`** (1): `export_weather_climatology.py`
 **`fit_*`** (1): `fit_air4thai_openaq_calibration.py`
 **`investigate_*`** (1): `investigate_time_cyclical_drop.py`
 **`recompute_*`** (1): `recompute_r2_3models.py`
+**`shap_*`** (1): `shap_divergence_by_horizon.py`
 

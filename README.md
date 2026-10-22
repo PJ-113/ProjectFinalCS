@@ -48,7 +48,7 @@ copy .env.example .env
 # แค่ฟีเจอร์จุดความร้อนไฟป่าจะปิดตัวเองแทน)
 
 # 3) โมเดล — ไฟล์ .pkl ของ LightGBM/XGBoost ไม่ได้ขึ้น git (ไฟล์ใหญ่เกินลิมิตของ GitHub)
-#    ดูวิธีขอไฟล์/checksum ที่ docs/MODEL_FILES.md ก่อนรันเซิร์ฟเวอร์
+#    ดูวิธีขอไฟล์/checksum ที่หัวข้อ "ไฟล์โมเดลที่ไม่ได้อยู่ใน git" ด้านล่างก่อนรันเซิร์ฟเวอร์
 
 # 4) Build frontend (จำเป็น — app.py เสิร์ฟจาก frontend/dist)
 cd frontend && npm install && npm run build && cd ..
@@ -60,9 +60,6 @@ python app.py
 > ระหว่างพัฒนา frontend: `cd frontend && npm run dev` (hot-reload + proxy `/api` ไป :5000)
 > รันคู่กับ `python app.py`
 
-เอกสาร API สำหรับเทส endpoint ทั้งหมด (ตัวอย่าง curl + response จริง) อยู่ที่
-[`docs/API_TESTING.md`](docs/API_TESTING.md)
-
 ## โครงสร้างโปรเจกต์
 
 ```
@@ -71,15 +68,11 @@ requirements.txt       # Python dependencies
 frontend/              # Vue 3 SPA + PWA (build ด้วย Vite)
 models/                # โมเดล .pkl (LightGBM/XGBoost pooled) + ตาราง conformal calibration
 data/                  # ชุดข้อมูลเทรน (.csv) + ทะเบียนจังหวัด (province_station_registry.json)
-scripts/               # สคริปต์เทรน/วิเคราะห์/ทดสอบ (แต่ละไฟล์รันเดี่ยวได้)
+scripts/               # สคริปต์เทรน/วิเคราะห์/ทดสอบ (แต่ละไฟล์รันเดี่ยวได้ ดูดัชนีที่ scripts/README.md)
 notebooks/             # notebook สำรวจ (historical)
-docs/                  # ไดอะแกรม (use case, system architecture), ERD, proposal, API_TESTING.md
 CHANGELOG.md           # ประวัติการเปลี่ยนแปลง (ทำไม ไม่ใช่แค่อะไร)
 CLAUDE.md              # คู่มือสถาปัตยกรรม/ข้อควรระวังเชิงลึก
 ```
-
-ดูไดอะแกรมได้ที่ [`docs/`](docs/): `usecase_diagram.puml`, `system_architecture.puml`/`.html`,
-`database_schema.md` (ERD)
 
 ## หมายเหตุ
 
@@ -87,4 +80,48 @@ CLAUDE.md              # คู่มือสถาปัตยกรรม/ข
   (ประวัติ: ระบบเดิมก่อน 2026-09-13 ใช้ Air4Thai เป็น live source คนละสเกลกับข้อมูลฝึกสอน ต้องมี
   calibration — เลิกใช้ไปแล้ว รายละเอียดใน `CLAUDE.md`)
 - ไฟล์ `.env` (ความลับ), โมเดล `.pkl` ขนาดใหญ่, และ `backups/` (มีข้อมูลผู้ใช้) ถูก `.gitignore` ไว้
-  ไม่ขึ้น repo — ดูวิธีขอไฟล์โมเดลที่ `docs/MODEL_FILES.md`
+  ไม่ขึ้น repo — ดูวิธีขอไฟล์โมเดลที่หัวข้อ "ไฟล์โมเดลที่ไม่ได้อยู่ใน git" ด้านล่าง
+
+## ไฟล์โมเดลที่ไม่ได้อยู่ใน git
+
+โมเดลที่ `app.py` ใช้อยู่ (v3, `_20260919_203455`) มีขนาดเกิน 100 MB ต่อไฟล์ ซึ่งเป็นขีดจำกัดของ GitHub จึงไม่ได้ commit
+ไฟล์ conformal และตารางสรุปผลของโมเดลนี้ (ขนาดเล็ก) อยู่ใน git แล้ว (`models/conformal_calibration_{lgb,xgb}_20260919_203455.csv`,
+`models/multiprovince_eval_summary_20260919_203455.csv`)
+
+### ไฟล์ที่ต้องมีจึงจะรัน `python app.py` ได้
+
+วางไว้ในโฟลเดอร์ `models/` (ชื่อไฟล์ต้องตรงตามนี้ เพราะ `app.py` อ้างชื่อเหล่านี้)
+
+| ไฟล์ | ขนาด (ไบต์) | SHA-256 |
+|---|---|---|
+| `lgb_pm25_multiprovince_residual_bagged_quantile_20260919_203455.pkl` | 167,347,473 | `6596666cd72f450613b6d2a15896700dc936c222d3e9253742e4edff897ad898` |
+| `xgb_pm25_multiprovince_residual_bagged_quantile_20260919_203455.pkl` | 598,681,006 | `37ecdb91f0bb532873b4baed38e56bb3dcc96ff800225a9cfe65e16a520cb6d8` |
+
+ตรวจว่าไฟล์ที่ดาวน์โหลด/กู้คืนมาไม่เสียหาย (ค่า SHA-256 ต้องตรงกับตาราง):
+
+```
+python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest(); print(h)" models/<ชื่อไฟล์>.pkl
+```
+
+### ที่เก็บสำรอง
+
+- GitHub Release (repo เป็น private): https://github.com/PJ-113/ProjectFinalCS/releases/tag/model-v3-20260919_203455 — อัปโหลดเมื่อ 2026-09-21 ขนาดตรงกับต้นฉบับ
+  ดาวน์โหลดด้วย `gh release download model-v3-20260919_203455 --repo PJ-113/ProjectFinalCS --dir models` (ต้อง login ด้วยบัญชีที่มีสิทธิ์)
+- สำรองอีกที่ (Drive/ฮาร์ดดิสก์): (ใส่ที่เก็บที่นี่)
+
+### ถ้าไฟล์หาย
+
+เทรนใหม่ได้จากสคริปต์ แต่ผลอาจไม่เหมือนเดิมทุกตัวเลข เพราะ OpenAQ อาจแก้ข้อมูลย้อนหลัง
+1. `python scripts/rebuild_dataset_clean.py` (ดึงข้อมูลและสร้างชุดข้อมูลสะอาด พร้อม offset ป้ายเวลาจาก registry)
+2. `python scripts/train_multiprovince_models.py` (20 feature, hyperparameter ที่จูนแล้วอยู่ในสคริปต์)
+3. ปรับ path/ชื่อโมเดลใน `app.py` ให้ตรงกับไฟล์ใหม่ (`LGB_MODEL_PATH`, `XGB_MODEL_PATH`, `CONFORMAL_*`, `MODEL_LGB`, `MODEL_XGB`)
+
+ไฟล์อื่นที่ไม่ได้อยู่ใน git และควรสำรองไว้ด้วยเพื่อความสามารถทำซ้ำ: ชุดข้อมูลเทรน
+`data/multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv` และข้อมูลจุดความร้อน
+`data/firms_hotspots_isaan_*.csv`
+
+### ไฟล์เล็กที่ app.py อ่านเพิ่ม (อยู่ใน git)
+
+`models/imputation_h_lite_20260924_204956.json` — ค่าสัมประสิทธิ์วิธีเติมข้อมูลสถานีเงียบ (H-lite) + ตาราง q(k,h) ของช่วงความเชื่อมั่น (CHANGELOG 171) ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดฟีเจอร์เติมค่าเองแล้วทำงานแบบเดิม สร้างใหม่ด้วย `scripts/export_imputation_h_lite.py`
+
+`models/weather_climatology_20260924_211741.json` — ตาราง climatology สภาพอากาศ (จังหวัด x เดือน x ชั่วโมง) ใช้เป็นทางสุดท้ายเมื่อดึง Open-Meteo ไม่ได้ (CHANGELOG 172) ไม่จำเป็นต่อการรัน: ถ้าไม่มี/อ่านไม่ได้ ระบบปิดทางสุดท้ายนี้เอง (ดึงสภาพอากาศไม่ได้ก็ตอบ 500 เหมือนเดิม) สร้างใหม่ด้วย `scripts/export_weather_climatology.py` (เรียก Open-Meteo archive 20 ครั้ง)
