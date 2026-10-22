@@ -9,8 +9,6 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, r2_score
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# dataset นี้มี pm25_neighbor_avg (spatial-lag k=1), fire_hotspot_count_100km_24h, nb_trend_12h
-# ผสานแล้ว และแก้ offset ป้ายเวลา OpenAQ ของ 9 จังหวัดที่เคยคลาดเคลื่อน 23 ชม.
 DATA_PATH = os.path.join(
     _ROOT, "data", "multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv"
 )
@@ -18,14 +16,13 @@ MODEL_DIR = os.path.join(_ROOT, "models")
 TIMESTAMP = dt.now().strftime("%Y%m%d_%H%M%S")
 
 QUANTILES = [0.05, 0.5, 0.95]
-ALPHA = 0.10  # target coverage = 1 - ALPHA = 90%
-N_ESTIMATORS = 300  # สคริปต์ validate อื่นอ้างถึงค่านี้ — โมเดลจริงใช้ TUNED_PARAMS_* ด้านล่างแทน
+ALPHA = 0.10
+N_ESTIMATORS = 300
 TUNED_PARAMS_LGB = dict(learning_rate=0.05, num_leaves=63, min_child_samples=50, reg_lambda=1.0, n_estimators=400)
 TUNED_PARAMS_XGB = dict(learning_rate=0.03, max_depth=8, min_child_weight=20, reg_lambda=10.0, n_estimators=800)
 BAGGING_PARAMS_LGB = dict(subsample=0.8, subsample_freq=1, colsample_bytree=0.8)
 BAGGING_PARAMS_XGB = dict(subsample=0.8, colsample_bytree=0.8)
 
-# time_cyclical (hour/month/dayofweek) ไม่ได้ใช้เป็น feature — ablation study ยืนยันว่าตัดออกแล้ว MAE ดีขึ้น
 FEATURE_COLS = [
     "temp", "humidity", "wind_speed", "precipitation",
     "pm25_lag_1", "pm25_lag_3", "pm25_lag_6", "pm25_lag_12", "pm25_lag_24",
@@ -34,13 +31,11 @@ FEATURE_COLS = [
     "fire_hotspot_count_100km_24h",
     "nb_trend_12h",
 ]
-# ไม่มี pm25_neighbor_avg ในชุด feature — ซ้ำซ้อนกับ nb_trend_12h, ตัดแล้ว MAE ดีขึ้นเล็กน้อย
 assert len(FEATURE_COLS) == 20
 TARGET_COLS = [f"pm25_t+{h}" for h in range(1, 25)]
 
 
 def split_train_calib_test(df, fracs=(0.65, 0.15, 0.20)):
-    """chronological ต่อสถานี ไม่สุ่ม กันอนาคตรั่วต่อจังหวัด"""
     trains, calibs, tests = [], [], []
     for _, g in df.groupby("province_en", sort=False):
         g = g.sort_values("datetime_utc").reset_index(drop=True)
@@ -77,7 +72,6 @@ def fit_xgb_quantile(X, y, alpha):
 
 
 def conformalize(lo, hi, y_true, alpha=ALPHA):
-    """split-conformal (CQR) adjustment: คืน q_hat ที่บวก/ลบเข้ากับ [lo,hi] ให้ coverage->1-alpha"""
     scores = np.maximum(lo - y_true, y_true - hi)
     n = len(scores)
     q_level = min(np.ceil((n + 1) * (1 - alpha)) / n, 1.0)
