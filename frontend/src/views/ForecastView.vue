@@ -15,6 +15,9 @@ import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
 // ต้องการซ่อนการ์ดทั้งหมด: ตั้ง SHOW_EXTRA_CARDS = false (โค้ด/logic ของจริงยังอยู่ครบไม่ถูกลบ)
 const SHOW_EXTRA_CARDS = true;
 const SAMPLE_EXTRA_CARDS_DATA = false;
+// ซ่อนป้าย "อัปเดต ... น." มุมขวาบนของการ์ด PM2.5 ตอนนี้ (ผู้ใช้สั่งก่อนนำเสนอเช้า 2026-10-20) ค่าเวลายังคำนวณ
+// ปกติ แค่ไม่ render ตั้ง true เพื่อเอากลับมาโชว์
+const SHOW_UPDATED_LABEL = false;
 
 const SAMPLE_BEST_TIMES = [
   { time: "05:00", pm25: 11 },
@@ -278,13 +281,10 @@ defineExpose({ loadForecast });
           </div>
         </div>
 
-        <div v-if="dataQuality.series_source === 'stale_cache' || dataQuality.series_source === 'dustboy' || dataQuality.weather_source === 'climatology'" class="banner banner-info">
+        <div v-if="dataQuality.series_source === 'stale_cache' || dataQuality.weather_source === 'climatology'" class="banner banner-info">
             <Info :size="22" :stroke-width="2" aria-hidden="true" />
             <div class="banner-text">
-              <template v-if="dataQuality.series_source === 'dustboy'">
-                สถานีตรวจวัดหลักของจังหวัดนี้ขัดข้อง ระบบใช้ข้อมูลจากเครือข่ายเซนเซอร์ทางเลือก (Dustboy) เป็นการชั่วคราว ความแม่นยำอาจต่ำกว่าปกติ
-              </template>
-              <template v-else-if="dataQuality.series_source === 'stale_cache'">
+              <template v-if="dataQuality.series_source === 'stale_cache'">
                 ระบบเชื่อมต่อแหล่งข้อมูลฝุ่นไม่ได้ชั่วคราว จึงใช้ข้อมูลที่บันทึกไว้ล่าสุด (เมื่อประมาณ {{ Math.max(1, Math.round(dataQuality.series_age_hours)) }} ชั่วโมงก่อน)
               </template>
               <template v-if="dataQuality.weather_source === 'climatology'">
@@ -305,7 +305,7 @@ defineExpose({ loadForecast });
           <section class="hero" aria-label="PM2.5 ตอนนี้">
             <div class="hero-head">
               <span class="hero-label">PM2.5 ตอนนี้<span v-if="dataQuality.input_imputed" class="estimate-tag">ค่าประมาณ</span></span>
-              <span v-if="updatedLabel" class="hero-updated">อัปเดต {{ updatedLabel }}</span>
+              <span v-if="SHOW_UPDATED_LABEL && updatedLabel" class="hero-updated">อัปเดต {{ updatedLabel }}</span>
             </div>
             <div class="pm-value-row">
               <span class="pm-value">{{ current.pm25 }}</span>

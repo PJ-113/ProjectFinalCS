@@ -1,11 +1,18 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from "vue";
-import { CircleCheck, CircleAlert, CircleX, ChevronDown } from "@lucide/vue";
+import { CircleCheck, CircleAlert, CircleX, ChevronDown, MapPin } from "@lucide/vue";
 import { provinceState, selectProvince } from "../provinces";
+import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
 
 const horizon = ref(1);
 const model = ref("all");
 const showAdvanced = ref(false);
+const pickerOpen = ref(false);
+
+// ชื่อจังหวัดไทย/zero-shot ของจังหวัดที่เลือกอยู่ — ใช้กับ province-chip แบบเดียวกับ ForecastView.vue
+const selectedProvinceMeta = computed(
+  () => provinceState.list.find((p) => p.province_en === provinceState.selected) || null
+);
 
 const state = ref("loading"); // "loading" | "error" | "content"
 const errorMessage = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
@@ -380,27 +387,18 @@ watch(() => provinceState.selected, () => {
 </script>
 
 <template>
-  <div class="compare-page">
-    <div class="haze-decor"><span></span><span></span><span></span></div>
-
+  <div class="compare-page" :class="overviewQuality ? 'quality-' + overviewQuality.cls : ''">
     <div class="wrap">
       <div class="top-row">
-        <div>
-          <h1>เปรียบเทียบผลพยากรณ์กับค่าจริง</h1>
-          <div class="subtitle">ดูว่าที่ผ่านมาระบบพยากรณ์ PM2.5 แม่นยำแค่ไหน เทียบกับค่าที่วัดได้จริง</div>
-        </div>
-        <select
-          class="province-select"
-          :value="provinceState.selected"
-          @change="selectProvince($event.target.value)"
-          aria-label="เลือกจังหวัด"
-        >
-          <option v-for="p in provinceState.list" :key="p.province_en" :value="p.province_en">
-            {{ p.province_th }}{{ p.is_zero_shot ? " (zero-shot)" : "" }}
-          </option>
-        </select>
-        <router-link class="back-link" to="/">← กลับหน้าแรก</router-link>
+        <button type="button" class="province-chip" aria-haspopup="dialog" @click="pickerOpen = true">
+          <MapPin :size="18" :stroke-width="2" aria-hidden="true" />
+          <span class="province-chip-name">{{ selectedProvinceMeta?.province_th || "..." }}</span>
+          <span v-if="selectedProvinceMeta?.is_zero_shot" class="zs-badge">zero-shot</span>
+          <ChevronDown :size="16" :stroke-width="2" aria-hidden="true" />
+        </button>
+        <span class="page-title">เปรียบเทียบผลพยากรณ์</span>
       </div>
+      <p class="subtitle">ดูว่าที่ผ่านมาระบบพยากรณ์ PM2.5 แม่นยำแค่ไหน เทียบกับค่าที่วัดได้จริง</p>
 
       <!-- การ์ดคำตอบหลัก — สิ่งแรกที่ควรเห็น: "พยากรณ์แม่นยำแค่ไหน" แบบภาพรวม ไม่ต้องอ่านศัพท์สถิติ -->
       <div class="card hero-card">
@@ -531,134 +529,103 @@ watch(() => provinceState.selected, () => {
         </div>
       </div>
     </div>
+
+    <ProvincePickerSheet
+      :open="pickerOpen"
+      :selected="provinceState.selected"
+      @select="selectProvince"
+      @close="pickerOpen = false"
+    />
   </div>
 </template>
 
 <style scoped>
 .compare-page {
-  --sky-top: #4a7fae;
-  --sky-mid: #8fb4d1;
-  --sky-bottom: #dce8f0;
-  --page-text: #0f172a;
-  --page-text-muted: rgba(15, 23, 42, 0.7);
-
-  --card-bg: rgba(255, 255, 255, 0.65);
-  --card-border: rgba(255, 255, 255, 0.4);
-  --text: #0f172a;
-  --muted: #64748b;
-  --border: rgba(255, 255, 255, 0.3);
+  /* โทเคนกลางของหน้า (ground/card/ink/muted/line/track/accent/warn/info/success) มาจาก :root ใน
+     assets/main.css เหมือน ForecastView/MapView/NotificationsView — เหลือแค่โทเคนที่หน้านี้ใช้เฉพาะตัวเอง
+     (สีคุณภาพการพยากรณ์ good/moderate/bad, สีเส้นกราฟ, สีชิปโมเดล) ไม่มี sky gradient/glass blur อีกแล้ว
+     เพื่อให้หน้าตาตรงกับหน้าอื่นทั้งหมด */
   --good: #22c55e;
-  --moderate: #f97316;
+  --moderate: #eab308;
   --bad: #ef4444;
-  --accent: #3b82f6;
-  --predicted: #3b82f6;
-  --actual: #22c55e;
-  --select-bg: rgba(255, 255, 255, 0.6);
+  --predicted: var(--accent);
+  --actual: var(--good);
 
   --model-lightgbm: #6366f1;
   --model-xgboost: #10b981;
   --model-fallback: #ec4899;
 
+  /* สีการ์ดคำตอบหลัก (hero) แบบเดียวกับ ForecastView — ปรับ tint ตามคุณภาพผ่านคลาส .quality-* บน root */
+  --hero-bg: var(--card);
+  --hero-ink: var(--ink);
+
   min-height: 100vh;
-  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 55%, var(--sky-bottom) 100%);
-  color: var(--text);
-  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 48px);
-  position: relative;
-  overflow-x: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
 }
+
+/* tint การ์ดคำตอบหลักตามคุณภาพการพยากรณ์ (ตัวหนังสือเข้มบน tint อ่อน / อ่อนบน tint เข้มใน dark) —
+   ใช้ hex เดียวกับ ForecastView.vue .aqi-good/.aqi-moderate/.aqi-bad เพื่อให้ความหมายสี "ดี/ปานกลาง/แย่"
+   ตรงกันทั้งแอป */
+.compare-page.quality-good     { --hero-bg: #dff4e6; --hero-ink: #14532d; }
+.compare-page.quality-moderate { --hero-bg: #faefc1; --hero-ink: #4f3b00; }
+.compare-page.quality-bad      { --hero-bg: #fadada; --hero-ink: #7f1d1d; }
 /* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
-  :root[data-theme="dark"] .compare-page {
-    --card-bg: rgba(22, 25, 30, 0.55);
-    --card-border: rgba(255, 255, 255, 0.1);
-    --text: #f8fafc;
-    --muted: #94a3b8;
-    --border: rgba(255, 255, 255, 0.1);
-    --select-bg: rgba(0, 0, 0, 0.35);
-  }
+  :root[data-theme="dark"] .compare-page.quality-good { --hero-bg: #12291b; --hero-ink: #bdebcb; }
+  :root[data-theme="dark"] .compare-page.quality-moderate { --hero-bg: #2b2410; --hero-ink: #f5de8a; }
+  :root[data-theme="dark"] .compare-page.quality-bad { --hero-bg: #351516; --hero-ink: #ffb8b8; }
 
 
-.haze-decor {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 0;
-}
-.haze-decor span {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(30px);
-  background: rgba(255, 255, 255, 0.3);
-  animation: float 24s ease-in-out infinite;
-}
-.haze-decor span:nth-child(1) { width: 220px; height: 220px; top: 6%;  left: -60px; animation-duration: 22s; }
-.haze-decor span:nth-child(2) { width: 160px; height: 160px; top: 40%; right: -40px; animation-duration: 26s; animation-delay: -4s; }
-.haze-decor span:nth-child(3) { width: 240px; height: 240px; top: 78%; left: 15%; animation-duration: 30s; animation-delay: -10s; }
-@keyframes float {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(24px, -18px); }
-}
-
-.wrap { max-width: 860px; margin: 0 auto; position: relative; z-index: 1; }
+.wrap { max-width: 860px; margin: 0 auto; }
 
 .top-row {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
   gap: 12px;
-  flex-wrap: wrap;
+  margin-bottom: 4px;
 }
-h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
-.subtitle { color: var(--page-text-muted); font-size: 0.85rem; margin-bottom: 20px; }
-.back-link {
-  color: var(--page-text);
-  text-decoration: none;
-  font-size: 0.85rem;
-  white-space: nowrap;
-  opacity: 0.85;
-}
-.back-link:hover { text-decoration: underline; }
+.page-title { color: var(--muted); font-weight: 600; font-size: 0.95rem; }
+/* มือถือ: header ด้านบนมี brand อยู่แล้ว ไม่ต้องซ้ำหัวข้อหน้าอีก (เหมือน ForecastView.vue) */
+@media (max-width: 720px) { .page-title { display: none; } }
 
-/* พื้นหลังทึบชัดเจน ไม่ใช้ var(--card-bg) โปร่งแสง — ตรงนี้วางบนพื้นหลัง gradient sky ตรงๆ ไม่ได้อยู่
-   ใน .card ที่มี blur ช่วย โปร่งแสงแล้วสีจะกลืนกับพื้นหลังฟ้า อ่านยาก */
-.province-select {
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  background: rgba(255, 255, 255, 0.95);
-  color: #0f172a;
+.province-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px 0 12px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1rem;
   font-weight: 600;
-  font-size: 0.85rem;
-  padding: 6px 12px;
-  border-radius: 999px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
-.province-select option { background: #ffffff; color: #0f172a; }
-/* ธีมมืด (สลับด้วย data-theme บน <html> — ดู theme.js) */
-  :root[data-theme="dark"] .province-select {
-    background: rgba(15, 23, 42, 0.92);
-    color: #f1f5f9;
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  :root[data-theme="dark"] .province-select option { background: #1e293b; color: #f1f5f9; }
+.province-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.zs-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--track);
+  color: var(--muted);
+}
 
+.subtitle { color: var(--muted); font-size: 0.9rem; margin: 8px 0 16px; line-height: 1.5; }
 
 .card {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+  background: var(--card);
+  border: 1px solid var(--line);
   border-radius: 24px;
-  padding: 24px;
-  margin-bottom: 20px;
-  transition: box-shadow 0.3s ease, transform 0.3s ease;
-}
-.card:hover {
-  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.12);
-  transform: translateY(-2px);
+  padding: 20px;
+  margin-bottom: 16px;
 }
 
-.hero-card { padding: 28px 24px; }
+.hero-card { padding: 24px 20px; background: var(--hero-bg); color: var(--hero-ink); transition: background 0.4s ease, color 0.4s ease; }
 .hero-row {
   display: flex;
   align-items: center;
@@ -685,7 +652,7 @@ h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
 .hero-detail {
   font-size: 0.92rem;
   line-height: 1.6;
-  color: var(--text);
+  color: var(--hero-ink);
 }
 .quality-good { color: var(--good); }
 .quality-moderate { color: var(--moderate); }
@@ -725,18 +692,19 @@ h1 { font-size: 1.3rem; margin: 0 0 4px; color: var(--page-text); }
   flex-wrap: wrap;
 }
 select {
-  background: var(--select-bg);
-  color: var(--text);
-  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
   border-radius: 12px;
   padding: 8px 12px;
   font-size: 0.95rem;
+  font-family: inherit;
   transition: all 0.2s ease;
 }
 select:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .quality-badge {
@@ -764,7 +732,7 @@ select:focus {
 .detail-text {
   font-size: 0.9rem;
   line-height: 1.6;
-  color: var(--text);
+  color: var(--ink);
 }
 
 .summary-note {
@@ -822,7 +790,7 @@ select:focus {
   width: 40%;
   height: 4px;
   border-radius: 2px;
-  background: var(--border);
+  background: var(--track);
 }
 .mini-bar-label {
   font-size: 0.55rem;
@@ -856,7 +824,7 @@ select:focus {
   margin: 0 auto 20px;
   padding: 8px 16px;
   background: transparent;
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--line);
   border-radius: 999px;
   color: var(--muted);
   font-size: 0.85rem;
@@ -883,7 +851,7 @@ select:focus {
   flex: 1 1 140px;
   border-radius: 12px;
   padding: 10px 12px;
-  background: rgba(127, 127, 127, 0.08);
+  background: var(--track);
   border-left: 4px solid var(--muted);
 }
 .model-chip .name {
@@ -900,7 +868,7 @@ select:focus {
 .chart-wrap { overflow-x: auto; }
 svg { display: block; }
 .chart-wrap :deep(.axis-label) { font-size: 9px; fill: var(--muted); }
-.chart-wrap :deep(.grid-line) { stroke: var(--border); stroke-width: 1; }
+.chart-wrap :deep(.grid-line) { stroke: var(--line); stroke-width: 1; }
 
 .empty-msg {
   color: var(--muted);
@@ -911,7 +879,7 @@ svg { display: block; }
 
 /* loading skeleton */
 .skeleton {
-  background: linear-gradient(90deg, var(--border) 25%, transparent 37%, var(--border) 63%);
+  background: linear-gradient(90deg, var(--line) 25%, transparent 37%, var(--line) 63%);
   background-size: 400% 100%;
   animation: shimmer 1.4s ease infinite;
   border-radius: 8px;
@@ -926,13 +894,20 @@ svg { display: block; }
 .error-box { text-align: center; padding: 32px 20px; }
 .error-box p { color: var(--muted); margin-bottom: 16px; }
 .retry-btn {
+  min-height: 44px;
   background: var(--accent);
   color: #fff;
   border: none;
-  padding: 10px 22px;
-  border-radius: 8px;
-  font-size: 0.9rem;
+  padding: 0 24px;
+  border-radius: 22px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
 }
 .retry-btn:hover { opacity: 0.9; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-card, .skeleton { animation: none; transition: none; }
+}
 </style>

@@ -25,32 +25,22 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from sklearn.metrics import r2_score
 
-# SHAP explanation (scripts/shap_analysis_clean.py) — โหลดโมเดล v3 ชุดเดียวกับที่ app.py ใช้งานจริงซ้ำอีกรอบ
-# ที่ module level (เพิ่มหน่วยความจำ ~731MB รวม LGB+XGB) เพื่อแลกกับการ reuse โค้ด TreeExplainer ที่ตรวจสอบ
-# แล้วว่าถูกต้องตรงกับ pooled v3 structure (models[h][quantile]) ไม่ต้องเขียนใหม่ซ้ำ
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
 from shap_analysis_clean import get_shap_explanation
 
 # ===== Config =====
 
-# pooled model: โมเดลเดียวรับใช้ 17 จังหวัดที่เทรน + 3 zero-shot (lat/lon เป็น feature — CHANGELOG 75)
-# v3 = _20260919_203455 (20 feature: ประวัติ PM2.5 + อากาศ + lat/lon + nb_trend_12h + fire_hotspot_count_100km_24h, hyperparameter จูนแล้ว)
-# เทรนจาก dataset ที่แก้ป้ายเวลา OpenAQ แล้ว (CHANGELOG 144-149) — ต้องใช้คู่กับ USE_TIMESTAMP_OFFSET = True เสมอ
-# รุ่นก่อนหน้าทั้งหมด (v2 = _20260919_135655 เทรนจากข้อมูลป้ายเวลาผิด และ _20260913_014901) ยังอยู่ใน models/ แต่ห้ามกลับไปใช้โดยไม่ปิด offset
-# (ย้อนกลับ: คืน path + MODEL_LGB/MODEL_XGB + USE_TIMESTAMP_OFFSET=False — ดู CLAUDE.md)
 LGB_MODEL_PATH = "models/lgb_pm25_multiprovince_residual_bagged_quantile_20260919_203455.pkl"
 XGB_MODEL_PATH = "models/xgb_pm25_multiprovince_residual_bagged_quantile_20260919_203455.pkl"
 CONFORMAL_LGB_PATH = "models/conformal_calibration_lgb_20260919_203455.csv"
 CONFORMAL_XGB_PATH = "models/conformal_calibration_xgb_20260919_203455.csv"
-# ชื่อโมเดลที่บันทึกใน prediction_log.model_used — รุ่นใหม่ใช้ชื่อ _v2 แยกจากรุ่นเก่า
-# ("lightgbm_pooled"/"xgboost_pooled" = รุ่นเก่าสุด, "*_v2" = รุ่นที่เทรนจากข้อมูลป้ายเวลาผิด ยังมีอยู่ในแถวเก่า) กัน compute_rolling_r2() ปนผลรุ่นเก่าเข้ากับรุ่นใหม่
+
 MODEL_LGB = "lightgbm_pooled_v3"
 MODEL_XGB = "xgboost_pooled_v3"
 MODEL_NAIVE = "naive_fallback"
 PROVINCE_REGISTRY_PATH = "data/province_station_registry.json"
-# ป้ายเวลา OpenAQ /measurements ของ 9 สถานีเลื่อนไป 23 ชม. (CHANGELOG 144-145): registry เก็บ offset ต่อสถานีใน openaq_timestamp_offset_hours (วัดโดย
-# scripts/annotate_registry_timestamp_offset.py) ต้องบวกเข้า datetime_utc เสมอ — เฉพาะโมเดลที่เทรนจาก dataset ที่แก้ป้ายเวลาแล้ว (v3 ขึ้นไป) เท่านั้น
-# (โมเดลรุ่นก่อนเทรนจากข้อมูลป้ายเวลาผิด ใช้กับข้อมูลที่แก้แล้วไม่ได้)
+
 USE_TIMESTAMP_OFFSET = True
 OFFSET_FUTURE_TOLERANCE_H = 1  # หลังบวก offset แล้ว reading ล่าสุดล้ำอนาคตเกินนี้ = OpenAQ แก้ป้ายเวลาแล้ว offset จะแก้ซ้ำ -> ทิ้ง offset (ดู fetch_recent_pm25_openaq)
 DEFAULT_PROVINCE = "khonkaen"
@@ -58,13 +48,11 @@ HIGH_POLLUTION_THRESHOLD = 37.5  # ค่าเดียวกันทุกจ
 # ต้องรัน `npm run build` ใน frontend/ ก่อน ถึงจะมีโฟลเดอร์นี้ (ดู CHANGELOG)
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 DEBUG = True  # ต้องอ่านจากตรงนี้ ไม่ใช่ app.debug เพราะ Flask ยังไม่ set app.debug จนกว่าจะเรียก app.run()
-SIGMA_CRITICAL = 0.3  # Dynamic Routing (proposal 4.1.6): missing_ratio เกินนี้ถือว่า input เสียหายหนัก ให้ fallback ไปพยากรณ์แบบ naive persistence (ดู select_model)
-EXPLORATION_RATE = 0.2  # โอกาสที่จะ "ลอง" โมเดลที่ยังไม่มีข้อมูลพอประเมิน R² แก้ปัญหา cold-start deadlock (ดู select_model)
-MIN_R2_PAIRS = 15  # ขั้นต่ำคู่ (predicted, actual) ก่อนเชื่อ Rolling R² ได้ (เดิม 5 — วัดจาก prediction_log จริงพบว่า
-# n<15 คู่ ทำให้ R² ผันผวนรุนแรง (สัดส่วน R²<-1 ลดจาก 53.7% ที่ n=5-9 เหลือ 12.2% ที่ n=15-19, ขนาดการ
-# เปลี่ยนแปลงต่อจุดเฉลี่ยลดจาก 8.29 เหลือ 0.11) และผลเลือกโมเดลที่ n=5 ไม่ตรงกับผลที่ n=24 ถึง 42.6% ของเวลา
-# ดู CHANGELOG และ scripts/check_rolling_r2_stability.py
-CONFORMAL_ALPHA = 0.10  # เป้าหมาย coverage 90% (ดู train_multiprovince_models.py) ใช้แค่ใน docstring/comment ไม่ได้ใช้คำนวณตรงนี้
+SIGMA_CRITICAL = 0.3
+EXPLORATION_RATE = 0.2
+MIN_R2_PAIRS = 15
+
+CONFORMAL_ALPHA = 0.10  
 
 
 # ===== .env / Database config =====
@@ -84,16 +72,14 @@ def _load_env():
 
 _ENV = _load_env()
 GEMINI_KEY = _ENV["GEMINI_KEY"]
-SECRET_KEY = _ENV["SECRET_KEY"]  # เซ็น Flask session cookie (login/register) — ห้าม print/log
-OPENAQ_KEY = _ENV["OPENAQ_KEY"]  # ส่งเป็น header X-API-Key (fetch_recent_pm25_openaq) — ห้าม print/log
+SECRET_KEY = _ENV["SECRET_KEY"]  
+OPENAQ_KEY = _ENV["OPENAQ_KEY"]  
 OPENAQ_HEADERS = {"X-API-Key": OPENAQ_KEY}
-# NASA FIRMS MAP_KEY (fire_hotspot_count_100km_24h) — ไม่บังคับ: ไม่มี/ใช้ไม่ได้ -> feature = 0 + flag ใน data_quality
-# (แอปต้องไม่ล่มเพราะ FIRMS) ห้าม print/log คีย์นี้ และห้าม log URL/ข้อความ exception ของ requests (URL มีคีย์)
-FIRMS_KEY = _ENV.get("FIRMS_KEY")
-# CMU CCDC / Dustboy open API key (ทางสำรอง PM2.5 ชั่วคราวเฉพาะจังหวัดเลย ดู USE_DUSTBOY_LOEI) — ไม่บังคับ: ไม่มี -> ปิดฟีเจอร์เอง ห้าม print/log คีย์นี้
-DUSTBOY_KEY = _ENV.get("DUSTBOY_KEY")
 
-# PostgreSQL (ย้ายจาก sqlite แล้ว ดู CHANGELOG) — get_db_connection() เปิด connection ใหม่ทุกครั้งที่เรียก
+FIRMS_KEY = _ENV.get("FIRMS_KEY")
+
+
+# PostgreSQL (ย้ายจาก sqlite แล้ว) — get_db_connection() เปิด connection ใหม่ทุกครั้งที่เรียก
 POSTGRES_HOST = _ENV["POSTGRES_HOST"]
 POSTGRES_PORT = _ENV["POSTGRES_PORT"]
 POSTGRES_DB = _ENV["POSTGRES_DB"]
@@ -115,10 +101,17 @@ def get_db_connection():
 app = Flask(__name__)
 CORS(app)
 
+# Swagger UI แบบ interactive (ลอง endpoint ได้จริงจากเบราว์เซอร์) เข้าได้ที่ /apidocs/ — สเปกแยกไว้ที่
+# swagger_spec.py เพราะ route ในไฟล์นี้เยอะ ไม่อยากให้ YAML docstring ปนกับ logic ของแต่ละ route
+# คำเตือน: endpoint ที่เขียนข้อมูลจริง (เช่น /api/auth/register) ถ้ากด "Try it out" จะเขียนลง DB จริง
+from flasgger import Swagger
+from swagger_spec import SWAGGER_CONFIG, SWAGGER_TEMPLATE
+Swagger(app, config=SWAGGER_CONFIG, template=SWAGGER_TEMPLATE)
+
 app.config["SECRET_KEY"] = SECRET_KEY
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = False  # demo รันบน HTTP local — เปลี่ยนเป็น True ถ้า deploy บน HTTPS
+app.config["SESSION_COOKIE_SECURE"] = False 
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
 
 # province registry (20 จังหวัด: 17 เทรน + 3 zero-shot — ดู scripts/province_registry.py)
@@ -139,12 +132,10 @@ XGB_MODELS = xgb_package["models"]
 FEATURE_COLS = lgb_package["feature_cols"]
 assert FEATURE_COLS == xgb_package["feature_cols"], "feature_cols ของ LightGBM กับ XGBoost ต้องตรงกันเป๊ะ"
 QUANTILES = lgb_package["quantiles"]  # [0.05, 0.5, 0.95]
-# โมเดลใช้ feature เพื่อนบ้าน/จุดความร้อนไหม (ตาม FEATURE_COLS ของ pkl) — ถ้าไม่ใช้ get_forecast() จะไม่ดึงข้อมูลนั้นและไม่บังคับ naive_fallback
+
 USES_NEIGHBOR = any(c in FEATURE_COLS for c in ("pm25_neighbor_avg", "nb_trend_12h"))
 USES_FIRE = "fire_hotspot_count_100km_24h" in FEATURE_COLS
 
-# conformal calibration q_hat ต่อ horizon ต่อโมเดล (train_multiprovince_models.py) — ใช้ปรับขอบ
-# P05/P95 ให้ coverage เข้าใกล้เป้าหมาย 90% จริง ไม่ใช่แค่ P05/P95 ดิบจาก quantile regression
 _conformal_lgb_df = pd.read_csv(CONFORMAL_LGB_PATH)
 _conformal_xgb_df = pd.read_csv(CONFORMAL_XGB_PATH)
 CONFORMAL_QHAT = {
@@ -153,52 +144,25 @@ CONFORMAL_QHAT = {
 }
 
 # ===== เติมข้อมูลของสถานีเป้าหมายที่เงียบ (Data Imputation, H-lite) =====
-# ผลทดลอง: CHANGELOG 169-171, docs/thesis_imputation_experiment.md — เมื่อ reading ล่าสุดของสถานีเก่ากว่าปกติ เดิมระบบยึดเวลา reading
-# ล่าสุดเป็น "ตอนนี้" (พยากรณ์นับจากเวลาเก่า); ตอนนี้เติมค่าช่วงที่เงียบด้วยจังหวัดข้างเคียง (IDW-difference แล้ว Ridge) เพื่อพยากรณ์จากเวลาปัจจุบันจริง
-# ปิดได้ทันทีที่ USE_TARGET_IMPUTATION=False (พฤติกรรมกลับเป็นเดิมทั้งหมด) ไฟล์ค่าสัมประสิทธิ์หาย/พัง -> ปิดเองพร้อม log (แอปไม่ล่ม)
+
 USE_TARGET_IMPUTATION = True
 IMPUTATION_CONFIG_PATH = "models/imputation_h_lite_20260924_204956.json"
-IMPUTATION_MIN_K = 3   # k = ชั่วโมงเต็มที่ reading ล่าสุดตามหลัง "ชั่วโมงที่เพิ่งจบ" (now-1h); k<3 = ความหน่วงปกติของ OpenAQ ไม่เติม
-# ค่านี้วัดจริงแล้ว (CHANGELOG 176): p99 ของ k ปกติ (เฉพาะแถว series_source=live) = 2 -> MIN_K = p99+1 = 3, 925 ตัวอย่าง 2026-09-24..27
-# วัดซ้ำ/ปรับได้ด้วย scripts/summarize_target_latency.py เมื่อพฤติกรรมความหน่วงของ OpenAQ เปลี่ยนไปอย่างมีนัยสำคัญ
-IMPUTATION_MAX_K = 48  # เกินนี้ยังไม่เคยทดสอบ -> คงพฤติกรรมเดิม (ข้อมูลเก่า + banner)
+IMPUTATION_MIN_K = 3   
+IMPUTATION_MAX_K = 48  
 
-# ===== ทางสำรองเมื่อดึง OpenAQ / Open-Meteo ไม่ได้ (CHANGELOG 172) =====
-# ผลวัด: scripts/experiment_weather_fallback.py (สภาพอากาศเก่า <=2 ชม. เสีย MAE <1%; ค่า climatology ยังดีกว่า Persistence ทุก horizon) และ
-# /hours ของ OpenAQ ให้ค่าตรง /measurements ทุกจุดที่ซ้อนกัน (ตรวจ 19 สถานี 72 ชม. ต่างเฉลี่ย 0.0000 ไม่ต้องบวก offset) แต่ **ช้ากว่า ~1 ชม.**
-# (วัดที่นาที 24 ของชั่วโมง: /measurements ถึง 13:00, /hours ถึง 12:00 ทั้ง 19 สถานี) -> ตอนใช้ทางสำรอง k เพิ่มได้ ~1 (ระวังเทียบกับ IMPUTATION_MIN_K)
-# USE_INPUT_FALLBACK=False = พฤติกรรมเดิมทั้งหมด (ดึงพลาด -> raise; ไม่มี retry/breaker/cache สภาพอากาศ/cache จังหวัดเป้าหมาย/ไฟล์ cache)
+# ===== ทางสำรองเมื่อดึง OpenAQ / Open-Meteo ไม่ได้  =====
+
 USE_INPUT_FALLBACK = True
-WEATHER_TTL_S = 600                 # ใช้ค่าสภาพอากาศที่ดึงไว้ซ้ำได้ 10 นาที (Open-Meteo อัปเดต current ทุก 15 นาที; ลดจำนวน request)
-WEATHER_CACHE_MAX_AGE_H = 2         # ดึงไม่สำเร็จ -> ใช้ค่าเก่าได้ไม่เกินนี้ (ตามเกณฑ์ที่ตั้งก่อนดูผลใน experiment_weather_fallback.py: k=2)
+WEATHER_TTL_S = 600                 
+WEATHER_CACHE_MAX_AGE_H = 2        
 WEATHER_CLIMATOLOGY_PATH = "models/weather_climatology_20260924_211741.json"
-TARGET_FALLBACK_MAX_AGE_S = 6 * 3600  # OpenAQ ดึงจังหวัดเป้าหมายไม่ได้ -> ใช้ cache ได้ไม่เกินนี้ (เท่ากับที่เพื่อนบ้านใช้อยู่ ไม่ได้วัดแยก)
-SERIES_DISK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_cache")  # กัน cache หายเมื่อแอปรีสตาร์ต (gitignored)
+TARGET_FALLBACK_MAX_AGE_S = 6 * 3600  
+SERIES_DISK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_cache")
 
-# ===== Dustboy (CMU CCDC) — ทางสำรอง PM2.5 "ชั่วคราว" เฉพาะจังหวัดเลย (CHANGELOG 175) =====
-# สถานี Air4Thai เดียวของเลยตายตั้งแต่ 2026-09-15 ไม่มีสถานี Air4Thai อื่นในจังหวัด (ใกล้สุด 84.6 กม.)
-# ผูกกับจังหวัดผ่าน field ใน registry (pm25_provider="dustboy", dustboy_web_id) ไม่ใช่ global switch ต่อจังหวัด —
-# revert = ลบ 2 field นั้นออกจาก registry (หรือปิด USE_DUSTBOY_LOEI ทันทีถ้ามีปัญหา ไม่ต้องแก้ registry)
-# **ไม่มี historical endpoint** (ตรวจแล้ว) คืนได้แค่ค่าปัจจุบันจุดเดียวต่อคำขอ จึงต้องสะสมประวัติเองจากศูนย์ผ่านการโพลรายชั่วโมง
-# (เหมือนสถานีเปิดใหม่) — ห้ามพยากรณ์จนกว่าจะสะสมได้อย่างน้อย DUSTBOY_MIN_HISTORY_HOURS ชั่วโมง กัน build_feature_row()
-# interpolate จากจุดเดียวเป็นค่าคงที่ซ้ำทุก lag/roll (ไม่ใช่ NaN จึงไม่ถูก compute_missing_ratio จับได้)
-USE_DUSTBOY_LOEI = True
-DUSTBOY_MIN_HISTORY_HOURS = 24
-DUSTBOY_CACHE_TTL_S = 1800  # Dustboy อัปเดตแค่รายชั่วโมง ไม่มีประโยชน์ที่จะดึงถี่กว่า TARGET_CACHE_TTL_S (5 นาที) ปกติ
-DUSTBOY_HISTORY_PATH = os.path.join(SERIES_DISK_CACHE_DIR, "dustboy_loei_history.csv")  # สะสมข้ามการรีสตาร์ต (gitignored)
-
-# กลุ่มเปราะบางเริ่มระวังเร็วกว่าคนทั่วไป ~1 ระดับ AQI (ตาม WHO/US EPA) ลด threshold 10 หน่วย
-# ให้เริ่มเตือนตั้งแต่ช่วง "ปานกลาง" แทนที่จะรอถึง "เริ่มมีผลกระทบต่อสุขภาพ" เหมือนคนทั่วไป —
-# เป็นตัวเลข heuristic ไม่มี dataset เฉพาะรองรับเป๊ะๆ ทั้งสองกลุ่มใช้ค่าเดียวกัน (ไม่มีหลักฐานแยกความรุนแรง)
 RISK_GROUP_THRESHOLD_OFFSET = {"ทั่วไป": 0.0, "เด็ก-ผู้สูงอายุ": -10.0, "มีโรคประจำตัว": -10.0}
 
-# Personalized Risk Score: กิจกรรมหนักขึ้น = หายใจถี่ขึ้น = สูดฝุ่นมากขึ้นที่ความเข้มข้นเท่าเดิม
-# จำลองเป็นการลด effective PM2.5 (sign convention เดียวกับ RISK_GROUP_THRESHOLD_OFFSET) —
-# heuristic สาธิตหลักการ ไม่ใช่ dose-response จากงานวิจัยทางการแพทย์
 ACTIVITY_INTENSITY_OFFSET = {"เบา": 0.0, "ปานกลาง": -5.0, "หนัก": -10.0}
 
-# แปลง effective PM2.5 เป็นคะแนน 0-100 ด้วย linear interpolation ข้าม breakpoint ที่ยึดตาม PM25_LEVELS
-# เป๊ะ (แต่ละระดับ = 20 คะแนน) 150 เป็นเพดาน scale คะแนนเท่านั้น ไม่ใช่ breakpoint ทางการ
 RISK_SCORE_BREAKPOINTS = [(0, 0), (15, 20), (25, 40), (37.5, 60), (75, 80), (150, 100)]
 
 
@@ -208,20 +172,13 @@ def effective_threshold_for(risk_group):
     return HIGH_POLLUTION_THRESHOLD + RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0)
 
 
-# ให้ get_forecast() และ /api/notifications ใช้ตรรกะ "อะไรถือว่าเสี่ยง" เดียวกันเป๊ะ — เทียบค่าพยากรณ์
-# ตรงๆ (median prediction) กับ threshold ไม่ใช่ขอบบน P95 (เคยใช้ P95 มาก่อน 2026-09-23 เพื่อชดเชย
-# "โมเดลทายพลาดช่วงมลพิษสูง" แต่เป็นการเลือกแบบ heuristic ไม่เคยผ่านการทดลองเทียบวิธี พอทดสอบจริงบน
-# day-ahead backtest (models/alert_capability_pooled_20260922_203655.csv, 1,372 คู่ threshold 37.5)
-# พบว่า P95 ทำ false-alarm สูงถึง 36.8-37.1% (เกือบ 4 ใน 10 ครั้งที่เตือนคือเตือนผิด) ขณะที่ค่าพยากรณ์
-# ตรงๆ ได้ recall 92.3-92.5% กับ false-alarm แค่ 13.4% ชนะทั้งสองมิติพร้อมกันเทียบกับ persistence/
-# ค่าเฉลี่ยวันก่อนหน้า จึงเปลี่ยนมาใช้ค่าพยากรณ์ตรงๆ เป็นเกณฑ์เดียวทั้งระบบ)
+
 def is_horizon_at_risk(predicted_pm25, risk_group):
     return predicted_pm25 > effective_threshold_for(risk_group)
 
 
 def is_current_at_risk(latest_pm25, risk_group):
-    # bool(...) กัน numpy.bool_ หลุดจาก "is_current_at_risk(...) or ..." ไปพัง jsonify() (latest_pm25
-    # เป็น numpy.float64 จาก pandas — เจอบั๊กนี้จริงตอน PM2.5 แตะ threshold กลุ่มเปราะบางพอดี)
+
     return bool(latest_pm25 > effective_threshold_for(risk_group))
 
 
@@ -230,16 +187,13 @@ ACTIVE_HOURS_END_TH = 20
 
 
 def find_best_time(forecast):
-    """หาจุด PM2.5 ต่ำสุด กรองเฉพาะ 06:00-20:00 เวลาไทย (ช่วงใช้งานได้จริง กัน suggest ช่วงดึก)
-    fallback ไปทั้งหมดถ้า active_hours ว่างเปล่า (edge case ไม่ควรเกิดจริงเพราะมี 24 จุดครบทุกชม.)"""
+
     active_hours = [f for f in forecast if ACTIVE_HOURS_START_TH <= f["hour_thai"] <= ACTIVE_HOURS_END_TH]
     return min(active_hours or forecast, key=lambda x: x["pm25"])
 
 
 def compute_risk_score(pm25, risk_group, activity):
-    """Personalized Risk Score: pm25 + risk_group + activity -> คะแนน 0-100 ผ่าน effective PM2.5
-    (ดู ACTIVITY_INTENSITY_OFFSET/RISK_GROUP_THRESHOLD_OFFSET) แล้ว interpolate เชิงเส้นข้าม
-    RISK_SCORE_BREAKPOINTS — pure function ไม่ผูกกับ live data"""
+
     effective_pm25 = pm25 - RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0) - ACTIVITY_INTENSITY_OFFSET.get(activity, 0.0)
     cap = RISK_SCORE_BREAKPOINTS[-1][0]
     clamped = max(0.0, min(effective_pm25, cap))
@@ -258,15 +212,13 @@ def compute_risk_score(pm25, risk_group, activity):
 # ===== Dynamic Routing (proposal 4.1.6) =====
 
 def compute_missing_ratio(feature_row):
-    """สัดส่วนค่า NaN ใน feature_row (DataFrame แถวเดียวจาก build_feature_row()) เทียบกับ FEATURE_COLS ทั้งหมด — คืนค่า 0-1"""
+  
     n_missing = int(feature_row[FEATURE_COLS].isna().sum().sum())
     return n_missing / len(FEATURE_COLS)
 
 
 def compute_rolling_r2(model_name, horizon, province, N=24):
-    """R² แบบ rolling จาก N แถวล่าสุดของ (model_name, horizon, province) — query เดี่ยวสำหรับคู่เดียว
-    ใช้แค่ diagnostics/test เท่านั้น hot path จริงใช้ fetch_rolling_r2_lookup() (query เดียวทั้ง
-    จังหวัดแทน 48 query — ดู CHANGELOG 86) คืน None ถ้าข้อมูลไม่พอ (< MIN_R2_PAIRS คู่)"""
+  
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -293,8 +245,7 @@ ROLLING_R2_MODELS = (MODEL_XGB, MODEL_LGB)
 
 
 def fetch_rolling_r2_lookup(province, N=24):
-    """R² ของทั้ง 2 โมเดลทุก horizon ด้วย query เดียว (window function หา N แถวล่าสุดต่อ (model,
-    horizon)) — get_forecast() เรียกครั้งเดียวก่อน loop 24 horizon คืน dict {(model_used, horizon): r2|None}"""
+   
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -330,18 +281,7 @@ def fetch_rolling_r2_lookup(province, N=24):
 
 
 def select_model(feature_row, horizon, province, r2_lookup, force_naive=False):
-    """Dynamic Routing (proposal 4.1.6, 2 ทางหลังตัด Prophet ออก):
-    0. force_naive -> "naive_fallback" ทันที (CHANGELOG 141: ไม่มีจังหวัดข้างเคียงที่ข้อมูลสดเลย จึงไม่มีค่า
-       pm25_neighbor_avg/nb_trend_12h ให้โมเดล — ต้องแยก flag นี้ออกมาต่างหาก เพราะ NaN แค่ 2 จาก 21
-       feature = 0.095 < SIGMA_CRITICAL จะไม่ trigger ข้อ 1 เอง แล้วโมเดลจะได้รับ NaN ซึ่งแย่กว่า persistence
-       ชัดเจน: MAE +32%/+65% ใน scripts/check_model_sensitivity_live_degradation.py)
-    1. missing_ratio > SIGMA_CRITICAL -> "naive_fallback" (โมเดล pooled ไม่เคยเห็นแถวมี NaN ตอนเทรน
-       เลย ป้อน NaN ตรงๆ คือ out-of-distribution ใช้ persistence แทน)
-    2. ไม่งั้นเทียบ rolling R² ล่าสุดจาก r2_lookup (precompute โดย fetch_rolling_r2_lookup()) — เช็ค
-       None ทั้ง 2 ทิศทางเสมอ (เช็คแค่ฝั่งเดียวเคยทำให้โมเดลนึงไม่ได้ explore เลย ผิดเจตนา ε-greedy —
-       CHANGELOG 20): ไม่มีข้อมูลทั้งคู่ -> สุ่ม 50/50, มีแค่ตัวเดียว -> explore ตัวที่ขาดด้วย
-       EXPLORATION_RATE ไม่งั้น fallback ไปตัวที่มีข้อมูล, มีครบ -> เลือก R² สูงกว่า
-    """
+    
     if force_naive or compute_missing_ratio(feature_row) > SIGMA_CRITICAL:
         return MODEL_NAIVE
 
@@ -532,8 +472,7 @@ def login_required(view_func):
 # ===== Live data fetching (OpenAQ + Open-Meteo — ไม่มี Air4Thai/calibration อีกต่อไป) =====
 
 class _CircuitBreaker:
-    """เปิดวงจรชั่วคราวหลังล้มเหลวต่อเนื่อง `threshold` ครั้ง: ช่วง cooldown ไม่ยิง request เลย (ไปใช้ cache/ทางสำรองทันที)
-    กันงานรายชั่วโมงที่วน 20 จังหวัด x (retry+timeout ~1-2 นาที) ยาวเกิน 1 ชม. ตอน API ล่มทั้งระบบ; สำเร็จครั้งเดียวรีเซ็ตตัวนับ"""
+
 
     def __init__(self, name, threshold, cooldown_s):
         self.name, self.threshold, self.cooldown_s = name, threshold, cooldown_s
@@ -575,13 +514,7 @@ def _openaq_get(kind, sensor_id, params, attempts, timeout=15):
 
 
 def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
-    """ดึง pm25 ย้อนหลัง hours_back ชม. จาก OpenAQ v3 — สเกลเดียวกับตอนเทรน (ไม่ต้อง calibrate)
-    72h พอสำหรับ lag_24/roll_24 + เผื่อ gap, retry แบบ backoff เฉพาะ 429/5xx
 
-    offset_hours (CHANGELOG 149): ป้ายเวลาของสถานีบางแห่งเลื่อน -> ดึง label ย้อนหลังเพิ่มอีก offset แล้วบวก offset เข้า datetime_utc ให้ตรงเวลาจริง
-    (ค่าที่ป้าย L คือค่าจริงของ L+offset) **ไม่ตัดปลายช่วงที่ now-offset** โดยตั้งใจ เพื่อให้จับกรณี OpenAQ แก้ป้ายเวลาแล้วได้: ถ้าหลังบวก offset
-    reading ล่าสุดล้ำอนาคตเกิน OFFSET_FUTURE_TOLERANCE_H ชม. แปลว่า offset ไม่จำเป็นแล้ว (ถ้าไม่ตรวจ ข้อมูลเก่า 23 ชม.จะถูกเลื่อนให้ดูสดโดยไม่มีอะไรเตือน)
-    -> ทิ้ง offset ชั่วคราวและ log เตือน (ให้รัน scripts/annotate_registry_timestamp_offset.py ใหม่)"""
     end = pd.Timestamp.now(tz="UTC")
     offset = pd.Timedelta(hours=offset_hours)
     start = end - pd.Timedelta(hours=hours_back)
@@ -606,9 +539,7 @@ def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
 
 
 def fetch_recent_pm25_openaq_hours(sensor_id, hours_back=72):
-    """ทางสำรองภายใน OpenAQ: /v3/sensors/{id}/hours (คนละ endpoint กับ /measurements, key เดียวกัน) — ตรวจแล้วว่าค่าและป้ายเวลาตรงกับ
-    /measurements หลังบวก offset ทุกจุดที่ซ้อนกัน (CHANGELOG 144, 172) จึง **ไม่ต้องบวก offset** (คืน DataFrame รูปแบบเดียวกัน) ข้อแลกเปลี่ยน: reading ล่าสุด
-    ช้ากว่า /measurements ~1 ชม. (วัดจริง 19/19 สถานี) จึงใช้เป็นทางสำรองเท่านั้น ไม่ใช่ทางหลัก"""
+    
     end = pd.Timestamp.now(tz="UTC")
     params = {"datetime_from": (end - pd.Timedelta(hours=hours_back)).isoformat(), "datetime_to": end.isoformat(), "limit": 1000}
     r = _openaq_get("hours", sensor_id, params, attempts=3)
@@ -641,21 +572,19 @@ def _open_meteo_get(params, attempts, timeout):
 
 
 def _check_weather(w):
-    """ค่าที่ได้ต้องครบ 6 ตัวแปรและไม่เป็น None (Open-Meteo คืน null ได้) — ไม่ครบ = ถือว่าดึงไม่สำเร็จ ไม่ส่งเข้าโมเดล"""
+
     if not isinstance(w, dict) or any(w.get(k) is None for k in WEATHER_REQUIRED_KEYS):
         raise ValueError("ข้อมูลสภาพอากาศจาก Open-Meteo ไม่ครบ")
 
 
 def fetch_current_weather_openmeteo(lat, lon):
-    """weather ไม่ต้อง lag/rolling เหมือน pm25 (มีแค่ค่า "ปัจจุบัน" เป็น feature) พอแค่ current= เดียว
-    ผู้เรียกในแอปใช้ผ่าน get_current_weather() (cache + ทางสำรอง) ไม่เรียกตรง"""
+   
     params = {"latitude": lat, "longitude": lon, "current": WEATHER_CURRENT_VARS, "timezone": "UTC"}
     return _open_meteo_get(params, attempts=2 if USE_INPUT_FALLBACK else 1, timeout=10 if USE_INPUT_FALLBACK else 15)["current"]
 
 
 def fetch_current_weather_batch(provinces):
-    """ค่าปัจจุบันของทุกจังหวัดใน request เดียว (Open-Meteo รับหลายพิกัดคั่น , คืน list ตามลำดับ) -> {province_en: current dict}
-    ตรวจแล้วว่าค่าเท่ากับเรียกทีละจังหวัด (CHANGELOG 172) — ลด 20 request/รอบเหลือ 1 โอกาสโดน 429 ลดลง"""
+
     params = {"latitude": ",".join(str(p["lat"]) for p in provinces), "longitude": ",".join(str(p["lon"]) for p in provinces),
               "current": WEATHER_CURRENT_VARS, "timezone": "UTC"}
     data = _open_meteo_get(params, attempts=3, timeout=20)
@@ -671,7 +600,7 @@ def fetch_current_weather_batch(provinces):
 
 
 def _load_weather_climatology():
-    """ตาราง climatology จาก scripts/export_weather_climatology.py — ผิดพลาด -> None (ไม่มีทางสุดท้าย: ดึงสภาพอากาศไม่ได้ก็ raise เหมือนเดิม)"""
+    
     if not USE_INPUT_FALLBACK:
         return None
     try:
@@ -694,8 +623,7 @@ _WEATHER_LOCK = threading.Lock()
 
 
 def weather_climatology(province, at=None):
-    """ค่าเฉลี่ย (จังหวัด, เดือน, ชั่วโมง UTC) ในรูป dict เดียวกับ Open-Meteo current — ใส่ _wind_dir_sin/_cos ไว้ให้ build_feature_row ใช้ค่าเฉลี่ยตรงๆ
-    (สูตรเดียวกับการทดลอง ไม่แปลงกลับเป็นองศาแล้วคิด sin/cos ใหม่ ซึ่งจะได้เวกเตอร์หน่วยต่างจากค่าเฉลี่ย); wind_direction_10m ไว้แสดงผลเท่านั้น"""
+   
     if WEATHER_CLIM is None:
         return None
     t = pd.Timestamp.now(tz="UTC") if at is None else pd.Timestamp(at)
@@ -710,7 +638,7 @@ def weather_climatology(province, at=None):
 
 
 def prefetch_weather_all():
-    """เรียกต้นงานรายชั่วโมง: ดึงสภาพอากาศทุกจังหวัดใน request เดียวแล้วใส่ cache (ล้มเหลว -> ปล่อยให้แต่ละจังหวัดดึงเอง/ใช้ทางสำรองตามปกติ)"""
+
     if not USE_INPUT_FALLBACK or not _WEATHER_BREAKER.allow():
         return
     try:
@@ -727,9 +655,7 @@ def prefetch_weather_all():
 
 
 def get_current_weather(province_meta, at=None):
-    """สภาพอากาศปัจจุบันของจังหวัด พร้อมทางสำรอง -> (dict, {"source": "live"|"stale_cache"|"climatology", "age_hours"})
-    ลำดับ: ค่าที่ดึงไว้ไม่เกิน WEATHER_TTL_S -> ดึงสด -> (พลาด) ค่าเก่าไม่เกิน WEATHER_CACHE_MAX_AGE_H -> climatology ของเดือน/ชั่วโมงที่ `at`
-    -> raise (เหมือนเดิม) ; USE_INPUT_FALLBACK=False = ดึงสดอย่างเดียวเหมือนเดิม"""
+
     prov = province_meta["province_en"]
     now = time.monotonic()
     with _WEATHER_LOCK:
@@ -765,10 +691,8 @@ def get_current_weather(province_meta, at=None):
     raise err
 
 
-# ===== Live features ใหม่ของโมเดล v2: จังหวัดข้างเคียง + จุดความร้อน (CHANGELOG 141) =====
-# ตรรกะทั้งหมดทดสอบแล้วใน scripts/check_live_feature_parity.py (สูตรตรง dataset เทรน 97-100%) และ
-# scripts/check_model_sensitivity_live_degradation.py (เลือกนโยบายสำรองด้วยตัวเลข) — แก้ที่นี่ต้องตรวจซ้ำด้วย
-# scripts/verify_app_feature_parity.py
+# ===== Live features ใหม่ของโมเดล v2: จังหวัดข้างเคียง + จุดความร้อน =====
+
 
 NEIGHBOR_FRESH_HOURS = 3       # reading ล่าสุดของเพื่อนบ้านห่างจากเวลาของจังหวัดเป้าหมายไม่เกินนี้ = "สด" (เก่า 1-3 ชม. เสียหาย <0.4%)
 NEIGHBOR_AVG_K = 3             # อันดับ 1 ไม่สด -> เฉลี่ยเพื่อนบ้านสดใกล้สุดสูงสุดกี่จังหวัด (MAE +2.4%/+2.5% เทียบ NaN +32%/+65%)
@@ -847,81 +771,8 @@ def _load_series_disk_cache():
         print(f"[openaq] โหลด cache จากไฟล์ {loaded} จังหวัด (ใช้เป็นทางสำรองเท่านั้น ไม่ถือว่าสด)")
 
 
-_DUSTBOY_BREAKER = _CircuitBreaker("dustboy", threshold=5, cooldown_s=60)
-
-
-def fetch_dustboy_current(web_id):
-    """ค่า PM2.5 ปัจจุบันจุดเดียวจาก Dustboy (CMU CCDC open API) -> (datetime_utc, pm25) — ไม่มี parameter เลือกสถานีที่ query
-    time (ตรวจแล้ว): endpoint คืนเฉพาะสถานีที่ "บันทึก" ไว้กับ API key ผ่านหน้าเว็บ (สูงสุด 10 จุด) เท่านั้น เจอสถานีที่ web_id
-    ไม่ตรงกับที่ร้องขอ -> raise (กันเผลอเอาค่าจังหวัดอื่นมาใช้); log_datetime เป็นเวลาไทย (UTC+7) ต้องแปลงเป็น UTC"""
-    if not DUSTBOY_KEY:
-        raise RuntimeError("ไม่มี DUSTBOY_KEY")
-    r = requests.get("https://open-api.cmuccdc.org/api/dustboy/station",
-                      headers={"Authorization": f"Bearer {DUSTBOY_KEY}"}, timeout=15)
-    r.raise_for_status()
-    results = r.json()
-    match = next((x for x in results if str(x.get("id")) == str(web_id)), None)
-    if match is None:
-        raise RuntimeError(f"ไม่พบสถานี Dustboy web_id={web_id} ในผลลัพธ์ (ตรวจว่าบันทึกไว้ในบัญชี API key แล้วหรือยัง)")
-    pm25 = match.get("pm25")
-    if pm25 is None:
-        raise RuntimeError("Dustboy ไม่มีค่า pm25 (field ว่าง)")
-    local = pd.Timestamp(match["log_datetime"], tz="Asia/Bangkok")
-    return local.tz_convert("UTC"), float(pm25)
-
-
-def _append_dustboy_reading(dt_utc, pm25):
-    """ต่อท้ายค่าที่อ่านได้ลง DUSTBOY_HISTORY_PATH (dedupe ตามเวลา, ตัดเก็บย้อนหลังไม่เกิน 72 ชม., เขียน tmp แล้ว replace)
-    คืน DataFrame ทั้งหมดหลังอัปเดต (ไม่ raise แม้เขียนไฟล์ไม่ได้ — คืนค่าที่มีในหน่วยความจำแทน)"""
-    new_row = pd.DataFrame({"datetime_utc": [dt_utc], "pm25": [pm25]})
-    try:
-        old = pd.read_csv(DUSTBOY_HISTORY_PATH) if os.path.exists(DUSTBOY_HISTORY_PATH) else pd.DataFrame(columns=["datetime_utc", "pm25"])
-        if not old.empty:
-            old["datetime_utc"] = pd.to_datetime(old["datetime_utc"], utc=True)
-    except Exception:
-        old = pd.DataFrame(columns=["datetime_utc", "pm25"])
-    df = pd.concat([old, new_row], ignore_index=True)
-    df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
-    df = df.drop_duplicates(subset=["datetime_utc"], keep="last").sort_values("datetime_utc")
-    df = df[df["datetime_utc"] >= dt_utc - pd.Timedelta(hours=72)].reset_index(drop=True)
-    try:
-        os.makedirs(SERIES_DISK_CACHE_DIR, exist_ok=True)
-        tmp = DUSTBOY_HISTORY_PATH + ".tmp"
-        df.to_csv(tmp, index=False)
-        os.replace(tmp, DUSTBOY_HISTORY_PATH)
-    except Exception:
-        pass
-    return df
-
-
-def get_dustboy_series(web_id):
-    """ดึงค่าปัจจุบันจาก Dustboy ผ่าน breaker แล้วสะสมเข้าประวัติที่เก็บไว้ -> (DataFrame[datetime_utc, pm25], "dustboy")
-    ประวัติสะสมยังไม่ถึง DUSTBOY_MIN_HISTORY_HOURS -> คืน DataFrame ว่าง (ไม่ raise — การเรียก API สำเร็จจริง แค่ข้อมูลยังไม่พอ)
-    เพื่อให้ไหลผ่าน get_recent_series()/get_forecast() เส้นทางเดิม ("ได้ df ว่าง" -> None -> DataUnavailableError -> 503)
-    แบบเดียวกับตอนสถานีเงียบสนิทจริงๆ ไม่ต้องเขียน safety check ใหม่ — กันไม่ให้ feature เพี้ยนจากประวัติสั้นเกินไป (ดู Context ในแผน)
-    ความล้มเหลวจริงของการเรียก API (network/http/parse) ยัง raise ตามปกติ เพื่อให้ breaker/stale_cache fallback ทำงาน"""
-    if not _DUSTBOY_BREAKER.allow():
-        raise RuntimeError("Dustboy circuit open")
-    try:
-        dt_utc, pm25 = fetch_dustboy_current(web_id)
-    except Exception:
-        _DUSTBOY_BREAKER.failure()
-        raise
-    _DUSTBOY_BREAKER.success()
-    df = _append_dustboy_reading(dt_utc, pm25)
-    span_h = (df["datetime_utc"].max() - df["datetime_utc"].min()) / pd.Timedelta(hours=1) if len(df) > 1 else 0.0
-    if len(df) < DUSTBOY_MIN_HISTORY_HOURS or span_h < DUSTBOY_MIN_HISTORY_HOURS - 1:
-        print(f"[dustboy] {web_id}: ประวัติสะสมยังไม่พอ ({len(df)} จุด, ครอบคลุม {span_h:.1f} ชม. ต้องการ >= {DUSTBOY_MIN_HISTORY_HOURS} ชม.)")
-        return pd.DataFrame(columns=["datetime_utc", "pm25"]), "dustboy"
-    return df, "dustboy"
-
-
 def fetch_series_from_openaq(meta):
-    """ดึงซีรีส์ pm25 72 ชม. ของสถานี -> (DataFrame, source) โดย source = "live" (/measurements + offset) หรือ "hours_endpoint" (/hours ไม่มี offset)
-    /measurements พลาด -> ลอง /hours; ทั้งคู่พลาด -> raise (ข้อผิดพลาดของ /measurements) และนับเข้า breaker; breaker เปิดอยู่ -> raise ทันทีไม่ยิง request
-    provider="dustboy" ใน registry (ตอนนี้มีแค่เลย) -> ไปทาง Dustboy ทั้งหมด ไม่ผ่าน OpenAQ เลย (ดู get_dustboy_series)"""
-    if meta.get("pm25_provider") == "dustboy" and USE_DUSTBOY_LOEI:
-        return get_dustboy_series(meta["dustboy_web_id"])
+
     sensor_id = meta["sensor_id_pm25"]
     offset = int(meta.get("openaq_timestamp_offset_hours", 0)) if USE_TIMESTAMP_OFFSET else 0
     if not USE_INPUT_FALLBACK:
@@ -942,11 +793,7 @@ def fetch_series_from_openaq(meta):
 
 
 def get_recent_series(province, strict=False, max_age_s=SERIES_CACHE_TTL_S, info=None):
-    """pm25 72 ชม.ล่าสุดของจังหวัด ผ่าน cache ร่วม (scheduled job ที่วน 20 จังหวัด + /api/forecast ใช้ร่วมกัน
-    จำนวน request OpenAQ ต่อรอบเท่าเดิม = จังหวัดละ 1 ครั้ง) คืน DataFrame หรือ None (ไม่มีข้อมูล)
-    strict=True (จังหวัดเป้าหมาย): ดึงไม่สำเร็จ -> ใช้ cache เก่าได้ไม่เกิน TARGET_FALLBACK_MAX_AGE_S (เฉพาะ USE_INPUT_FALLBACK) ไม่งั้น raise
-    strict=False (เพื่อนบ้าน): ดึงไม่สำเร็จ -> ใช้ cache เก่า (<= SERIES_CACHE_MAX_AGE_S) ไม่งั้น None (ไม่ raise)
-    info (dict, ไม่บังคับ): ผู้เรียกส่งมารับ {"source": "live"|"hours_endpoint"|"stale_cache", "age_hours"} — stale_cache = ใช้ข้อมูลที่ดึงไว้ก่อนหน้า"""
+
     now = time.monotonic()
     with _SERIES_LOCK:
         hit = _SERIES_CACHE.get(province)
@@ -980,8 +827,7 @@ _load_series_disk_cache()
 
 
 def _filled_grid(df_recent, t):
-    """กริดรายชั่วโมง 48 ชม.ย้อนหลังจาก t (ใช้ข้อมูล <= t เท่านั้น) interpolate เชิงเส้น limit=48 — สูตรเดียวกับ
-    build_feature_row() ของ lag/rolling และกับ scripts/check_live_feature_parity.py"""
+    
     s = df_recent.set_index("datetime_utc")["pm25"]
     hist = s[(s.index <= t) & (s.index >= t - pd.Timedelta(hours=72))]
     grid = pd.date_range(t - pd.Timedelta(hours=48), t, freq="h", tz="UTC")
@@ -997,13 +843,7 @@ def _neighbor_is_fresh(df_neighbor, latest_time):
 
 
 def compute_neighbor_features(province, latest_time, fetch=None):
-    """pm25_neighbor_avg + nb_trend_12h ของจังหวัดนี้ ณ latest_time ด้วยนโยบายที่เลือกจากผลทดลอง (CHANGELOG 140):
-      - เพื่อนบ้านอันดับ 1 "สด" -> ใช้ตามสูตรเทรนเป๊ะ (policy "k1_exact")
-      - ไม่สด -> เฉลี่ยเพื่อนบ้านสดที่ใกล้สุดสูงสุด NEIGHBOR_AVG_K จังหวัด, trend คิดจากค่าเฉลี่ยชุดเดียวกัน
-        (policy "avg_nearest_fresh")
-      - ไม่มีเพื่อนบ้านสดเลย -> status "no_fresh_neighbor" (ผู้เรียกต้องบังคับ naive_fallback ห้ามส่ง NaN เข้าโมเดล)
-    คืน dict: status, policy, neighbors_used, pm25_neighbor_avg, nb_trend_12h
-    fetch: ฟังก์ชัน province -> DataFrame|None (default get_recent_series) ใส่ไว้ให้ unit test ฉีดข้อมูลสังเคราะห์"""
+    
     fetch = fetch or get_recent_series
     fresh = []  # [(province, DataFrame)] เรียงตามระยะทาง
     for idx, q in enumerate(NEIGHBOR_RANKING[province][:NEIGHBOR_MAX_FETCH]):
@@ -1083,13 +923,7 @@ def imputed_q_hat(model_name, k, h):
 
 
 def impute_target_series(province, df_recent, now=None, fetch=None):
-    """ต่อท้าย df_recent ด้วยค่า PM2.5 ที่เติมของช่วงที่สถานีเงียบ (t0, anchor] โดย t0 = reading จริงล่าสุด, anchor = ชั่วโมงที่เพิ่งจบ
-    (now-1h) วิธี H-lite (ผลทดลองเดียวกับที่ลงเล่ม): ตำแหน่ง j<=switch_j ชม.หลัง t0 = x0 + IDW ของการเปลี่ยนแปลงจังหวัดข้างเคียง,
-    ไกลกว่านั้น = Ridge บน [x0, ค่าเพื่อนบ้าน ณ tau/t0, ผลต่าง, j, log1p(j), ชั่วโมง UTC] (ค่าสัมประสิทธิ์จาก JSON)
-    เพื่อนบ้าน = ที่ใกล้สุด <=5 จังหวัดจากทั้ง 20 ใช้ที่ "วัดได้จริง ณ tau และ t0" ไม่เกิน 3 จังหวัด ถ่วง 1/ระยะทาง² (ไม่ interpolate)
-    ตำแหน่งที่ไม่มีเพื่อนบ้านที่ใช้ได้ -> Persistence (x0); ถ้าตำแหน่งสุดท้าย (ปัจจุบัน) ไม่มีเลย -> ไม่เติม (คืนสภาพเดิม)
-    คืน (df_ใหม่, info) — info=None เมื่อไม่ได้เติม (k อยู่นอก [MIN_K, MAX_K], ฟีเจอร์ปิด, ไม่มีเพื่อนบ้านตอนนี้)
-    ห้ามส่ง df ที่เติมแล้วไป backfill_actuals() (จะบันทึกค่าประมาณเป็นค่าจริง)"""
+    
     cfg = IMPUTATION_CFG
     if cfg is None or df_recent is None or df_recent.empty:
         return df_recent, None
@@ -1158,9 +992,7 @@ _FIRE_LOCK = threading.Lock()
 
 
 def get_fire_hotspots():
-    """จุดความร้อน FIRMS NRT 2 วันล่าสุดทั้ง bbox อีสาน (1 request/ชม. ใช้ร่วมทุกจังหวัด) คืน (DataFrame|None, source)
-    source: "live" | "cache" | "stale_cache" | "unavailable" | "no_key" — ไม่ raise (แอปต้องไม่ล่มเพราะ FIRMS)
-    ห้าม log ข้อความ exception ของ requests: URL มี MAP_KEY"""
+
     if not FIRMS_KEY:
         return None, "no_key"
     now = time.monotonic()
@@ -1192,8 +1024,7 @@ def get_fire_hotspots():
 
 
 def count_fire_hotspots(province_meta, latest_time, hotspots_df):
-    """จำนวนจุดใน (latest_time-24h, latest_time] รัศมี FIRE_RADIUS_KM — ตรรกะเดียวกับ compute_fire_hotspot_feature.py
-    (ไม่มีข้อมูล -> 0, E4: แย่ลงเพียง +1.8%)"""
+  
     if hotspots_df is None or hotspots_df.empty:
         return 0
     near = haversine_km(province_meta["lat"], province_meta["lon"],
@@ -1203,8 +1034,7 @@ def count_fire_hotspots(province_meta, latest_time, hotspots_df):
 
 
 def migrate_daily_nlg_risk_group():
-    """เพิ่ม risk_group ให้ daily_nlg_log (CREATE TABLE IF NOT EXISTS ไม่เพิ่ม column ให้ตารางเดิม
-    ต้อง ALTER จริง) เปลี่ยน unique เป็น (date_thai, risk_group) แถวเก่าถือเป็นกลุ่ม 'ทั่วไป' โดยปริยาย"""
+   
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("ALTER TABLE daily_nlg_log ADD COLUMN IF NOT EXISTS risk_group TEXT NOT NULL DEFAULT 'ทั่วไป'")
@@ -1213,12 +1043,11 @@ def migrate_daily_nlg_risk_group():
         WHERE conrelid = 'daily_nlg_log'::regclass AND contype = 'u'
     """)
     existing = {r[0] for r in cur.fetchall()}
-    # เช็คทั้งชื่อของ migration นี้ และชื่อที่ migrate_province_column() เปลี่ยนไปแล้ว กัน
-    # UniqueViolation ตอนรันซ้ำหลัง migrate_province_column() ทำงานไปแล้ว (เจอบั๊กนี้จริงตอนทดสอบ)
+    
     if ("daily_nlg_log_date_thai_risk_group_key" not in existing
             and "daily_nlg_log_date_thai_risk_group_province_key" not in existing):
-        for name in existing:  # ลบ unique constraint เก่า (date_thai เดี่ยว) ถ้ายังอยู่ — ชื่อมาจาก
-            cur.execute(f"ALTER TABLE daily_nlg_log DROP CONSTRAINT {name}")  # pg_constraint catalog เอง ไม่ใช่ input ภายนอก
+        for name in existing:  
+            cur.execute(f"ALTER TABLE daily_nlg_log DROP CONSTRAINT {name}")  
         cur.execute(
             "ALTER TABLE daily_nlg_log ADD CONSTRAINT daily_nlg_log_date_thai_risk_group_key "
             "UNIQUE (date_thai, risk_group)"
@@ -1232,9 +1061,7 @@ migrate_daily_nlg_risk_group()
 
 
 def migrate_province_column():
-    """เพิ่ม province ให้ 3 ตาราง (แถวเก่าทั้งหมดเป็นขอนแก่นจริง จึง DEFAULT 'khonkaen' ไม่ใช่
-    placeholder) แล้วสลับ UNIQUE constraint ให้รวม province ด้วย (pattern เดียวกับ
-    migrate_daily_nlg_risk_group()) ต้องรันหลัง migrate_daily_nlg_risk_group() เสมอ"""
+    
     tables = {
         "prediction_log": (["predicted_at_utc", "horizon"], "prediction_log_predicted_at_utc_horizon_province_key"),
         "daily_nlg_log": (["date_thai", "risk_group"], "daily_nlg_log_date_thai_risk_group_province_key"),
@@ -1263,10 +1090,7 @@ migrate_province_column()
 
 
 def migrate_prediction_interval_columns():
-    """เพิ่ม pm25_lo/pm25_hi ให้ prediction_log — get_forecast() คำนวณอยู่แล้วแต่ไม่เคย log ลง DB
-    ทำให้ /api/comparison วัด empirical coverage ไม่ได้ (metric หลักของงานวิจัยนี้) แถวเก่าก่อน
-    migration นี้เป็น NULL ถาวร (ไม่มี quantile prediction ย้อนหลังให้ backfill) — /api/comparison*
-    ต้องกรอง NULL ออกเอง"""
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS pm25_lo DOUBLE PRECISION")
@@ -1280,10 +1104,7 @@ migrate_prediction_interval_columns()
 
 
 def migrate_users_role():
-    """เพิ่ม role ให้ users (แยกจาก risk_group — risk_group คือกลุ่มสุขภาพ ใช้ปรับ threshold/NLG,
-    role คือสิทธิ์ใช้งานระบบ ไม่เกี่ยวกัน) ค่าเริ่มต้น 'user' ทุกแถวเก่า ไม่มีทางสมัครเป็น 'admin' เอง
-    ได้ผ่าน /api/auth/register (ดู api_auth_register — ไม่รับ field role จาก request เลย) ต้องตั้งผ่าน
-    scripts/promote_admin.py เท่านั้น"""
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'")
@@ -1296,10 +1117,7 @@ migrate_users_role()
 
 
 def migrate_users_home_province():
-    """เพิ่ม home_province ให้ users (nullable, ไม่มี default — "ยังไม่ตั้ง" เป็นสถานะปกติ ต่างจาก
-    risk_group ที่มี default 'ทั่วไป' เพราะจังหวัดไม่มีค่าเริ่มต้นที่สมเหตุสมผล) เก็บเป็น province_en
-    slug เดียวกับที่ใช้ทั้งระบบ ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้แทน provinceState.selected (dropdown)
-    เมื่อตั้งไว้ — ดู resolve_home_province_status()/api_notifications_status()"""
+   
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS home_province TEXT")
@@ -1370,8 +1188,7 @@ def build_feature_row(df_recent, current_weather, province_meta, neighbor=None, 
     }
 
     X_now = pd.DataFrame([features])[FEATURE_COLS]
-    # latest_pm25: ค่าจริงล่าสุดจาก OpenAQ ตรงๆ ใช้ทั้งแสดง current, เทียบ threshold, และบวกกลับ
-    # ตอน predict (residual forecasting — ดู get_forecast())
+  
     return X_now, latest_time, float(pm25_by_time.loc[latest_time])
 
 
@@ -1392,8 +1209,7 @@ def log_predictions(predicted_at, rows, province):
 
 
 def log_notification_snapshot(recorded_at_utc, latest_pm25, province):
-    """เก็บ latest_pm25 ของรอบนี้ — recorded_at_utc ต้องตรงกับ predicted_at_utc ของ log_predictions()
-    (มาจาก latest_time เดียวกัน) ให้ /api/notifications join ได้ตรง ON CONFLICT DO NOTHING เหมือนกัน"""
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -1408,9 +1224,7 @@ def log_notification_snapshot(recorded_at_utc, latest_pm25, province):
 
 
 def backfill_actuals(df_recent, province):
-    """เติมค่าจริงให้ prediction ที่ log ไว้ก่อนหน้า จาก PM2.5 ย้อนหลังที่เพิ่งดึงมา (ไม่ยิง API เพิ่ม)
-    กรอง province เสมอ (กัน backfill ข้ามจังหวัดที่ target_time_utc บังเอิญตรงกัน) actual_pm25_calibrated
-    เก็บค่าเดียวกับ actual_pm25 ตรงๆ (คงคอลัมน์ไว้เผื่อ query เดิมอ้างถึง)"""
+    
     pm25_by_time = df_recent.set_index("datetime_utc")["pm25"].to_dict()
 
     conn = get_db_connection()
@@ -1436,8 +1250,6 @@ def backfill_actuals(df_recent, province):
 
 
 # ===== ดัชนีคุณภาพอากาศ PM2.5 มาตรฐาน คพ. ประกาศ พ.ศ. 2566 (ราชกิจจานุเบกษา 3 ก.ค. 2566) =====
-# 5 ระดับ ค่าเฉลี่ย 24 ชม.: 0-15 ดีมาก, 15.1-25 ดี, 25.1-37.5 ปานกลาง, 37.6-75 เริ่มมีผลกระทบต่อสุขภาพ,
-# 75.1+ มีผลกระทบต่อสุขภาพ (ยืนยันจาก pcd.go.th/pcd_news/30028 — cutoff 25/37.5 ตรงกับ HIGH_POLLUTION_THRESHOLD)
 PM25_LEVELS = [
     (15, "ดีมาก", ["ดีมาก", "อากาศดีมาก"]),
     (25, "ดี", [("อากาศ", "ดี"), ("คุณภาพอากาศ", "ดี"), "ปลอดภัย"]),
@@ -1445,18 +1257,14 @@ PM25_LEVELS = [
     (75, "เริ่มมีผลกระทบต่อสุขภาพ", ["เริ่มมีผลกระทบต่อสุขภาพ", "เริ่มมีผลกระทบ", "ส่งผลกระทบต่อสุขภาพ"]),
     (float("inf"), "มีผลกระทบต่อสุขภาพ", ["มีผลกระทบต่อสุขภาพ", "อันตราย", "อันตรายถึงชีวิต"]),
 ]
-# keyword เป็น str (ตรงตัวอักษรเป๊ะ) หรือ tuple ของ chunk (ยอมให้มีคำแทรกสั้นๆ คั่นได้ เช่น
-# ("อากาศ","ดี") match ทั้ง "อากาศดี" และ "อากาศจะอยู่ในเกณฑ์ดี" — ดู _find_keyword_occurrences())
 
-# คำเตือนทั่วไปที่ใช้ได้ตั้งแต่ระดับหนึ่งขึ้นไป (ไม่ผูกกับระดับเดียวเป๊ะแบบ PM25_LEVELS) เก็บเป็น
-# (floor ต่ำสุดที่ใช้ได้, keywords) เช็คแค่ฝั่ง "รุนแรงเกินจริง" (ระดับจริงต่ำกว่า floor)
 _GENERIC_CAUTION_KEYWORDS = [
     ("ปานกลาง", [("หลีกเลี่ยง", "กิจกรรมกลางแจ้ง"), ("ลด", "กิจกรรมกลางแจ้ง"), "ระคายเคือง"]),
 ]
 
-_NEGATION_WORDS = ["ไม่ใช่", "ไม่ค่อย", "มิได้", "ไม่"]  # อยู่ในช่วงคำแทรก = ความหมายกลับกัน
-_MAX_FLEX_GAP = 20  # ช่องว่างของ keyword ทั่วไป
-_MAX_FLEX_GAP_STATUS = 50  # PM25_LEVELS ข้ามประโยคได้ (เช่น Gemini แทรกวลีบอกเวลายาวๆ) จึงให้ช่องกว้างกว่า
+_NEGATION_WORDS = ["ไม่ใช่", "ไม่ค่อย", "มิได้", "ไม่"]  
+_MAX_FLEX_GAP = 20  
+_MAX_FLEX_GAP_STATUS = 50  
 
 
 def _classify_pm25_level(value):
@@ -1470,8 +1278,7 @@ def pm25_status(value):
     return _classify_pm25_level(value)
 
 
-# ===== NLG Safety Check (proposal 6.1.4) =====
-# เทียบระดับคำแนะนำจาก NLG กับ PM25_LEVELS ก่อนส่งแจ้งเตือน ไม่สอดคล้องก็ใช้ template แทน — rule-based ล้วนๆ
+# ===== NLG Safety Check  =====
 _HEALTH_MESSAGE_TEMPLATES = {
     "ดีมาก": "คุณภาพอากาศอยู่ในเกณฑ์ดีมาก สามารถทำกิจกรรมกลางแจ้งได้ตามปกติ",
     "ดี": "คุณภาพอากาศอยู่ในเกณฑ์ดี สามารถทำกิจกรรมกลางแจ้งได้ตามปกติ",
@@ -1486,9 +1293,7 @@ def _level_index(level_name):
 
 
 def _find_keyword_occurrences(message_text, keyword, max_gap=_MAX_FLEX_GAP):
-    """คืน list ของ (start, end) ที่ keyword ปรากฏ — str ต้องตรงเป๊ะ, tuple ของ chunk ยอมให้มีคำแทรก
-    สั้นๆ คั่นได้ (เช่น ("อากาศ","ดี") match "อากาศจะอยู่ในเกณฑ์ดี") แต่ไม่ match ถ้าคำแทรกมีคำปฏิเสธ
-    (ความหมายกลับกัน เช่น "อากาศไม่ดี")"""
+    
     if isinstance(keyword, str):
         occurrences = []
         start = 0
@@ -1527,10 +1332,7 @@ def _find_keyword_occurrences(message_text, keyword, max_gap=_MAX_FLEX_GAP):
 
 
 def _mentioned_levels(message_text):
-    """หา level ทั้งหมดที่ข้อความพูดถึงผ่าน keyword ของ PM25_LEVELS — ประมวลผล literal match ก่อน
-    flexible match เสมอ (ไม่ใช่แค่เรียงตาม span ยาวสุด เพราะ flexible match ที่กินคำแทรกยาวๆ อาจดู
-    ยาวกว่า literal ที่แม่นยำกว่า) แล้ว mark ช่วงที่จับแล้วว่า "consumed" กันซ้อนจับซ้ำ — จำเป็นเพราะ
-    ชื่อระดับบางคู่เป็น substring กันเอง (เช่น "อากาศดี" อยู่ใน "อากาศดีมาก")"""
+ 
     all_occurrences = []
     for _, level_name, keywords in PM25_LEVELS:
         for kw in keywords:
@@ -1572,13 +1374,7 @@ def _fallback_message(level):
 
 
 def validate_health_message(message_text, predicted_pm25, risk_group="ทั่วไป"):
-    """ตรวจว่าข้อความ NLG สอดคล้องกับระดับ PM2.5 จริงก่อนส่งแจ้งเตือน — ไม่ผ่านถ้า: keyword ของ
-    ระดับที่รุนแรงกว่าจริง, keyword ของระดับที่เบากว่าจริงทั้งหมด (ชะล่าใจ), หรือไม่มี keyword เลย
-    (fail-safe) risk_group != "ทั่วไป" ข้าม _mentions_generic_caution_below() เพราะคำเตือนล่วงหน้า
-    เป็นเจตนาสำหรับกลุ่มเปราะบาง (สอดคล้อง RISK_GROUP_THRESHOLD_OFFSET) ไม่ใช่อ้างระดับผิด
-
-    คืนค่า (is_valid, level หรือ None, message_to_send) — ไม่ผ่านจะคืน template แทน
-    """
+ 
     if predicted_pm25 is None or (isinstance(predicted_pm25, float) and np.isnan(predicted_pm25)):
         return False, None, _fallback_message(None)
 
@@ -1604,32 +1400,21 @@ def validate_health_message(message_text, predicted_pm25, risk_group="ทั่�
     return True, actual_level, message_text
 
 
-# ===== NLG Generation (proposal 4.1.4 / 6.1.4) =====
+# ===== NLG Generation =====
 # แปลงค่าพยากรณ์เป็นคำอธิบายไทยสั้นๆ ผ่าน Gemini ตรวจด้วย validate_health_message() ก่อนคืนค่าเสมอ
 try:
     _gemini_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 except Exception as e:
     print(f"[nlg] Gemini client init failed ({e}); NLG จะ fallback ไป template เสมอจนกว่าจะตั้ง GEMINI_KEY")
     _gemini_client = None
-GEMINI_MODEL = "gemini-3.1-flash-lite"  # gemini-2.5-flash เลิกให้ API key ใหม่ใช้แล้ว — GA, free tier, เร็ว/ถูกสุด
-# โมเดลสำรอง เรียกแค่ตอนโมเดลหลักล้มเหลวครบ GEMINI_MAX_RETRIES ครั้ง (ดู _call_gemini()) — เพิ่มเข้ามาหลังเจอ
-# gemini-3.1-flash-lite โหลดสูงชั่วคราว (503) ยาวนานวันหนึ่ง (2026-10-12, CHANGELOG 181) ทดสอบจริงตอนนั้นว่า
-# gemini-3.5-flash-lite (GA เหมือนกัน ไม่มี -preview) ยังตอบไว (1.58s) และผ่าน validate_health_message() ปกติ
-# ขณะที่โมเดลหลักยัง 503 อยู่ — โมเดลคนละตัวมักมี quota/capacity แยกกัน ไม่โดนผลกระทบพร้อมกันเสมอไป
+GEMINI_MODEL = "gemini-3.1-flash-lite" 
 GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
-# วัดจาก scripts/measure_gemini_latency.py (2026-10-07, 23 คำขอสำเร็จ): p50=1.45s p90=2.66s p95=4.36s
-# p99=9.58s max=11.00s (ceil(p99)+1=11) — Gemini SDK เองก็บังคับ min server-side deadline 10s อยู่แล้ว
-# ค่า 5 เดิมตัดคำขอที่ยังปกติทิ้งบ่อยเกินไป ดู models/gemini_latency_measurement_20261007_192619.csv
 GEMINI_TIMEOUT_SECONDS = 11
 GEMINI_MAX_RETRIES = 3  # 429 (quota) backoff: รอ 1s, 2s, 4s
-# Gemini SDK บังคับ min server-side deadline 10s เอง จึงบังคับ timeout ฝั่ง client ผ่าน thread แยกแทน
-# (thread เดิมรันต่อเบื้องหลังจนจบ ไม่ถูก cancel แต่ caller ไม่ต้องรอ กัน get_forecast() ค้าง)
+
 _gemini_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gemini-nlg")
 
-# free tier RPM limit = 15 (= เฉลี่ยห่างกัน 4.0s/ครั้ง) — scripts/measure_gemini_latency.py ชนโควตา
-# จริงตอนทดสอบ (429 RESOURCE_EXHAUSTED) เพราะ scheduler เดิมเว้นแค่ 0.5s/จังหวัด ไม่พอกันโควตาเมื่อ
-# ทุกจังหวัดต้องสร้าง NLG รายวันพร้อมกันรอบแรกของวัน (หลัง 06:00 น.) จึง rate-limit ระดับ process
-# เองใน _call_gemini() กันชนโควตาไม่ว่าจะเรียกจากที่ไหน (scheduler หรือ live request ที่มาพร้อมกัน)
+
 GEMINI_MIN_CALL_SPACING_S = 4.5  # >4.0s (=60/15) เผื่อ margin
 _gemini_rate_lock = threading.Lock()
 _gemini_last_call_started_at = [0.0]
@@ -1654,8 +1439,6 @@ _FEATURE_NAME_TH = {
     "month_sin": "ช่วงฤดูกาล",
     "month_cos": "ช่วงฤดูกาล",
     "dayofweek": "วันในสัปดาห์",
-    # ฟีเจอร์ v3 (CHANGELOG 149/75) ที่ dict นี้ยังไม่เคยมีคำแปล — ต้องมีครบ ไม่งั้นชื่อ field ภาษาอังกฤษ
-    # จะหลุดเข้า prompt ตรงๆ ขัดกับ _NLG_SYSTEM_PROMPT ที่ห้ามใช้ศัพท์เทคนิค
     "wind_dir_sin": "ทิศทางลม",
     "wind_dir_cos": "ทิศทางลม",
     "pressure": "ความกดอากาศ",
@@ -1665,8 +1448,7 @@ _FEATURE_NAME_TH = {
     "nb_trend_12h": "แนวโน้มฝุ่นของจังหวัดข้างเคียง",
 }
 
-# แต่ละ tone กำกับ "ต้องสอดคล้องกับระดับจริง" เสมอ กันข้อความย้อนแย้งในตัวเอง (เคยเกิดจริง: อากาศ
-# "ดี" แต่ tone กลุ่มเปราะบางสั่งเตือนแบบไม่มีเงื่อนไข ได้ข้อความที่ขัดแย้งกันเอง)
+
 _USER_GROUP_TONE = {
     "ทั่วไป": "ให้คำแนะนำทั่วไปที่เหมาะกับคนทั่วไป",
     "เด็ก-ผู้สูงอายุ": (
@@ -1724,9 +1506,7 @@ def _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group="ท�
 
 
 def _wait_for_gemini_rate_limit():
-    """บังคับระยะห่างขั้นต่ำ GEMINI_MIN_CALL_SPACING_S ระหว่างคำขอ Gemini แต่ละครั้งระดับ process
-    (ไม่ว่าจะมาจาก scheduler หรือ live request พร้อมกัน) กันชนโควตา free tier 15 RPM — ดูคอมเมนต์
-    ที่ GEMINI_MIN_CALL_SPACING_S"""
+
     with _gemini_rate_lock:
         now = time.monotonic()
         wait = GEMINI_MIN_CALL_SPACING_S - (now - _gemini_last_call_started_at[0])
@@ -1736,9 +1516,7 @@ def _wait_for_gemini_rate_limit():
 
 
 def _parse_gemini_retry_delay_s(e):
-    """ดึง retryDelay (วินาที) จาก 429 error ของ Gemini — SDK ใส่ไว้ใน e.details['error']['details']
-    เป็น RetryInfo (google.rpc.RetryInfo, รูปแบบ '31s') คืน None ถ้า parse ไม่ได้ (response เปลี่ยนรูปแบบ/
-    ไม่มี field นี้) ให้ caller fallback ไป backoff คงที่เดิมแทน ไม่ raise ออกไป"""
+
     try:
         err = e.details.get("error", e.details)
         for d in err.get("details", []):
@@ -1750,9 +1528,7 @@ def _parse_gemini_retry_delay_s(e):
 
 
 def _call_single_gemini_attempt(model, prompt):
-    """ยิง Gemini โมเดลใดโมเดลหนึ่งครั้งเดียว (ไม่มี retry ในตัว) คืน (text, error) — error เป็น None ถ้า
-    สำเร็จ มิฉะนั้นเป็น exception ที่เกิดขึ้นจริง (FutureTimeoutError ถ้าเกิน GEMINI_TIMEOUT_SECONDS) ให้
-    caller ตัดสินใจเรื่อง retry/fallback เอง ใช้ร่วมกันทั้งโมเดลหลักและโมเดลสำรอง"""
+
     future = _gemini_executor.submit(
         _gemini_client.models.generate_content,
         model=model,
@@ -1767,9 +1543,7 @@ def _call_single_gemini_attempt(model, prompt):
 
 
 def _call_gemini(prompt):
-    """เรียก Gemini โมเดลหลักพร้อม client-side timeout + retry backoff เฉพาะ 429/503 ถ้าล้มเหลวทุกช่องทาง
-    (รวม error ที่ไม่ retry และ timeout) จะลองโมเดลสำรอง (GEMINI_FALLBACK_MODEL) อีก 1 ครั้งก่อนคืน None
-    ให้ caller fallback ไป template — โมเดลสำรองเพิ่มเข้ามาหลังเจอโมเดลหลักโหลดสูงยาวนาน (CHANGELOG 181/182)"""
+
     if _gemini_client is None:
         return None
 
@@ -1783,12 +1557,9 @@ def _call_gemini(prompt):
             print(f"[nlg] Gemini call exceeded {GEMINI_TIMEOUT_SECONDS}s timeout")
             break
         if isinstance(e, genai_errors.APIError):
-            # 429 = เกินโควตา RPM, 503 = โมเดลโหลดสูงชั่วคราว ("try again later" ตรงๆ จาก Gemini เอง — เจอ
-            # จริงตอนวัด latency 2026-10-12 14/30 ครั้ง) ทั้งคู่เป็น error ชั่วคราวที่ retry แล้วมีโอกาสสำเร็จ
+ 
             if e.code in (429, 503) and attempt < GEMINI_MAX_RETRIES - 1:
-                # retryDelay จริงจาก Gemini (เห็นจริง 18-31s ตอนทดสอบ 429) ยาวกว่า backoff คงที่เดิม (1/2/4s)
-                # มาก — รีทรายด้วย backoff สั้นจะชนซ้ำไปเรื่อยๆ ไม่มีทางสำเร็จ ใช้ค่าจริงถ้า parse ได้ (503 ไม่มี
-                # RetryInfo ใน response จึง parse ไม่ได้เสมอ ใช้ backoff คงที่แทนซึ่งก็เหมาะสมอยู่แล้วสำหรับ 503)
+          
                 retry_delay = _parse_gemini_retry_delay_s(e)
                 wait_s = retry_delay if retry_delay is not None else delay
                 source = "retryDelay จริง" if retry_delay is not None else "backoff เดิม (parse ไม่ได้)"
@@ -1864,17 +1635,11 @@ REP_HORIZON_FOR_SHAP = 12
 
 
 def generate_daily_nlg_explanation(forecast, feature_row, model_used, risk_group="ทั่วไป"):
-    """สร้างคำอธิบาย NLG แทนทั้งวัน จากค่าเฉลี่ยของ forecast[] ทั้ง 24 จุด validate ผ่าน
-    validate_health_message() เสมอ ไม่ผ่าน/เรียก Gemini ไม่สำเร็จ fallback ไป _fallback_message()
-    risk_group ปรับโทนผ่าน _USER_GROUP_TONE คืนค่า (daily_avg_pm25, explanation_text, used_fallback)
-    model_used: โมเดลที่ Dynamic Routing เลือกใช้จริงที่ horizon ตัวแทน (REP_HORIZON_FOR_SHAP) —
-    ใช้อธิบาย SHAP เท่านั้น ไม่กระทบค่าพยากรณ์/prompt ส่วนอื่น
-    """
+
     daily_avg_pm25 = round(sum(f["pm25"] for f in forecast) / len(forecast), 1)
     status = pm25_status(daily_avg_pm25)
 
-    # SHAP เป็น best-effort: ต้องไม่ทำให้ NLG (และ /api/forecast ทั้งเส้น) พังถ้า TreeExplainer
-    # พลาดหรือช้าเกิน — fallback เป็น None เหมือนตอนที่ปิดไว้ (_format_shap_factor_lines รองรับ None อยู่แล้ว)
+
     try:
         shap_pairs = get_shap_explanation(model_used, REP_HORIZON_FOR_SHAP, feature_row)
     except Exception as e:
@@ -1899,13 +1664,7 @@ def generate_daily_nlg_explanation(forecast, feature_row, model_used, risk_group
 
 
 def maybe_generate_daily_nlg(forecast, feature_row, risk_group, province, model_used):
-    """เรียก generate_daily_nlg_explanation() ครั้งเดียวต่อวันต่อ (risk_group, province) ตั้งแต่
-    06:00 น. เวลาไทยเป็นต้นไป (>= 6 กัน process ที่ไม่ได้รันตรงช่วง 06:00-06:59 พลาดไปทั้งวัน) ไม่
-    raise exception ออกไป กัน /api/forecast พัง — เป็น lazy ตาม (risk_group, province) ที่มีคนขอ
-    (กลุ่ม 'ทั่วไป' ถูก warm ทุกวันผ่าน scheduled_forecast_job())
-    model_used: โมเดลตัวแทนที่ horizon=REP_HORIZON_FOR_SHAP (ดู generate_daily_nlg_explanation) —
-    มาจาก forecast[REP_HORIZON_FOR_SHAP - 1]["model_used"] ที่ caller ส่งมา
-    """
+  
     thai_now = get_thai_now()
     if thai_now.hour < 6:
         return
@@ -1945,7 +1704,7 @@ def get_today_daily_nlg(risk_group, province):
     }
 
 
-MIN_LIVE_FOR_SUMMARY = 5  # เกณฑ์เดียวกับ compute_rolling_r2(): live pair น้อยกว่านี้ไม่น่าเชื่อถือพอ
+MIN_LIVE_FOR_SUMMARY = 5  
 
 
 def summarize_errors(all_errors, live_errors):
@@ -1972,10 +1731,7 @@ class DataUnavailableError(RuntimeError):
 def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     province_meta = PROVINCES_BY_SLUG[province]
     series_info = {}
-    # Dustboy อัปเดตแค่รายชั่วโมง ไม่มีประโยชน์ที่จะดึงถี่กว่า TARGET_CACHE_TTL_S (5 นาที) ปกติ ปรับเฉพาะจุดนี้ (ไม่แก้ default ของ
-    # get_recent_series เอง เพื่อไม่กระทบ max_age_s=0/ค่าอื่นที่ผู้เรียกจุดอื่นตั้งใจส่งมาตรงๆ เช่นตอนทดสอบ)
-    target_max_age_s = DUSTBOY_CACHE_TTL_S if province_meta.get("pm25_provider") == "dustboy" and USE_DUSTBOY_LOEI else TARGET_CACHE_TTL_S
-    df_recent = get_recent_series(province, strict=True, max_age_s=target_max_age_s, info=series_info)
+    df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
     if df_recent is None or df_recent.empty:
         raise DataUnavailableError(f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)")
     # เติมค่าช่วงที่สถานีเงียบ (ถ้าเข้าเงื่อนไข) — df_observed คือข้อมูลจริงล้วน ใช้กับ backfill_actuals()/อายุข้อมูลเสมอ ห้ามใช้ df ที่เติมแล้ว
@@ -1990,7 +1746,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     # สภาพอากาศพร้อมทางสำรอง (CHANGELOG 172): ค่าที่ดึงไว้ -> สด -> ค่าเก่า <=2 ชม. -> climatology; source != live เก็บไว้ใน data_quality
     current_weather, weather_info = get_current_weather(province_meta, at=reference_time)
     # ค่าจากทางสำรองที่ยังไม่ผ่านเกณฑ์ "เทียบเท่าของจริง": ซีรีส์ pm25 จาก cache เก่า / สภาพอากาศ climatology -> ไม่ log (กัน R² ของ routing ปน)
-    input_degraded = series_info.get("source") in ("stale_cache", "dustboy") or weather_info["source"] == "climatology"
+    input_degraded = series_info.get("source") == "stale_cache" or weather_info["source"] == "climatology"
     if USES_NEIGHBOR:
         neighbor = compute_neighbor_features(province, reference_time)
     else:
@@ -2006,15 +1762,9 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     X_now, latest_time, latest_pm25 = build_feature_row(df_recent, current_weather, province_meta, neighbor, fire_count)
     latest_time_th = latest_time.tz_convert("Asia/Bangkok")
 
-    # reading ล่าสุดของจังหวัดนี้เก่ากว่า TARGET_STALE_HOURS: ยังตอบได้ (พร้อม flag ใน data_quality) แต่ไม่ log/ไม่ทำ NLG
-    # — target_time ของ horizon 1-24 จะตกอยู่ในอดีต ถูก backfill ค่าจริงทันที ปน rolling R² ของ routing แบบรั่ว, และ
-    # daily_nlg_log UNIQUE ต่อวัน เขียนครั้งแรกชนะ สรุปจากข้อมูลเก่าจะยึดทั้งวัน
-    # อายุวัดจาก reading จริงล่าสุด (ไม่ใช่ค่าที่เติม); เมื่อเติมค่าแล้วพยากรณ์นับจากเวลาปัจจุบันจริง จึงไม่ถือเป็น stale (แต่ไม่ log — ดูด้านล่าง)
     target_age_hours = (pd.Timestamp.now(tz="UTC") - df_observed["datetime_utc"].max()).total_seconds() / 3600
     target_stale = bool(target_age_hours > TARGET_STALE_HOURS) and not imputed
 
-    # คำนวณ rolling R² ของทั้ง 2 โมเดลทุก horizon ล่วงหน้าด้วย query เดียว (ไม่ใช่ query แยกทีละ
-    # (model, horizon) ในลูปข้างล่าง 48 ครั้ง) — ดูคอมเมนต์ที่ fetch_rolling_r2_lookup()
     r2_lookup = fetch_rolling_r2_lookup(province)
 
     forecast = []
@@ -2025,9 +1775,6 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         model_name = select_model(X_now, h, province, r2_lookup, force_naive)
 
         if model_name == MODEL_NAIVE:
-            # ข้อมูลขาดหนักเกินป้อนโมเดล pooled ได้ (ไม่เคยเห็นแถวมี NaN ตอนเทรน) ใช้ persistence
-            # แทน ไม่มีขอบเขต uncertainty (ใช้ pred ตรงๆ เป็นทั้ง P05/P95 — สื่อ "ความเชื่อมั่นต่ำ"
-            # ผ่าน model_used แทน)
             pred = round(float(latest_pm25), 1)
             p05_adj = pred
             p95_upper_adj = pred
@@ -2048,8 +1795,6 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             "time": forecast_time_th.strftime("%H:%M"),
             "hour_thai": forecast_time_th.hour,
             "pm25": pred,
-            # ช่วงความเชื่อมั่น ~90% (P05-P95 conformal) — clamp ขอบล่างไม่ให้ติดลบ (PM2.5 เป็นบวกเสมอ
-            # แต่ residual บวกกลับอาจดันค่าต่ำกว่า 0 ได้ทางคณิตศาสตร์)
             "pm25_lo": round(max(0.0, p05_adj), 1),
             "pm25_hi": round(max(0.0, p95_upper_adj), 1),
             "model_used": model_name,
@@ -2066,15 +1811,12 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         if is_horizon_at_risk(pred, risk_group):
             risk_horizons.append(h)
 
-    # ไม่ log/ไม่ทำ NLG เมื่อ input ถูกเติมค่า (รุ่นแรก: กัน prediction_log/R² ของ routing ปนพยากรณ์จากค่าประมาณ — CHANGELOG 171)
     loggable = not target_stale and not imputed and not input_degraded
     if loggable:
         log_predictions(latest_time, log_rows, province)
         log_notification_snapshot(latest_time.isoformat(), float(latest_pm25), province)
-    backfill_actuals(df_observed, province)  # เติมค่าจริงให้ prediction เก่าจากข้อมูลที่เพิ่งดึง — ต้องเป็นข้อมูลจริงล้วนเสมอ
+    backfill_actuals(df_observed, province)  
     if loggable:
-        # model_used ตัวแทนสำหรับอธิบาย SHAP ของ NLG รายวัน (ดู REP_HORIZON_FOR_SHAP) — forecast[]
-        # มี model_used ต่อ horizon อยู่แล้วจากลูปข้างบน ไม่ต้องเรียก select_model() ซ้ำ
         rep_model_used = forecast[REP_HORIZON_FOR_SHAP - 1]["model_used"]
         maybe_generate_daily_nlg(forecast, X_now, risk_group, province, rep_model_used)
 
@@ -2090,7 +1832,6 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             "datetime_th": latest_time_th.strftime("%Y-%m-%d %H:%M"),
             "status": pm25_status(latest_pm25),
         },
-        # current_weather ดึงมาใช้เป็น model feature อยู่แล้ว แค่ส่งต่อให้ frontend ด้วย (ไม่ยิง API เพิ่ม)
         "current_weather": {
             "temp_c": round(current_weather["temperature_2m"], 1),
             "humidity_pct": round(current_weather["relative_humidity_2m"]),
@@ -2101,16 +1842,11 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         "high_pollution_risk": high_pollution_risk,
         "risk_horizons": risk_horizons,
         "fallback_triggered_horizons": fallback_triggered_horizons,
-        # สถานะข้อมูลที่ใช้ทำพยากรณ์รอบนี้ (ไม่มี column ใน DB — บอกผ่าน response เท่านั้น)
         "data_quality": {
             "target_age_hours": round(float(target_age_hours), 1),
-            # k ตามนิยามของ impute_target_series: ชั่วโมงเต็มที่ reading จริงล่าสุดตามหลัง "ชั่วโมงที่เพิ่งจบ" (now-1h) — ปกติ 0
-            # (ใช้บันทึกความหน่วงปกติสะสมเพื่อตั้ง IMPUTATION_MIN_K: ดู log_target_latency / scripts/summarize_target_latency.py)
             "observed_lag_k": int((pd.Timestamp.now(tz="UTC").floor("h") - pd.Timedelta(hours=1)
                                    - df_observed["datetime_utc"].max()) / pd.Timedelta(hours=1)),
             "target_stale": target_stale,
-            # แหล่งของข้อมูลนำเข้า (CHANGELOG 172): series_source = live|hours_endpoint|stale_cache, weather_source = live|stale_cache|climatology
-            "series_source": series_info.get("source", "live"),
             "series_age_hours": series_info.get("age_hours", 0.0),
             "weather_source": weather_info["source"],
             "weather_age_hours": weather_info["age_hours"],
@@ -2119,7 +1855,6 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             "neighbors_used": neighbor["neighbors_used"],
             "fire_source": fire_source,
             "fire_count_24h": int(fire_count),
-            # ไม่ null = สถานีเงียบ k ชม. ค่า current/พยากรณ์ตั้งอยู่บนค่าประมาณ (H-lite) — frontend ต้องบอกผู้ใช้
             "input_imputed": None if not imputed else {
                 "k_hours": imputed_info["k_hours"],
                 "method": imputed_info["method"],
@@ -2131,8 +1866,6 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         },
         "daily_summary": get_today_daily_nlg(risk_group, province),
         "risk_group": risk_group,
-        # activity เลือกฝั่ง frontend เท่านั้น (localStorage) ส่งแค่ config ให้ frontend คำนวณคะแนนเอง
-        # จาก pm25 ที่มีอยู่แล้ว — เลขคงที่ยังอยู่จุดเดียวที่นี่ กัน frontend/backend คำนวณไม่ตรงกัน
         "risk_score_config": {
             "risk_group_offset": RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0),
             "activity_offsets": ACTIVITY_INTENSITY_OFFSET,
@@ -2144,15 +1877,13 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
 TARGET_LATENCY_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "target_latency_scheduler_log.csv")
 
 
-TARGET_LATENCY_LOG_HEADER_OLD = "measured_utc,province_en,observed_lag_k,target_age_hours,imputed"  # ก่อน CHANGELOG 173
+TARGET_LATENCY_LOG_HEADER_OLD = "measured_utc,province_en,observed_lag_k,target_age_hours,imputed"  
 TARGET_LATENCY_LOG_HEADER = TARGET_LATENCY_LOG_HEADER_OLD + ",series_source"
-_LATENCY_LOG_LOCK = threading.Lock()  # scheduler thread + request thread เขียนไฟล์เดียวกัน (และตอนย้าย header ต้องไม่มี append แทรก)
-_LATENCY_LOG_CHECKED = set()  # path ที่ตรวจ/ย้าย header แล้วในโปรเซสนี้
+_LATENCY_LOG_LOCK = threading.Lock()  
+_LATENCY_LOG_CHECKED = set()  
 
 
 def _upgrade_latency_log_header(path):
-    """ไฟล์ log เก่า (header 5 คอลัมน์) -> แก้บรรทัดแรกเป็น 6 คอลัมน์ในที่เดิม (เขียน tmp แล้ว replace) แถวเก่าคงเดิม ไม่มีฟิลด์ series_source
-    = "legacy" (เขียนก่อนมีทางสำรอง จึงมาจาก /measurements เสมอ — summarize_target_latency.py ตีความเป็น live) header อื่นที่ไม่รู้จัก -> ไม่แตะ"""
     with open(path, encoding="utf-8", newline="") as f:
         lines = f.readlines()
     if not lines or lines[0].strip() != TARGET_LATENCY_LOG_HEADER_OLD:
@@ -2165,10 +1896,6 @@ def _upgrade_latency_log_header(path):
 
 
 def log_target_latency(province, data_quality):
-    """ต่อท้ายไฟล์ CSV: เวลาที่วัด (UTC), จังหวัด, observed_lag_k, อายุข้อมูล (ชม.), เติมค่าไหม, series_source — สะสมจากงานรายชั่วโมงเพื่อดูการกระจายความหน่วงปกติ
-    ของ OpenAQ ตามนาทีของชั่วโมง/จังหวัด ก่อนสรุปค่า IMPUTATION_MIN_K (scripts/summarize_target_latency.py) series_source (live|hours_endpoint|stale_cache) ให้ตัดแถวที่มาจาก
-    ทางสำรองออกจากการสรุป: /hours ช้ากว่า /measurements ~1 ชม. และ stale_cache มี k โตตามอายุ cache ไม่ใช่ความหน่วงปกติ (CHANGELOG 172-173)
-    ห้าม raise: ล้มเหลวเงียบๆ ได้ เพราะเป็นแค่ telemetry ไม่ใช่ส่วนของการพยากรณ์ (ไม่เขียนคีย์/URL ใดๆ)"""
     try:
         path = TARGET_LATENCY_LOG_PATH
         with _LATENCY_LOG_LOCK:
@@ -2177,7 +1904,7 @@ def log_target_latency(province, data_quality):
                 try:
                     _upgrade_latency_log_header(path)
                 except Exception:
-                    pass  # ย้าย header ไม่ได้ก็ยังต่อท้ายแถวใหม่ได้ (สคริปต์สรุปอ่านด้วย names= จึงไม่พัง)
+                    pass  
             _LATENCY_LOG_CHECKED.add(path)
             with open(path, "a", encoding="utf-8", newline="") as f:
                 if new_file:
@@ -2190,8 +1917,6 @@ def log_target_latency(province, data_quality):
 
 
 def scheduled_forecast_job():
-    """เรียก get_forecast() ทุกชั่วโมงต่อจังหวัด (loop ทั้ง 20 จังหวัด) ให้ prediction_log สะสม
-    ข้อมูลต่อเนื่องแม้ไม่มีใครเปิดเว็บ — try/except ต่อจังหวัด กัน API hiccup จังหวัดเดียวล้ม job ทั้งหมด"""
     summary = {"ok": 0, "stale": 0, "naive": 0, "imputed": 0, "input_fallback": 0, "failed": 0}
     prefetch_weather_all()
     for p in PROVINCE_REGISTRY:
@@ -2236,8 +1961,6 @@ def compare_html_redirect():
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_spa(path):
-    """เสิร์ฟ Vue SPA (frontend/dist) — path ที่ไม่ใช่ไฟล์จริง (เช่น client-side route /compare)
-    fallback ไป index.html เสมอ Werkzeug จับ static route อย่าง /api/forecast ก่อน catch-all นี้เสมอ"""
     full_path = os.path.join(FRONTEND_DIST, path)
     if path and os.path.isfile(full_path):
         return send_from_directory(FRONTEND_DIST, path)
@@ -2313,7 +2036,7 @@ def api_auth_logout():
 @login_required
 def api_auth_me():
     user = get_user_by_id(session["user_id"])
-    if user is None:  # แถวถูกลบไปแล้วแต่ session ยังค้างอยู่
+    if user is None:  
         session.clear()
         return jsonify({"error": "กรุณาเข้าสู่ระบบ"}), 401
     return jsonify(user), 200
@@ -2410,14 +2133,6 @@ def api_provinces():
 
 @app.route("/api/provinces/overview", methods=["GET"])
 def api_provinces_overview():
-    """สรุปสถานะ PM2.5 ทุกจังหวัดพร้อมกัน (หน้า /map) — อ่านจาก notification_log/prediction_log แทนการ
-    เรียก get_forecast() 20 ครั้งสด (แพง: OpenAQ/Open-Meteo/FIRMS/neighbor ต่อจังหวัด) ค่าที่ได้จึงหน่วง
-    สุด ~1 ชม. ตามรอบ scheduled_forecast_job() ยอมรับได้สำหรับภาพรวมระดับจังหวัด ไม่ใช่หน้าเดี่ยวที่ต้อง
-    real-time เป๊ะ (หน้านั้นคือ / ซึ่งยังคง live เหมือนเดิม)
-
-    ?horizon=0 (ค่าเริ่มต้น): คืนแค่ current_* (ค่าปัจจุบันจาก notification_log)
-    ?horizon=1..24: คืน current_* คู่กับ forecast_* (ค่าพยากรณ์ ณ horizon นั้นจาก prediction_log) เพื่อให้
-    popup ฝั่ง frontend โชว์ "ตอนนี้" เทียบกับ "พยากรณ์ที่เลือก" ได้โดยไม่ต้อง fetch ซ้ำ"""
     horizon_raw = request.args.get("horizon", "0")
     try:
         horizon = int(horizon_raw)
@@ -2462,9 +2177,6 @@ def api_provinces_overview():
                 "forecast_pm25": None, "forecast_status": None,
                 "forecast_target_time_th": None, "forecast_model_used": None,
             }
-
-            # ยังไม่มี snapshot เลย (DB ใหม่/scheduler ยังไม่เคยรันสำเร็จจังหวัดนี้) — ส่ง null ไม่ raise
-            # ให้จังหวัดอื่นยังโชว์ได้ปกติ
             current_snapshot = current_by_province.get(p["province_en"])
             if current_snapshot is not None:
                 recorded_at_utc, latest_pm25 = current_snapshot
@@ -2492,7 +2204,7 @@ def api_forecast():
     try:
         province = resolve_province_from_request()
         result = get_forecast(province, resolve_risk_group_from_session())
-        log_target_latency(province, result["data_quality"])  # คำขอจากผู้ใช้กระจายตามนาทีของชั่วโมง (งาน scheduler รันนาทีคงที่)
+        log_target_latency(province, result["data_quality"]) 
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -2504,12 +2216,6 @@ def api_forecast():
 
 @app.route("/api/current_pm25", methods=["GET"])
 def api_current_pm25():
-    """ค่า PM2.5 ล่าสุดของจังหวัดเดียว แบบเบา — ไม่ทำ feature engineering/model inference/log ใดๆ เลย
-    มีไว้ให้ frontend poll รีเฟรช badge "ปัจจุบัน" เป็นระยะโดยไม่ต้องยิง /api/forecast (หนัก: inference
-    2 โมเดล + บางครั้ง Gemini) ใช้ TARGET_CACHE_TTL_S เดียวกับที่ get_forecast() ใช้จริง จึงมักได้จาก
-    cache ที่ /api/forecast อุ่นไว้แล้ว ไม่ยิง OpenAQ ซ้ำ ไม่ทำ imputation (ต่างจาก get_forecast()) เพราะ
-    endpoint นี้แค่โชว์ค่าที่สังเกตได้จริงล่าสุด ไม่ใช่ feature ป้อนโมเดล — กรณีหายากที่สถานีเงียบพอดี
-    (3-48 ชม.) ค่านี้กับ current ใน /api/forecast อาจต่างกันเล็กน้อยได้ (อันนี้ raw, อีกอันเติมค่า)"""
     try:
         province = resolve_province_from_request()
         df = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S)
@@ -2529,14 +2235,14 @@ def api_current_pm25():
         return jsonify({"error": str(e)}), 500
 
 
+# notification_log อาจมีช่องว่างเยอะถ้า scheduler ไม่ได้รันต่อเนื่อง (ปกติใน dev) — ดึง "ดิบ" แค่เท่า limit
+# ที่ขอมาจะพลาดรอบเสี่ยงที่อยู่ไกลออกไปในแง่จำนวนแถวแต่ไม่ไกลในแง่วันที่ สแกนย้อนไกลกว่านั้นพอประมาณแทน
+# (ดู api_notifications())
+NOTIF_SCAN_WINDOW = 500
+
+
 @app.route("/api/notifications", methods=["GET"])
 def api_notifications():
-    """ประวัติการแจ้งเตือน (เฉพาะรอบที่ high_pollution_risk=true) — คำนวณ risk_horizons สดตาม
-    risk_group ของผู้เรียก ณ เวลา query (ไม่ใช่ค่า freeze ไว้ตอนบันทึก) กรอง province เสมอ กัน
-    cross จังหวัดที่ timestamp ตรงกันบังเอิญ ใช้ predicted_pm25 ตรงๆ เข้า is_horizon_at_risk() —
-    วิธีเดียวกันเป๊ะกับ get_forecast() แล้ว (ทั้งคู่ใช้ค่าพยากรณ์ตรงๆ ไม่ใช่ P95 อีกต่อไป ตั้งแต่
-    2026-09-23) ไม่ใช่การประมาณหยาบกว่าเหมือนก่อนหน้านี้
-    """
     try:
         province = resolve_province_from_request()
         risk_group = resolve_risk_group_from_session()
@@ -2545,10 +2251,13 @@ def api_notifications():
 
         conn = get_db_connection()
         cur = conn.cursor()
+        # ดึง "ดิบ" มา NOTIF_SCAN_WINDOW แถวเสมอ ไม่ใช่แค่เท่า limit — notification_log อาจมีช่องว่างเยอะ
+        # ถ้า scheduler ไม่ได้รันต่อเนื่อง (ปกติใน dev) ดึงแค่เท่า limit จะพลาดรอบเสี่ยงที่อยู่ไกลออกไปในแง่
+        # จำนวนแถวแต่ไม่ไกลในแง่วันที่ กรองความเสี่ยงทีหลังแล้วค่อยตัดเหลือ limit จริงก่อนส่งกลับ
         cur.execute(
             "SELECT recorded_at_utc, latest_pm25 FROM notification_log WHERE province = %s "
             "ORDER BY recorded_at_utc DESC LIMIT %s",
-            (province, limit),
+            (province, NOTIF_SCAN_WINDOW),
         )
         snapshots = cur.fetchall()
 
@@ -2577,6 +2286,8 @@ def api_notifications():
                 "risk_horizons": risk_horizons,
                 "fallback_horizons": fallback_horizons,
             })
+            if len(results) >= limit:
+                break
 
         cur.close()
         conn.close()
@@ -2589,10 +2300,6 @@ def api_notifications():
 
 @app.route("/api/notifications/status", methods=["GET"])
 def api_notifications_status():
-    """สถานะเสี่ยงปัจจุบันของจังหวัดที่ระบุ อ่านจาก notification_log/prediction_log ล่าสุดเท่านั้น
-    (ไม่เรียก get_forecast()/live API — ถูกกว่ามาก) ใช้สำหรับกระดิ่งแจ้งเตือนเฝ้า "จังหวัดหลัก" ของ
-    user (home_province) แยกจากจังหวัดที่เลือกดูอยู่ใน dropdown (provinceState.selected) — เดียวกับ
-    pattern ที่ /api/provinces/overview ใช้สำหรับหน้าแผนที่ ข้อมูลหน่วงสุด ~1 ชม. ตามรอบ scheduler"""
     try:
         province = resolve_province_from_request()
         risk_group = resolve_risk_group_from_session()
@@ -2693,8 +2400,6 @@ def api_comparison():
         in_interval_flags = []
         for target_time_str, predicted, actual, actual_calibrated, model_used, source, pm25_lo, pm25_hi in rows:
             target_time_th = pd.Timestamp(target_time_str).tz_convert("Asia/Bangkok")
-            # ค่าจริงตกในช่วง P05-P95 ไหม — None ถ้ายังไม่มีค่าจริง/แถวเก่าไม่มี pm25_lo/pm25_hi
-            # ไม่นับ naive_fallback (ช่วงกว้าง 0 เสมอ ไม่ใช่ conformal interval จริง)
             in_interval = None
             if actual_calibrated is not None and pm25_lo is not None and pm25_hi is not None and model_used != "naive_fallback":
                 in_interval = pm25_lo <= actual_calibrated <= pm25_hi
@@ -2702,7 +2407,6 @@ def api_comparison():
             points.append({
                 "time": target_time_th.strftime("%m-%d %H:%M"),
                 "predicted": round(predicted, 1),
-                # actual_raw/actual เท่ากันเสมอสำหรับแถวใหม่ เก็บทั้งคู่ไว้ไม่ต้องแก้ frontend ที่อ้างถึง
                 "actual": round(actual_calibrated, 1) if actual_calibrated is not None else None,
                 "actual_raw": round(actual, 1) if actual is not None else None,
                 "model_used": model_used,
@@ -2742,7 +2446,6 @@ def api_comparison():
                 "basis": basis,
                 "mae": round(mae, 3) if mae is not None else None,
                 "bias": round(bias, 3) if bias is not None else None,
-                # % ของคู่ที่มีช่วงบันทึกไว้ (n_coverage) ที่ค่าจริงตกในช่วงจริง — เป้าหมาย ~90% (ALPHA=0.10)
                 "coverage_pct": coverage_pct,
                 "n_coverage": len(in_interval_flags),
             },
@@ -2762,7 +2465,6 @@ def api_comparison_overview():
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM prediction_log WHERE province = %s", (province,))
         n_total = cur.fetchone()[0]
-        # ไม่มี calibration อีกต่อไป (ดูคอมเมนต์เดียวกันใน /api/comparison)
         cur.execute(
             """SELECT horizon, predicted_pm25, COALESCE(actual_pm25_calibrated, actual_pm25),
                       model_used, source, pm25_lo, pm25_hi
@@ -2863,8 +2565,7 @@ def api_comparison_overview():
 
 
 if __name__ == "__main__":
-    # DEBUG=True ทำให้ Flask สร้าง reloader process แยก กันไว้ไม่ให้ scheduler เริ่มซ้ำ 2 รอบ
-    # (WERKZEUG_RUN_MAIN ตั้งเฉพาะใน process ลูกที่รันจริง)
+
     if not DEBUG or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         scheduler = BackgroundScheduler()
         scheduler.add_job(
@@ -2872,7 +2573,7 @@ if __name__ == "__main__":
             "interval",
             hours=1,
             id="hourly_forecast",
-            next_run_time=pd.Timestamp.now(),  # ยิงทันทีตอนสตาร์ท แล้วค่อยทุก 1 ชม.หลังจากนั้น
+            next_run_time=pd.Timestamp.now(),  
         )
         scheduler.start()
         print("[scheduler] started - auto forecast every 1 hour")
