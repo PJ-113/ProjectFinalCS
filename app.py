@@ -42,7 +42,15 @@ MODEL_NAIVE = "naive_fallback"
 PROVINCE_REGISTRY_PATH = "data/province_station_registry.json"
 
 USE_TIMESTAMP_OFFSET = True
-OFFSET_FUTURE_TOLERANCE_H = 1  
+OFFSET_FUTURE_TOLERANCE_H = 1
+# OpenAQ v3 คืน period.datetimeFrom (ต้นช่วง 1 ชม.) เป็นตัว datetime_utc ที่ build_feature_row()/
+# fetch_recent_pm25_openaq() ใช้ทั้งหมด (คงไว้แบบนี้ต่อไป ห้ามเปลี่ยน — ต้องสม่ำเสมอกับตอนเทรนที่ใช้
+# datetimeFrom เหมือนกัน) แต่ค่าของจุดนั้นเป็นค่าเฉลี่ยเคลื่อนที่ 24 ชม.ที่จบ ณ period.datetimeTo (=
+# datetimeFrom + 1h) ซึ่งเป็นแบบแผนเดียวกับที่เว็บ explore.openaq.org ใช้ติดป้ายจุด (ยืนยันแล้ว: ค่าเดียวกัน
+# ของเราติดป้าย 18:00 เว็บเขาติดป้าย 19:00 เป๊ะ ต่างกันคงที่ 1 ชม.) ค่านี้ใช้ "เฉพาะตอนแปลงเป็นข้อความเวลาโชว์
+# ผู้ใช้" เท่านั้น (ดู build_hourly_timeline()/get_forecast()) ห้ามใช้ปรับ latest_time ที่ป้อนเข้า feature
+# engineering/DB logging/backfill มิฉะนั้นจะเกิด train/serve skew
+OPENAQ_DISPLAY_LABEL_SHIFT_H = 1
 HIGH_POLLUTION_THRESHOLD = 37.5  # ค่าเดียวกันทุกจังหวัด (มาตรฐาน คพ. ไม่ใช่ค่าที่ผูกกับโมเดล)
 # ต้องรัน `npm run build` ใน frontend/ ก่อน ถึงจะมีโฟลเดอร์นี้ 
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
@@ -572,9 +580,23 @@ def _check_weather(w):
 
 
 def fetch_current_weather_openmeteo(lat, lon):
-   
+
     params = {"latitude": lat, "longitude": lon, "current": WEATHER_CURRENT_VARS, "timezone": "UTC"}
     return _open_meteo_get(params, attempts=2 if USE_INPUT_FALLBACK else 1, timeout=10 if USE_INPUT_FALLBACK else 15)["current"]
+
+
+WEATHER_HOURLY_VARS = "temperature_2m,precipitation_probability,weather_code"
+
+
+def fetch_hourly_weather_openmeteo(lat, lon, past_days=1, forecast_days=2):
+    """ดึงสภาพอากาศรายชั่วโมง (อดีต past_days วัน + อนาคต forecast_days วัน) จาก Open-Meteo คนละคำขอกับ
+    fetch_current_weather_openmeteo() (ซึ่งดึงแค่ค่าปัจจุบันจุดเดียวไว้เป็น feature โมเดล) — ใช้ประกอบกราฟ
+    'พยากรณ์อากาศ' รายชั่วโมงฝั่ง frontend เท่านั้น ไม่เกี่ยวกับ pipeline การพยากรณ์ PM2.5"""
+    params = {
+        "latitude": lat, "longitude": lon, "hourly": WEATHER_HOURLY_VARS,
+        "past_days": past_days, "forecast_days": forecast_days, "timezone": "UTC",
+    }
+    return _open_meteo_get(params, attempts=2 if USE_INPUT_FALLBACK else 1, timeout=10 if USE_INPUT_FALLBACK else 15)["hourly"]
 
 
 def fetch_current_weather_batch(provinces):
@@ -712,6 +734,81 @@ def haversine_km(lat1, lon1, lat2, lon2):
     p1, p2 = np.radians(lat1), np.radians(lat2)
     a = np.sin((p2 - p1) / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2
     return 2 * 6371.0 * np.arcsin(np.sqrt(a))
+
+
+# ===== Air4Thai (PCD) — ค่า PM2.5 "ตอนนี้" ที่สดกว่า OpenAQ มาก (วัดจริง ~28 นาที vs ~2.5 ชม. ที่สถานี
+# ขอนแก่นเดียวกัน ช่วงเวลาเดียวกัน) ใช้แสดงผลอย่างเดียว ("ตอนนี้"/จุด "ตอนนี้" บนกราฟ) ห้ามใช้แทน latest_pm25
+# ที่เป็นฐานพยากรณ์ของโมเดล เพราะ Air4Thai อาจสเกลไม่ตรงกับที่โมเดลเทรนบน OpenAQ เป๊ะ (โปรเจกต์นี้เคยมีชั้น
+# calibration Air4Thai<->OpenAQ มาก่อนตอนยุค Khon Kaen เดี่ยว แล้วเลิกใช้ไปตอนย้ายมา OpenAQ ล้วนทั้ง pipeline
+# — ดู "Historical note" ใน CLAUDE.md — จึงไม่เอากลับมาผสมกับฐานพยากรณ์อีก)
+AIR4THAI_TTL_S = 10 * 60  # คำขอเดียวได้ทุกสถานีทั่วประเทศ ไม่ต้องรีเฟรชถี่ (ฝั่ง Air4Thai เองอัปเดตรายชั่วโมง)
+_AIR4THAI_BREAKER = _CircuitBreaker("air4thai", threshold=5, cooldown_s=60)
+_AIR4THAI_CACHE = None  # (เวลา monotonic ที่ดึงสำเร็จล่าสุด, {province_en: {"pm25":, "datetime_utc":, "station_id":}})
+_AIR4THAI_LOCK = threading.Lock()
+
+
+def fetch_air4thai_live_all():
+    """ดึงสถานี Air4Thai (PCD) ทั้งหมดทั่วประเทศในคำขอเดียว (getNewAQI_JSON.php, คนละ endpoint กับ
+    getHistoryData.php ที่ scripts/archive_air4thai.py ใช้) แล้วจับคู่แต่ละจังหวัดใน PROVINCE_REGISTRY กับ
+    สถานีที่ใกล้ที่สุด — ตรวจแล้วทั้ง 20 จังหวัดอีสานมีสถานี Air4Thai ที่พิกัดตรงกันเป๊ะ (0.0 กม. ห่าง แปลว่า
+    ทะเบียนจังหวัดนี้น่าจะสร้างจากพิกัดสถานี Air4Thai ชุดเดียวกันมาตั้งแต่ต้น) คืน dict ว่างถ้าดึงไม่สำเร็จ
+    (ไม่ raise — ให้ caller fallback ไป OpenAQ ที่มีอยู่แล้วเสมอ)"""
+    r = requests.get("https://air4thai.pcd.go.th/services/getNewAQI_JSON.php",
+                      headers={"User-Agent": "Mozilla/5.0"}, timeout=15, verify=False)
+    r.raise_for_status()
+    stations = r.json()["stations"]
+
+    out = {}
+    for p in PROVINCE_REGISTRY:
+        best = None
+        for s in stations:
+            try:
+                slat, slon = float(s["lat"]), float(s["long"])
+            except (TypeError, ValueError):
+                continue
+            d = haversine_km(p["lat"], p["lon"], slat, slon)
+            if best is None or d < best[0]:
+                best = (d, s)
+        if best is None:
+            continue
+        _, s = best
+        aqi = s.get("AQILast", {})
+        try:
+            pm25 = float(aqi.get("PM25", {}).get("value"))
+        except (TypeError, ValueError):
+            continue
+        if pm25 < 0:  # Air4Thai ใช้ -1 แทน "ไม่มีค่า" (เซนเซอร์เสีย/ยังไม่รายงาน)
+            continue
+        try:
+            dt_th = pd.Timestamp(f"{aqi['date']} {aqi['time']}").tz_localize("Asia/Bangkok")
+        except Exception:
+            continue
+        out[p["province_en"]] = {"pm25": pm25, "datetime_utc": dt_th.tz_convert("UTC"), "station_id": s["stationID"]}
+    return out
+
+
+def get_air4thai_live(province):
+    """คืน {"pm25":, "datetime_utc":} ของจังหวัดนี้จากแคช Air4Thai (รีเฟรชทุก AIR4THAI_TTL_S) หรือ None ถ้า
+    ดึงไม่สำเร็จ/ยังไม่มีแคชเลย/จังหวัดนี้ไม่มีสถานีคู่ — ไม่ throw ไม่ว่ากรณีใด เพราะนี่เป็นแค่ทางเลือกเสริมของ
+    การแสดงผล "ตอนนี้" ให้สดขึ้น ไม่ใช่ critical path (พลาดแล้ว caller ใช้ OpenAQ เดิมต่อได้ปกติ)"""
+    global _AIR4THAI_CACHE
+    now = time.monotonic()
+    with _AIR4THAI_LOCK:
+        cached = _AIR4THAI_CACHE
+    if cached is not None and now - cached[0] < AIR4THAI_TTL_S:
+        return cached[1].get(province)
+    if not _AIR4THAI_BREAKER.allow():
+        return cached[1].get(province) if cached else None
+    try:
+        data = fetch_air4thai_live_all()
+    except Exception as e:
+        _AIR4THAI_BREAKER.failure()
+        print(f"[air4thai] ดึงไม่สำเร็จ ({type(e).__name__}) — ใช้ OpenAQ แทนสำหรับค่า \"ตอนนี้\"")
+        return cached[1].get(province) if cached else None
+    _AIR4THAI_BREAKER.success()
+    with _AIR4THAI_LOCK:
+        _AIR4THAI_CACHE = (now, data)
+    return data.get(province)
 
 
 # เพื่อนบ้านเรียงตามระยะทางจริง
@@ -1436,6 +1533,45 @@ _FEATURE_NAME_TH = {
     "nb_trend_12h": "แนวโน้มฝุ่นของจังหวัดข้างเคียง",
 }
 
+# คำอธิบายเชิงบรรยาย (ซ่อนชื่อ feature ดิบ เช่น "pm25_lag_3", พูดถึงปรากฏการณ์แทน) ต่อคู่ (feature, ทิศทาง
+# SHAP) ใช้กับ /api/forecast/shap ให้ผู้ใช้ทั่วไปอ่านแล้วเข้าใจทันทีแบบเดียวกับที่ daily NLG ทำกับข้อความสรุป
+# รายวัน — เขียนเฉพาะคู่ที่มีเหตุผลเชิงอุตุนิยมวิทยาที่ยืนยันได้ชัดเจน (อิงทิศทางเดียวกับ
+# METEOROLOGICAL_HYPOTHESES ใน scripts/shap_analysis_clean.py ซึ่งผ่านการเช็ค plausibility กับข้อมูลจริงแล้ว)
+# ส่วนที่ไม่มีสมมติฐานยืนยันชัดเจน (temp, wind_dir, lat/lon, roll_std) ปล่อย fallback ไปใช้ _FEATURE_NAME_TH
+# ตรงๆ แทนที่จะเดาเหตุผลที่ไม่ได้ตรวจสอบมาเขียนเป็นคำอธิบายฟันธง
+_FACTOR_NARRATIVE_TH = {
+    ("pm25_lag_1", "up"): "ค่าฝุ่นชั่วโมงที่แล้วยังอยู่ในระดับสูง",
+    ("pm25_lag_1", "down"): "ค่าฝุ่นชั่วโมงที่แล้วเริ่มลดลง",
+    ("pm25_lag_3", "up"): "ฝุ่นสะสมต่อเนื่องในช่วง 3 ชั่วโมงที่ผ่านมา",
+    ("pm25_lag_3", "down"): "ฝุ่นลดลงต่อเนื่องในช่วง 3 ชั่วโมงที่ผ่านมา",
+    ("pm25_lag_6", "up"): "ฝุ่นสะสมต่อเนื่องตลอดช่วง 6 ชั่วโมงที่ผ่านมา",
+    ("pm25_lag_6", "down"): "ฝุ่นลดลงต่อเนื่องตลอดช่วง 6 ชั่วโมงที่ผ่านมา",
+    ("pm25_lag_12", "up"): "แนวโน้มฝุ่นสูงต่อเนื่องมาตั้งแต่ 12 ชั่วโมงก่อน",
+    ("pm25_lag_12", "down"): "แนวโน้มฝุ่นลดลงต่อเนื่องมาตั้งแต่ 12 ชั่วโมงก่อน",
+    ("pm25_lag_24", "up"): "ฝุ่นสูงกว่าช่วงเวลาเดียวกันของเมื่อวาน",
+    ("pm25_lag_24", "down"): "ฝุ่นต่ำกว่าช่วงเวลาเดียวกันของเมื่อวาน",
+    ("pm25_roll_mean_6", "up"): "ค่าเฉลี่ยฝุ่นในช่วง 6 ชั่วโมงล่าสุดอยู่ในระดับสูง",
+    ("pm25_roll_mean_6", "down"): "ค่าเฉลี่ยฝุ่นในช่วง 6 ชั่วโมงล่าสุดอยู่ในระดับต่ำ",
+    ("pm25_roll_mean_24", "up"): "ค่าเฉลี่ยฝุ่นในช่วง 24 ชั่วโมงล่าสุดอยู่ในระดับสูง",
+    ("pm25_roll_mean_24", "down"): "ค่าเฉลี่ยฝุ่นในช่วง 24 ชั่วโมงล่าสุดอยู่ในระดับต่ำ",
+    ("wind_speed", "down"): "ลมพัดแรงขึ้น ช่วยระบายฝุ่น",
+    ("wind_speed", "up"): "ลมอ่อน อากาศนิ่ง ฝุ่นสะสมมากขึ้น",
+    ("precipitation", "down"): "มีฝนตกในพื้นที่ ช่วยชะล้างฝุ่นออกจากอากาศ",
+    ("precipitation", "up"): "อากาศแห้ง ไม่มีฝนช่วยชะล้างฝุ่น",
+    ("pressure", "up"): "ความกดอากาศสูง อากาศปิด กักฝุ่นไว้ใกล้พื้น",
+    ("pressure", "down"): "ความกดอากาศต่ำ อากาศถ่ายเทดีขึ้น",
+    ("humidity", "up"): "ความชื้นสูงและอากาศนิ่ง ฝุ่นจับตัวหนาแน่นขึ้น",
+    ("humidity", "down"): "อากาศแห้งขึ้น ฝุ่นในอากาศเจือจางลง",
+    ("fire_hotspot_count_100km_24h", "up"): "พบจุดความร้อนจากการเผาในพื้นที่ใกล้เคียงหนาแน่นขึ้น",
+    ("fire_hotspot_count_100km_24h", "down"): "จุดความร้อนจากการเผาในพื้นที่ใกล้เคียงลดลง",
+    ("nb_trend_12h", "up"): "ฝุ่นจากจังหวัดข้างเคียงมีแนวโน้มเพิ่มขึ้น กำลังเคลื่อนเข้าพื้นที่",
+    ("nb_trend_12h", "down"): "ฝุ่นจากจังหวัดข้างเคียงมีแนวโน้มลดลง",
+}
+
+
+def _factor_narrative_th(feature_name, direction):
+    return _FACTOR_NARRATIVE_TH.get((feature_name, direction), _feature_name_th(feature_name))
+
 
 _USER_GROUP_TONE = {
     "ทั่วไป": "ให้คำแนะนำทั่วไปที่เหมาะกับคนทั่วไป",
@@ -1709,7 +1845,121 @@ class DataUnavailableError(RuntimeError):
     """OpenAQ ไม่มี reading ของจังหวัดเป้าหมายเลยใน 72 ชม.ล่าสุด (สถานีขัดข้อง) — /api/forecast ตอบ 503 แทน 500"""
 
 
-def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
+def _nan_to_none(x):
+    return None if x is None or (isinstance(x, float) and np.isnan(x)) else x
+
+
+def build_hourly_timeline(province_meta, latest_time, df_observed, forecast, live_now=None):
+    """รวม PM2.5+สภาพอากาศ 'จริง' ของ 24 ชม.ที่ผ่านมา กับ PM2.5 พยากรณ์ 24 ชม.ข้างหน้า (จาก forecast[] ที่คำนวณ
+    ไปแล้ว บวกอุณหภูมิ/โอกาสฝนรายชั่วโมงจาก Open-Meteo) เป็นเส้นเวลาเดียว 49 จุด สำหรับกราฟ 'พยากรณ์อากาศ'
+    รายชั่วโมงฝั่ง frontend (เลื่อนดูอดีตได้) — ล้มเหลวได้แบบไม่กระทบ /api/forecast เดิม (คืน [] ให้ frontend
+    fallback ไปโหมดไม่มีสภาพอากาศ/อดีต)
+
+    live_now: ผลจาก get_air4thai_live() (หรือ None) — ถ้ามี ใช้ค่า pm25 สดของ Air4Thai ที่จุด "ตอนนี้" เท่านั้น
+    ข้อมูลย้อนหลังเป็น OpenAQ ล้วน (เคยลองใช้ Air4Thai ด้วยใน CHANGELOG 188 แล้วย้อนกลับใน 189: ผู้ใช้เทียบ
+    ข้อมูลจริงแล้วพบว่า OpenAQ เป็นค่าเฉลี่ยเคลื่อนที่ 24 ชม. ราบเรียบ ต่างจาก Air4Thai ที่เป็นค่าดิบผันผวนมาก
+    ทำให้เส้นย้อนหลัง(ผันผวน)กับเส้นพยากรณ์ที่เทรนบน OpenAQ (ราบเรียบ)ดูไม่กลืนกัน จึงเลือกคงย้อนหลังเป็น OpenAQ
+    ไว้ ยอมรับว่าจะมีช่องว่าง 1-2 ชม.ก่อนถึง "ตอนนี้" เพราะ OpenAQ ล่าช้ากว่า Air4Thai)"""
+    try:
+        hourly = fetch_hourly_weather_openmeteo(province_meta["lat"], province_meta["lon"])
+        weather_times = pd.to_datetime(hourly["time"], utc=True)
+        weather_by_hour = {
+            t: (hourly["temperature_2m"][i], hourly["precipitation_probability"][i], hourly["weather_code"][i])
+            for i, t in enumerate(weather_times)
+        }
+    except Exception as e:
+        print(f"[hourly_timeline] ดึงสภาพอากาศรายชั่วโมงไม่สำเร็จ ({type(e).__name__}) — กราฟจะไม่มีอุณหภูมิ/โอกาสฝน")
+        weather_by_hour = {}
+
+    def weather_at(ts):
+        return weather_by_hour.get(ts.floor("h"), (None, None, None))
+
+    pm25_by_hour = {ts.floor("h"): val for ts, val in zip(df_observed["datetime_utc"], df_observed["pm25"])}
+
+    def past_pm25_at(ts):
+        return _nan_to_none(round(pm25_by_hour[ts], 1)) if ts in pm25_by_hour else None
+
+    anchor = latest_time.floor("h")
+    # ป้ายเวลาที่โชว์ผู้ใช้สำหรับจุดที่มาจาก OpenAQ (อดีต/anchor) ต้องบวก OPENAQ_DISPLAY_LABEL_SHIFT_H เสมอ
+    # (ดูคำอธิบายที่ค่าคงที่) — การ "ค้นหาค่า PM2.5" (pm25_by_hour) ยังต้องคีย์ด้วยเวลาดิบ (ts/anchor) เป๊ะ
+    # เหมือนเดิม (ค่า PM2.5 ถูกเก็บโดย OpenAQ ภายใต้เวลาดิบนั้น) แต่ "การค้นหาค่าอากาศ" (weather_at, จาก
+    # Open-Meteo ซึ่งไม่มีปัญหา period ambiguity แบบ OpenAQ) ต้องคีย์ด้วยเวลาจริง (ts+label_shift) ถึงจะตรงกับ
+    # ชั่วโมงเดียวกับที่ค่า PM2.5 ของจุดนั้น "หมายถึง" จริงๆ — ไม่งั้นอากาศจะเป็นของชั่วโมงก่อนหน้า 1 ชม.เทียบ
+    # กับป้าย/ค่า PM2.5 ที่โชว์คู่กัน (พบระหว่างตรวจสอบหลังแก้ป้ายเวลา PM2.5 แล้ว ดู CHANGELOG ถัดจาก 193)
+    label_shift = pd.Timedelta(hours=OPENAQ_DISPLAY_LABEL_SHIFT_H)
+    timeline = []
+    for k in range(24, 0, -1):
+        ts = anchor - pd.Timedelta(hours=k)
+        display_ts = (ts + label_shift).tz_convert("Asia/Bangkok")
+        temp, rain_pct, code = weather_at(ts + label_shift)
+        timeline.append({
+            "time": display_ts.strftime("%H:%M"),
+            "hour_thai": display_ts.hour,
+            "pm25": past_pm25_at(ts),
+            "temp_c": _nan_to_none(temp), "rain_pct": _nan_to_none(rain_pct), "weather_code": _nan_to_none(code),
+            "is_forecast": False, "is_now": False,
+        })
+
+    # ถ้า Air4Thai สดกว่า anchor ของ OpenAQ พอที่จะ "ตรงชั่วโมง" กับจุดพยากรณ์ใดจุดหนึ่งพอดี ให้ย้ายตำแหน่ง
+    # "ตอนนี้" ไปที่จุดนั้นแทน (แทนที่ anchor เดิม) เพื่อให้กราฟสะท้อนเวลาจริงจริง ๆ — สำคัญ: ต้อง "ย้าย flag"
+    # ไม่ใช่แค่ "เขียนทับ label" ของจุด anchor เฉย ๆ เพราะทุกจุดในไทม์ไลน์มีเวลาจริงของตัวเองอยู่แล้ว
+    # (ตามปฏิทิน ไม่ใช่ตามรอบ 24 ชม.) การเขียนทับ label ของจุดเดียวเคยทำให้เลขชั่วโมงหาย/ซ้ำ (CHANGELOG 186
+    # ย้อนกลับใน 187) การย้าย flag แทนทำให้ทุกจุดยังมีป้ายเวลาถูกต้องของตัวเองเสมอ ไม่ซ้ำไม่หาย
+    offset_h = None
+    if live_now is not None:
+        real_now_hour = live_now["datetime_utc"].floor("h")
+        # เทียบกับ "เวลาจริง" ของ anchor (anchor + label_shift) ไม่ใช่ anchor ดิบ — ถ้า OpenAQ ตรงเวลาจริงเป๊ะ
+        # (เคสปกติที่เจอบ่อยสุด) diff_h จะได้ 0 ซึ่งหลุดช่วง 1..24 ด้านล่างพอดี ตกไปใช้ anchor เป็น "ตอนนี้" เอง
+        # (branch offset_h is None) ถูกต้องตามความหมายใหม่ ไม่ต้องเพิ่ม branch พิเศษ
+        diff_h = int(round((real_now_hour - (anchor + label_shift)) / pd.Timedelta(hours=1)))
+        if 1 <= diff_h <= 24:
+            offset_h = diff_h
+
+    temp, rain_pct, code = weather_at(anchor + label_shift)
+    anchor_pm25 = past_pm25_at(anchor)
+    display_anchor = (anchor + label_shift).tz_convert("Asia/Bangkok")
+    now_idx = len(timeline)
+    timeline.append({
+        "time": "ตอนนี้" if offset_h is None else display_anchor.strftime("%H:%M"),
+        "hour_thai": display_anchor.hour,
+        "pm25": (round(live_now["pm25"], 1) if live_now is not None else anchor_pm25) if offset_h is None else anchor_pm25,
+        "temp_c": _nan_to_none(temp), "rain_pct": _nan_to_none(rain_pct), "weather_code": _nan_to_none(code),
+        "is_forecast": False, "is_now": offset_h is None,
+    })
+
+    for h, f in enumerate(forecast, start=1):
+        temp, rain_pct, code = weather_at(anchor + label_shift + pd.Timedelta(hours=h))
+        timeline.append({
+            "time": f["display_time"], "hour_thai": f["display_hour_thai"], "pm25": f["pm25"],
+            "pm25_lo": f["pm25_lo"], "pm25_hi": f["pm25_hi"], "horizon": h,
+            "temp_c": _nan_to_none(temp), "rain_pct": _nan_to_none(rain_pct), "weather_code": _nan_to_none(code),
+            "is_forecast": True, "is_now": False,
+        })
+
+    if offset_h is not None:
+        # ชั่วโมงที่อยู่ระหว่าง anchor (ข้อมูลจริงล่าสุดของ OpenAQ) กับ "ตอนนี้" จริง (ถ้า offset_h > 1) ยังไม่มี
+        # ข้อมูลจริงให้ใช้เลย ต้องอาศัยค่าพยากรณ์ h=1..offset_h-1 ของโมเดลไปพลางๆ — ทำเครื่องหมาย is_gap_fill
+        # ไว้ให้ frontend แสดงเป็นสถานะที่ 3 (ไม่ใช่ทั้งอดีตจริง ไม่ใช่ทั้งอนาคตปกติ) ไม่แตะ is_forecast เดิม
+        # เผื่อมีโค้ดอื่นอ้างอิง field นี้อยู่ (CHANGELOG 190)
+        for gap_i in range(now_idx + 1, now_idx + offset_h):
+            timeline[gap_i]["is_gap_fill"] = True
+
+        target = timeline[now_idx + offset_h]
+        target["is_now"] = True
+        target["is_forecast"] = False
+        target["pm25_forecast_was"] = target["pm25"]  # ค่าที่เคยพยากรณ์ไว้ล่วงหน้าสำหรับชั่วโมงนี้ (เก็บไว้เทียบ)
+        target["pm25"] = round(live_now["pm25"], 1)
+        target["pm25_lo"] = None
+        target["pm25_hi"] = None
+
+    return timeline
+
+
+def build_live_feature_row(province):
+    """ดึงข้อมูลสดล่าสุด (PM2.5/สภาพอากาศ/เพื่อนบ้าน/จุดความร้อน) ของจังหวัดนี้ แล้วสร้าง X_now แถวเดียว —
+    เป็นส่วน "เตรียม feature" ของ get_forecast() เดิม แยกออกมาเป็นฟังก์ชันของตัวเอง เพื่อให้
+    /api/forecast/shap (อธิบายค่าพยากรณ์ชั่วโมงที่ผู้ใช้เลือกด้วย SHAP) เรียกซ้ำได้โดยไม่ต้อง copy โค้ด
+    fetch ข้อมูลสดทั้งชุด — raise DataUnavailableError เหมือนเดิมถ้าไม่มีข้อมูล PM2.5 เลย"""
     province_meta = PROVINCES_BY_SLUG[province]
     series_info = {}
     df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
@@ -1739,10 +1989,28 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     force_naive = USES_NEIGHBOR and neighbor["status"] != "ok"
 
     X_now, latest_time, latest_pm25 = build_feature_row(df_recent, current_weather, province_meta, neighbor, fire_count)
-    latest_time_th = latest_time.tz_convert("Asia/Bangkok")
 
     target_age_hours = (pd.Timestamp.now(tz="UTC") - df_observed["datetime_utc"].max()).total_seconds() / 3600
     target_stale = bool(target_age_hours > TARGET_STALE_HOURS) and not imputed
+
+    return {
+        "province_meta": province_meta, "X_now": X_now, "latest_time": latest_time, "latest_pm25": latest_pm25,
+        "df_observed": df_observed, "imputed_info": imputed_info, "imputed": imputed,
+        "target_age_hours": target_age_hours, "target_stale": target_stale, "input_degraded": input_degraded,
+        "force_naive": force_naive, "current_weather": current_weather, "weather_info": weather_info,
+        "series_info": series_info, "fire_source": fire_source, "fire_count": fire_count, "neighbor": neighbor,
+    }
+
+
+def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
+    ctx = build_live_feature_row(province)
+    province_meta = ctx["province_meta"]
+    X_now, latest_time, latest_pm25 = ctx["X_now"], ctx["latest_time"], ctx["latest_pm25"]
+    df_observed, imputed_info, imputed = ctx["df_observed"], ctx["imputed_info"], ctx["imputed"]
+    target_age_hours, target_stale, input_degraded = ctx["target_age_hours"], ctx["target_stale"], ctx["input_degraded"]
+    force_naive, current_weather, weather_info = ctx["force_naive"], ctx["current_weather"], ctx["weather_info"]
+    series_info, fire_source, fire_count, neighbor = ctx["series_info"], ctx["fire_source"], ctx["fire_count"], ctx["neighbor"]
+    latest_time_th = latest_time.tz_convert("Asia/Bangkok")
 
     r2_lookup = fetch_rolling_r2_lookup(province)
 
@@ -1770,9 +2038,15 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
 
         forecast_time_utc = latest_time + pd.Timedelta(hours=h)
         forecast_time_th = forecast_time_utc.tz_convert("Asia/Bangkok")
+        # display_time/display_hour_thai = เวลาที่ "ควรโชว์ผู้ใช้" ตาม convention ของ OpenAQ เอง (ดู
+        # OPENAQ_DISPLAY_LABEL_SHIFT_H ด้านบน) — time/hour_thai เดิมคงไว้เป๊ะไม่แก้ค่า เพราะยังใช้คำนวณภายใน
+        # (เช่น find_best_time()) ที่ต้องสม่ำเสมอกับ latest_time ดิบ
+        display_time_th = forecast_time_th + pd.Timedelta(hours=OPENAQ_DISPLAY_LABEL_SHIFT_H)
         forecast.append({
             "time": forecast_time_th.strftime("%H:%M"),
             "hour_thai": forecast_time_th.hour,
+            "display_time": display_time_th.strftime("%H:%M"),
+            "display_hour_thai": display_time_th.hour,
             "pm25": pred,
             "pm25_lo": round(max(0.0, p05_adj), 1),
             "pm25_hi": round(max(0.0, p95_upper_adj), 1),
@@ -1803,13 +2077,26 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
 
     high_pollution_risk = is_current_at_risk(latest_pm25, risk_group) or len(risk_horizons) > 0
 
+    # Air4Thai สดกว่า OpenAQ มาก (~28 นาที vs ~2.5 ชม. วัดจริง) — ใช้แสดงผล "ตอนนี้" (การ์ด PM2.5 ตอนนี้ +
+    # จุด "ตอนนี้" บนกราฟพยากรณ์รายชั่วโมง) เท่านั้น latest_pm25 ด้านบน (ฐานพยากรณ์ของโมเดล, บวกเข้ากับ
+    # residual ทุก horizon) ยังคงมาจาก OpenAQ เหมือนเดิมทุกจุด ไม่แตะ เพราะ Air4Thai อาจสเกลไม่ตรงกับที่โมเดล
+    # เทรนมา (ดู docstring get_air4thai_live/fetch_air4thai_live_all)
+    live_now = get_air4thai_live(province)
+    current_pm25 = live_now["pm25"] if live_now is not None else float(latest_pm25)
+    # Air4Thai ไม่มีปัญหา period-label ambiguity แบบ OpenAQ เลยไม่ต้อง shift — fallback ไป latest_time_th
+    # (OpenAQ) เท่านั้นที่ต้องบวก OPENAQ_DISPLAY_LABEL_SHIFT_H ให้ตรง convention เดียวกับจุดอื่นบนหน้า
+    current_datetime_th = (
+        live_now["datetime_utc"].tz_convert("Asia/Bangkok") if live_now is not None
+        else latest_time_th + pd.Timedelta(hours=OPENAQ_DISPLAY_LABEL_SHIFT_H)
+    )
+
     return {
         "province": {"th": province_meta["province_th"], "en": province_meta["province_en"],
                       "is_zero_shot": province_meta["is_zero_shot"]},
         "current": {
-            "pm25": round(float(latest_pm25), 1),
-            "datetime_th": latest_time_th.strftime("%Y-%m-%d %H:%M"),
-            "status": pm25_status(latest_pm25),
+            "pm25": round(current_pm25, 1),
+            "datetime_th": current_datetime_th.strftime("%Y-%m-%d %H:%M"),
+            "status": pm25_status(current_pm25),
         },
         "current_weather": {
             "temp_c": round(current_weather["temperature_2m"], 1),
@@ -1817,6 +2104,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             "wind_speed_kmh": round(current_weather["wind_speed_10m"], 1),
         },
         "forecast": forecast,
+        "hourly_timeline": build_hourly_timeline(province_meta, latest_time, df_observed, forecast, live_now=live_now),
         "best_time": best_time,
         "high_pollution_risk": high_pollution_risk,
         "risk_horizons": risk_horizons,
@@ -2183,8 +2471,48 @@ def api_forecast():
     try:
         province = resolve_province_from_request()
         result = get_forecast(province, resolve_risk_group_from_session())
-        log_target_latency(province, result["data_quality"]) 
+        log_target_latency(province, result["data_quality"])
         return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except DataUnavailableError as e:
+        return jsonify({"error": str(e), "data_unavailable": True}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+SHAP_API_TOP_N = 5  # พอให้มีโอกาสเห็นทั้งปัจจัยดันขึ้น/ลดลงพร้อมกัน (ใช้กับการ์ดสรุปแยก 2 ฝั่งฝั่ง frontend)
+
+
+@app.route("/api/forecast/shap", methods=["GET"])
+def api_forecast_shap():
+    """อธิบายค่าพยากรณ์ของ "ชั่วโมงเดียว" ที่ผู้ใช้เลือกบน Dashboard ด้วย SHAP (ตอบคอมเมนต์กรรมการ:
+    Actual vs Predicted ต้องมีอิทธิพลจาก SHAP กำกับ ไม่ใช่แค่ค่าพยากรณ์เฉยๆ) — ตั้งใจแยกจาก /api/forecast
+    เพราะ SHAP มีต้นทุนคำนวณสูง (ดู REP_HORIZON_FOR_SHAP ด้านบน: daily NLG เองก็อธิบายแค่ 1 horizon
+    ตัวแทน ไม่ใช่ทั้ง 24 ชม.) คำนวณเฉพาะ horizon ที่ผู้ใช้แตะดูจริงเท่านั้น ไม่รวมอยู่ใน /api/forecast"""
+    try:
+        province = resolve_province_from_request()
+        horizon = request.args.get("horizon", type=int)
+        if horizon is None or not (1 <= horizon <= 24):
+            return jsonify({"error": "horizon ต้องเป็นตัวเลข 1-24"}), 400
+
+        ctx = build_live_feature_row(province)
+        r2_lookup = fetch_rolling_r2_lookup(province)
+        model_used = select_model(ctx["X_now"], horizon, province, r2_lookup, ctx["force_naive"])
+
+        if model_used == MODEL_NAIVE:
+            return jsonify({"model_used": model_used, "horizon": horizon, "factors": None})
+
+        shap_pairs = get_shap_explanation(model_used, horizon, ctx["X_now"])
+        factors = []
+        for name, val in shap_pairs[:SHAP_API_TOP_N]:
+            direction = "up" if val > 0 else "down"
+            factors.append({
+                "feature": name, "feature_th": _feature_name_th(name),
+                "narrative_th": _factor_narrative_th(name, direction),
+                "shap_value": round(float(val), 3), "direction": direction,
+            })
+        return jsonify({"model_used": model_used, "horizon": horizon, "factors": factors})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except DataUnavailableError as e:
@@ -2197,6 +2525,16 @@ def api_forecast():
 def api_current_pm25():
     try:
         province = resolve_province_from_request()
+        # Air4Thai สดกว่า OpenAQ มาก (~28 นาที vs ~2.5 ชม. วัดจริง) ใช้ก่อนถ้ามี — ล้มเหลว/ไม่มีจังหวัดนี้
+        # ค่อย fallback ไป OpenAQ เดิมด้านล่าง (พฤติกรรมเดิมเป๊ะ ไม่กระทบ error path/503 เดิม)
+        live = get_air4thai_live(province)
+        if live is not None:
+            return jsonify({
+                "pm25": round(live["pm25"], 1),
+                "datetime_th": live["datetime_utc"].tz_convert("Asia/Bangkok").strftime("%Y-%m-%d %H:%M"),
+                "status": pm25_status(live["pm25"]),
+            })
+
         df = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S)
         if df is None or df.empty:
             return jsonify({"error": f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)",
