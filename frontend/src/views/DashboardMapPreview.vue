@@ -1,0 +1,1654 @@
+<script setup>
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import {
+  Laugh, Smile, Meh, Frown, Angry, ThermometerSun, Droplets, Wind,
+  MapPin, ChevronDown, TriangleAlert, Info, Sparkles,
+  Sun, CloudSun, Cloud, CloudFog, CloudRain, CloudSnow, CloudLightning,
+  TrendingUp, TrendingDown, Footprints, Bike, Flame,
+} from "@lucide/vue";
+import { fetchForecast, fetchCurrentPm25, buildWarningMessage, formatCardTime } from "../notifications";
+import { riskScoreState, setActivity, ACTIVITY_LEVELS, ACTIVITY_EXAMPLES, computeRiskScore, riskScoreAdvice } from "../riskScore";
+import { provinceState, selectProvince } from "../provinces";
+import { statusClass, severityVar, severityHex, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
+import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import isaanMaskGeoJson from "../assets/isaan_provinces_mask.json";
+import isaanBoundaryGeoJson from "../assets/isaan_provinces_boundary.json";
+
+// ===== พรีวิว: การ์ด "ภาพรวมทั้งภาค" (ย้ายมาจาก MapView.vue /map ตามดีไซน์ "ฝังเป็นส่วนหนึ่งของหน้า
+// ไม่ใช่แท็บ") — นี่เป็นไฟล์พรีวิวแยกต่างหาก (route /dashboard-map-preview) ยังไม่ได้แทนที่ ForecastView.vue
+// ตัวจริง ให้ดูของจริงก่อนตัดสินใจย้ายเข้า "/" ถาวร
+const overviewState = ref("loading"); // "loading" | "error" | "content"
+const overviewError = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
+const mapEl = ref(null);
+let mapInstance = null;
+let boundaryLayer = null;
+const boundaryLayerBySlug = new Map();
+const markerByProvince = new Map();
+const focusedProvince = ref(null);
+
+// fill:false ปิด hit-area ของพื้นที่เติมสีทิ้งไปเลยใน Leaflet (เหลือแค่เส้นขอบบางๆ ที่คลิกได้) ทำให้แตะ
+// กลางจังหวัดไม่ติด ต้องเล็งแตะเส้นขอบเป๊ะๆ เท่านั้น — ต้องใช้ fill:true + fillOpacity:0 แทน (มองไม่เห็นสี
+// เหมือนเดิมทุกประการ แต่พื้นที่ทั้งหมดยังรับคลิกได้ ไม่ใช่แค่เส้นขอบ)
+const BOUNDARY_STYLE_DEFAULT = { color: "#3b82f6", weight: 1.5, fill: true, fillOpacity: 0, dashArray: "4,3", opacity: 0.7 };
+const BOUNDARY_STYLE_SELECTED = { color: "#2563eb", weight: 2.5, fill: true, fillColor: "#60a5fa", fillOpacity: 0.45, dashArray: null, opacity: 1 };
+
+const ISAAN_CENTER = [15.8, 103.5];
+const ISAAN_ZOOM = 7;
+// ลดจาก ISAAN_ZOOM (7) ลงมา 1 ขั้น — ของเดิม minZoom ล็อกเท่ากับ zoom เริ่มต้นเป๊ะ พอ fitBoundaryView()
+// อยากซูมออกน้อยกว่า 7 เพื่อให้ขอบเขตพอดีคอนเทนเนอร์ที่แคบ/เตี้ยกว่า (เช่นมือถือ) minZoom จะล็อกไว้ไม่ให้ออก
+// ได้ ทำให้บางจังหวัดขอบๆ (เช่นเหนือ/ใต้สุด) โดนตัดขอบจอไป — ต้องเผื่อซูมออกได้มากกว่าค่าเริ่มต้นเสมอ
+const ISAAN_MIN_ZOOM = 6;
+const ISAAN_MAX_BOUNDS = [
+  [13.5, 100.2],
+  [21.3, 106.3],
+];
+const NO_DATA_COLOR = "#94a3b8";
+const MIN_HORIZON = 0;
+const MAX_HORIZON = 24;
+const overviewHorizon = ref(0);
+
+function markerIcon(value, color) {
+  const label = value != null ? Math.round(value) : "-";
+  return L.divIcon({
+    html: `<div class="map-marker-badge" style="background:${color}">${label}</div>`,
+    className: "map-marker-badge-wrap",
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+  });
+}
+
+function tooltipHtmlFor(p) {
+  const pm = overviewHorizon.value > 0 ? p.forecast_pm25 : p.current_pm25;
+  return `<div class="map-hover-title">${p.province_th}</div><div class="map-hover-row">PM2.5: ${pm != null ? pm + " µg/m³" : "-"}</div>`;
+}
+
+function popupHtmlFor(p) {
+  const isForecast = overviewHorizon.value > 0;
+  const valueText = isForecast
+    ? (p.forecast_pm25 != null ? `${p.forecast_pm25} µg/m³` : "ไม่มีข้อมูล")
+    : (p.current_pm25 != null ? `${p.current_pm25} µg/m³` : "ไม่มีข้อมูล");
+  const statusText = isForecast ? (p.forecast_status || "-") : (p.current_status || "-");
+  // ไม่มีปุ่ม "ดูจังหวัดนี้" แยกแล้ว — การแตะหมุด (marker click) ทำการซูม+ไฮไลต์+สลับจังหวัดให้ทันทีอยู่แล้ว
+  // (ดู focusProvince()) ป๊อปอัปนี้เหลือไว้แค่โชว์ค่า PM2.5/สถานะประกอบเฉยๆ
+  return `
+    <div class="map-popup">
+      <div class="map-popup-title">${p.province_th}${p.is_zero_shot ? " (zero-shot)" : ""}</div>
+      <div class="map-popup-pm25">${valueText}</div>
+      <div class="map-popup-status">${statusText}</div>
+    </div>
+  `;
+}
+
+// แตะหมุดจังหวัดใดก็ตาม -> ซูมเข้าเฉพาะขอบเขตจังหวัดนั้น (ไฮไลต์เติมสี ตามภาพตัวอย่างที่ผู้ใช้ส่งมา) +
+// สลับ provinceState ทันที (การ์ดอื่นในหน้านี้รีเฟรชข้อมูลจังหวัดใหม่ให้เองผ่าน watch ที่มีอยู่แล้ว)
+function focusProvince(provinceEn) {
+  if (!mapInstance || !boundaryLayer) return;
+  boundaryLayer.eachLayer((layer) => layer.setStyle(BOUNDARY_STYLE_DEFAULT));
+  const target = boundaryLayerBySlug.get(provinceEn);
+  if (target) {
+    target.setStyle(BOUNDARY_STYLE_SELECTED);
+    target.bringToFront();
+    mapInstance.fitBounds(target.getBounds(), { padding: [40, 40] });
+  }
+  focusedProvince.value = provinceEn;
+  selectProvince(provinceEn);
+}
+
+// ปุ่ม "ดูภาพรวมทั้งภาค" (โชว์ตอนกำลังโฟกัสจังหวัดเดียวอยู่) — เลิกไฮไลต์ + ซูมออกกลับไปเห็นครบ 20 จังหวัด
+function clearProvinceFocus() {
+  if (!mapInstance || !boundaryLayer) return;
+  boundaryLayer.eachLayer((layer) => layer.setStyle(BOUNDARY_STYLE_DEFAULT));
+  focusedProvince.value = null;
+  fitBoundaryView();
+}
+
+function createOrUpdateMarkers(provinces) {
+  if (!mapInstance) return;
+  const horizon = overviewHorizon.value;
+  provinces.forEach((p) => {
+    const valueForColor = horizon > 0 ? p.forecast_pm25 : p.current_pm25;
+    const color = valueForColor != null ? severityHex(valueForColor) : NO_DATA_COLOR;
+    let marker = markerByProvince.get(p.province_en);
+    if (!marker) {
+      marker = L.marker([p.lat, p.lon], { icon: markerIcon(valueForColor, color) }).addTo(mapInstance);
+      marker.bindPopup(popupHtmlFor(p));
+      marker.bindTooltip(tooltipHtmlFor(p), { direction: "top", offset: [0, -16], className: "map-hover-tooltip" });
+      marker.on("click", () => focusProvince(p.province_en));
+      markerByProvince.set(p.province_en, marker);
+      return;
+    }
+    marker.setIcon(markerIcon(valueForColor, color));
+    marker.setPopupContent(popupHtmlFor(p));
+    marker.setTooltipContent(tooltipHtmlFor(p));
+  });
+}
+
+async function loadOverview() {
+  if (markerByProvince.size === 0) overviewState.value = "loading";
+  try {
+    const res = await fetch(`/api/provinces/overview?horizon=${overviewHorizon.value}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `Server error (${res.status})`);
+    }
+    const data = await res.json();
+    overviewState.value = "content";
+    createOrUpdateMarkers(data);
+  } catch (err) {
+    overviewError.value = "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
+    overviewState.value = "error";
+    console.error("โหลดภาพรวมแผนที่ล้มเหลว:", err);
+  }
+}
+
+// แก้บั๊ก "แผนที่เลื่อนไปผิดตำแหน่ง/ขอบเขตดูเพี้ยน" ที่เจอตอนฝังเข้าหน้านี้ (ไม่เกิดบน /map เดิมที่เป็นหน้า
+// โล่งๆ ไม่มีอะไรอื่นให้ reflow) — สาเหตุ: Leaflet คำนวณขนาด/จุดอ้างอิงพิกเซลของแผนที่ตอน mount ครั้งแรก
+// จาก DOM ที่อาจยังไม่นิ่ง (ฟอนต์เว็บ "Prompt"/"Noto Sans Thai" โหลดช้ากว่าค่าเริ่มต้นของเบราว์เซอร์ ทำให้
+// ความกว้างการ์ดขยับเล็กน้อยหลัง mount) พอจุดอ้างอิงเพี้ยนไปนิดเดียว `maxBoundsViscosity: 1.0` (รั้งขอบเขต
+// แน่นสุด) จะ "รั้งผิดตำแหน่ง" ไปเลย ไม่ใช่แค่เบลอๆ — ต้องเรียก invalidateSize() ให้คำนวณใหม่หลัง layout
+// นิ่งแล้วจริงๆ ไม่ใช่แค่ตอน mount ครั้งเดียว
+// ซูม/กึ่งกลางคงที่ (ISAAN_CENTER/ISAAN_ZOOM) เดาค่าตายตัวไว้ ไม่รับประกันว่าจะพอดีกับทุกอัตราส่วนคอนเทนเนอร์
+// จริง (การ์ดในหน้านี้แคบ/เตี้ยกว่าหน้า /map เดิมที่เป็นหน้าเต็มจอ) — ใช้ fitBounds() ตามขอบเขตจริงของ
+// isaanBoundaryGeoJson แทน ให้ครบทั้ง 20 จังหวัดเสมอไม่ว่าคอนเทนเนอร์จะเป็นสัดส่วนไหน
+function fitBoundaryView() {
+  if (!mapInstance || !boundaryLayer) return;
+  mapInstance.fitBounds(boundaryLayer.getBounds(), { padding: [14, 14] });
+}
+
+function resyncMapSize() {
+  mapInstance?.invalidateSize();
+  // ถ้ากำลังโฟกัสจังหวัดเดียวอยู่ (focusProvince ถูกเรียกไปแล้ว) ต้อง fit ตามขอบเขตจังหวัดนั้นต่อ ไม่ใช่
+  // เผลอรีเซ็ตกลับไปมุมมองทั้งภาคทุกครั้งที่ resize/ฟอนต์โหลดเสร็จ (จะทำให้ผู้ใช้ซูมหลุดโดยไม่ได้ตั้งใจ)
+  if (focusedProvince.value) {
+    const target = boundaryLayerBySlug.get(focusedProvince.value);
+    if (target) mapInstance.fitBounds(target.getBounds(), { padding: [40, 40] });
+  } else {
+    fitBoundaryView();
+  }
+}
+
+let resizeObserver = null;
+
+onMounted(() => {
+  mapInstance = L.map(mapEl.value, {
+    minZoom: ISAAN_MIN_ZOOM,
+    maxBounds: ISAAN_MAX_BOUNDS,
+    maxBoundsViscosity: 1.0,
+    zoomControl: false,
+  }).setView(ISAAN_CENTER, ISAAN_ZOOM);
+  L.control.zoom({ position: "topright" }).addTo(mapInstance);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 18,
+  }).addTo(mapInstance);
+  L.geoJSON(isaanMaskGeoJson, { interactive: false, style: { fillColor: "#0f172a", fillOpacity: 0.45, stroke: false } }).addTo(mapInstance);
+  boundaryLayer = L.geoJSON(isaanBoundaryGeoJson, {
+    style: BOUNDARY_STYLE_DEFAULT,
+    // interactive:true (ต่างจากเดิมที่ปิดไว้) — ให้แตะพื้นที่จังหวัดบนแผนที่ได้โดยตรง ไม่ต้องเล็งแตะหมุดเป๊ะๆ
+    onEachFeature: (feature, layer) => {
+      const slug = (feature.properties?.name_en || "").replace(/\s/g, "").toLowerCase();
+      if (!slug) return;
+      boundaryLayerBySlug.set(slug, layer);
+      layer.on("click", () => focusProvince(slug));
+    },
+  }).addTo(mapInstance);
+  loadOverview();
+
+  // เรียกซ้ำหลายจังหวะ: ทันที (เผื่อ layout นิ่งแล้ว), เฟรมถัดไป (หลัง browser paint), และหลังฟอนต์เว็บ
+  // โหลดเสร็จจริง (document.fonts.ready) — ครอบคลุมทุกจังหวะที่ขนาดการ์ดอาจขยับหลัง mount
+  resyncMapSize();
+  requestAnimationFrame(resyncMapSize);
+  if (document.fonts?.ready) document.fonts.ready.then(resyncMapSize);
+
+  // คอนเทนเนอร์แผนที่เปลี่ยนขนาดได้อีกหลัง mount (เช่น หน้าจอหมุน/ปรับขนาดเบราว์เซอร์) — ไม่ใช่แค่ window
+  // resize อย่างเดียว เพราะการ์ดนี้อยู่ในคอลัมน์ที่ความกว้างเปลี่ยนตาม breakpoint ของ .layout ไม่ใช่แค่ viewport
+  if (window.ResizeObserver) {
+    resizeObserver = new ResizeObserver(resyncMapSize);
+    resizeObserver.observe(mapEl.value);
+  } else {
+    window.addEventListener("resize", resyncMapSize);
+  }
+});
+
+onUnmounted(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  } else {
+    window.removeEventListener("resize", resyncMapSize);
+  }
+  if (mapInstance) {
+    mapInstance.remove();
+    mapInstance = null;
+  }
+  boundaryLayer = null;
+  boundaryLayerBySlug.clear();
+  markerByProvince.clear();
+});
+
+// SHOW_EXTRA_CARDS = false ซ่อนการ์ดทั้งหมด, SAMPLE_EXTRA_CARDS_DATA = true ใช้ข้อมูลตัวอย่างแทน API
+const SHOW_EXTRA_CARDS = true;
+const SAMPLE_EXTRA_CARDS_DATA = false;
+// SHOW_UPDATED_LABEL = true โชว์ป้าย "อัปเดต ... น." บนการ์ด PM2.5 ตอนนี้ (เคยปิดไว้ก่อนนำเสนอ 2026-10-20
+// เปิดกลับคืนตามคำขอผู้ใช้ 2026-11-05 — ให้เห็นชัดว่า "ตอนนี้" อ้างอิงเวลาไหนจริงๆ เพราะ Air4Thai เองก็มี
+// ความหน่วงรายงานเป็นครั้งคราว ดู CHANGELOG (191))
+const SHOW_UPDATED_LABEL = true;
+// SHOW_CHART_LEGEND = false ซ่อน legend (จุด PM2.5/เส้นเกณฑ์ 37.5) + คำอธิบายใต้กราฟพยากรณ์อากาศรายชั่วโมง
+const SHOW_CHART_LEGEND = false;
+
+const SAMPLE_BEST_TIMES = [
+  { time: "05:00", display_time: "05:00", pm25: 11 },
+  { time: "04:00", display_time: "04:00", pm25: 19 },
+  { time: "18:00", display_time: "18:00", pm25: 27 },
+];
+// ค่าตัวอย่าง คำนวณจากสูตรจริงใน app.py (compute_risk_score())
+const SAMPLE_RISK_TABLE = {
+  เบา: {
+    score: 45, level: "ปานกลาง", advice: "ทำกิจกรรมได้แต่ควรสังเกตอาการตนเอง",
+    times: [
+      { time: "05:00", display_time: "05:00", riskScore: 13, riskLevel: "ดีมาก" },
+      { time: "04:00", display_time: "04:00", riskScore: 17, riskLevel: "ดีมาก" },
+      { time: "06:00", display_time: "06:00", riskScore: 22, riskLevel: "ดี" },
+    ],
+  },
+  ปานกลาง: {
+    score: 53, level: "ปานกลาง", advice: "ทำกิจกรรมได้แต่ควรสังเกตอาการตนเอง",
+    times: [
+      { time: "05:00", display_time: "05:00", riskScore: 20, riskLevel: "ดีมาก" },
+      { time: "04:00", display_time: "04:00", riskScore: 26, riskLevel: "ดี" },
+      { time: "06:00", display_time: "06:00", riskScore: 32, riskLevel: "ดี" },
+    ],
+  },
+  หนัก: {
+    score: 60, level: "เริ่มมีผลกระทบต่อสุขภาพ", advice: "ควรลดความหนักของกิจกรรมลงกว่าปกติ",
+    times: [
+      { time: "05:00", display_time: "05:00", riskScore: 30, riskLevel: "ดี" },
+      { time: "04:00", display_time: "04:00", riskScore: 36, riskLevel: "ดี" },
+      { time: "06:00", display_time: "06:00", riskScore: 42, riskLevel: "ปานกลาง" },
+    ],
+  },
+};
+const SAMPLE_DAILY = {
+  avg: 38.4,
+  text: "วันนี้ฝุ่น PM2.5 ในภาพรวมอยู่ในระดับปานกลาง ช่วงเช้ามืดอากาศดีที่สุด เหมาะสำหรับออกกำลังกายกลางแจ้ง " +
+    "ส่วนช่วงบ่ายถึงเย็นค่าฝุ่นมีแนวโน้มสูงขึ้นเล็กน้อย กลุ่มเสี่ยงควรเลี่ยงกิจกรรมหนักในช่วงดังกล่าว",
+};
+
+const state = ref("loading"); // "loading" | "error" | "content"
+const errorMessage = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
+
+const current = ref({ pm25: "-", datetime_th: "-", status: "" });
+const currentWeather = ref({ temp_c: null, humidity_pct: null, wind_speed_kmh: null });
+const dailySummary = ref({ daily_avg_pm25: null, explanation: "" });
+const forecast = ref([]);
+// เส้นเวลา 49 จุด (อดีต 24 ชม. + ตอนนี้ + พยากรณ์ 24 ชม.) จาก data.hourly_timeline — ใช้กับกราฟ "พยากรณ์อากาศ"
+const hourlyTimeline = ref([]);
+const chartEl = ref(null);
+const weatherScrollEl = ref(null);
+const highPollutionRisk = ref(false);
+const riskGroup = ref("ทั่วไป");
+const fallbackHorizons = ref([]);
+// สถานะข้อมูลที่ใช้ทำพยากรณ์ (data_quality จาก /api/forecast): target_stale = reading ล่าสุดของจังหวัดนี้เก่ากว่า 6 ชม.
+const dataQuality = ref({ target_stale: false, target_age_hours: 0 });
+const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
+const riskScoreConfig = ref(null);
+
+const pickerOpen = ref(false);
+// index ของแท่งที่แตะในกราฟ (null = ยังไม่เลือก)
+const selectedIdx = ref(null);
+
+// statusClass/severityVar/PM25_LEVELS อยู่ใน pm25Levels.js (โมดูลกลาง ใช้ร่วมกับ MapView.vue)
+
+// ชื่อคลาสตั้ง --hero-bg/--hero-ink ของการ์ดหลัก (tint ต่อระดับ) — ดูบล็อก .aqi-* ใน <style>
+function bodyClassFor(status) {
+  if (status === "ดีมาก") return "aqi-excellent";
+  if (status === "ดี") return "aqi-good";
+  if (status === "ปานกลาง") return "aqi-moderate";
+  if (status === "เริ่มมีผลกระทบต่อสุขภาพ") return "aqi-unhealthy";
+  return "aqi-bad";
+}
+
+// ไอคอนหน้าคน (ชุดเดียวกับ Lucide ทั้งการ์ด) ไล่ระดับความรุนแรงจากยิ้มกว้างไปหน้าบึ้ง
+function moodIconFor(status) {
+  if (status === "ดีมาก") return Laugh;
+  if (status === "ดี") return Smile;
+  if (status === "ปานกลาง") return Meh;
+  if (status === "เริ่มมีผลกระทบต่อสุขภาพ") return Frown;
+  return Angry;
+}
+
+function barColor(pm25) {
+  return `var(${severityVar(pm25)})`;
+}
+
+function activityIconFor(level) {
+  if (level === "เบา") return Footprints;
+  if (level === "หนัก") return Flame;
+  return Bike;
+}
+
+// ไอคอนสภาพอากาศจากรหัส WMO ที่ Open-Meteo ส่งมา (hourly_timeline[].weather_code) — ใช้กับการ์ดรายชั่วโมง
+function weatherIconFor(code) {
+  if (code == null) return Cloud;
+  if (code === 0) return Sun;
+  if (code === 1 || code === 2) return CloudSun;
+  if (code === 3) return Cloud;
+  if (code === 45 || code === 48) return CloudFog;
+  if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return CloudRain;
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return CloudSnow;
+  if ([95, 96, 99].includes(code)) return CloudLightning;
+  return Cloud;
+}
+
+// ความกว้างต่อ 1 ชั่วโมงในกราฟ/แถวการ์ด (px) — ใช้ค่าเดียวกันทั้งคู่ให้คอลัมน์ตรงกัน
+const WEATHER_POINT_GAP = 64;
+const WEATHER_PADDING = { top: 14, right: 16, bottom: 26, left: 16 };
+
+function drawWeatherChart(pts) {
+  const svg = chartEl.value;
+  if (!svg) return;
+  svg.innerHTML = "";
+  const padding = WEATHER_PADDING;
+  const width = padding.left + padding.right + pts.length * WEATHER_POINT_GAP;
+  const height = 130;
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  if (!pts.length) return;
+
+  const plotH = height - padding.top - padding.bottom;
+  const xFor = (i) => padding.left + i * WEATHER_POINT_GAP + WEATHER_POINT_GAP / 2;
+
+  // ซูมแกน Y ให้พอดีกับช่วงค่าจริงที่เกิดขึ้น (ไม่ตรึง 0-37.5 เหมือนเดิม) — วันที่ฝุ่นน้อยและแกว่งอยู่แค่
+  // 15-20 µg/m³ เดิมเส้นจะแบนราบเพราะถูกบีบให้อยู่ในสเกล 0-37.5 เต็มช่วง ทั้งที่ความแกว่งจริงมีความหมาย
+  function computeScale(key) {
+    const vals = pts.map((p) => p[key]).filter((v) => v != null);
+    if (!vals.length) return { lo: 0, hi: 1, fn: () => padding.top + plotH / 2 };
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const span = maxV - minV;
+    const pad = span > 0 ? span * 0.2 : Math.max(1, maxV * 0.1); // กันเส้นชิดขอบบน/ล่างเกินไป, กันหาร 0 ตอนค่าแบนสนิท
+    const lo = Math.max(0, minV - pad);
+    const hi = maxV + pad;
+    const range = hi - lo || 1;
+    return { lo, hi, minV, maxV, fn: (v) => padding.top + plotH - ((v - lo) / range) * plotH };
+  }
+  const pmScale = computeScale("pm25");
+  const yPm = pmScale.fn;
+
+  const ns = "http://www.w3.org/2000/svg";
+
+  // แรเงาช่วงอดีต (ก่อน "ตอนนี้") ให้แยกจากช่วงพยากรณ์ได้ด้วยตาทันที ไม่ต้องกดดูทีละจุด
+  const nowIdx = pts.findIndex((p) => p.is_now);
+  if (nowIdx >= 0) {
+    const nowX = xFor(nowIdx);
+    const pastBand = document.createElementNS(ns, "rect");
+    pastBand.setAttribute("x", padding.left);
+    pastBand.setAttribute("y", padding.top);
+    pastBand.setAttribute("width", Math.max(0, nowX - padding.left));
+    pastBand.setAttribute("height", plotH);
+    pastBand.setAttribute("class", "past-band");
+    svg.appendChild(pastBand);
+
+    // ป้าย "ข้อมูลย้อนหลัง" 2 จุด — จุดแรกชิดขอบซ้ายสุดของกราฟ (เห็นตอนเลื่อนไปสุดอดีต) จุดที่สองชิดเส้น
+    // "ตอนนี้" (เห็นตอนเลื่อนมาดูรอยต่ออดีต/ปัจจุบัน ซึ่งเป็นตำแหน่งที่ค่าเริ่มต้นเลื่อนมาแสดงอยู่แล้ว) —
+    // เดิมมีแค่จุดเดียวที่ขอบซ้ายสุด ถ้าช่วงอดีตยาว (เลื่อนมาไกลจากขอบซ้าย) จะมองไม่เห็นป้ายเลย
+    const pastLabel = document.createElementNS(ns, "text");
+    pastLabel.setAttribute("x", padding.left + 6);
+    pastLabel.setAttribute("y", padding.top + 12);
+    pastLabel.setAttribute("class", "past-label");
+    pastLabel.textContent = "ข้อมูลย้อนหลัง";
+    svg.appendChild(pastLabel);
+
+    if (nowX - padding.left > WEATHER_POINT_GAP * 2) { // เว้นระยะพอสมควรจากป้ายแรกถึงไม่ซ้อนทับกัน
+      const pastLabelNearNow = document.createElementNS(ns, "text");
+      pastLabelNearNow.setAttribute("x", nowX - 6);
+      pastLabelNearNow.setAttribute("y", padding.top + 12);
+      pastLabelNearNow.setAttribute("text-anchor", "end");
+      pastLabelNearNow.setAttribute("class", "past-label");
+      pastLabelNearNow.textContent = "ข้อมูลย้อนหลัง";
+      svg.appendChild(pastLabelNearNow);
+    }
+
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", nowX); line.setAttribute("x2", nowX);
+    line.setAttribute("y1", padding.top); line.setAttribute("y2", height - padding.bottom);
+    line.setAttribute("class", "now-line");
+    svg.appendChild(line);
+  }
+
+  // เส้นเกณฑ์ 37.5 µg/m³ — โชว์เฉพาะตอนอยู่ในช่วงที่มองเห็นจริง (วันฝุ่นน้อยไม่ต้องลากเส้นที่ไกลลิบไม่เกี่ยวข้อง)
+  if (37.5 >= pmScale.lo && 37.5 <= pmScale.hi) {
+    const thrLine = document.createElementNS(ns, "line");
+    thrLine.setAttribute("x1", padding.left); thrLine.setAttribute("x2", width - padding.right);
+    thrLine.setAttribute("y1", yPm(37.5)); thrLine.setAttribute("y2", yPm(37.5));
+    thrLine.setAttribute("class", "thr-grid-line");
+    svg.appendChild(thrLine);
+  }
+
+  const labelStep = 2;
+  pts.forEach((p, i) => {
+    if (i % labelStep !== 0 && !p.is_now) return;
+    const label = document.createElementNS(ns, "text");
+    label.setAttribute("x", xFor(i));
+    label.setAttribute("y", height - padding.bottom + 16);
+    label.setAttribute("text-anchor", "middle");
+    label.setAttribute("class", "axis-label");
+    label.textContent = p.is_now ? "ตอนนี้" : p.time;
+    svg.appendChild(label);
+  });
+
+  // เส้นโค้งมน (Catmull-Rom แปลงเป็น cubic Bezier) แทนเส้นตรงต่อจุด — ช่วงที่ค่าแกว่งน้อย (เช่น 15-20 µg/m³)
+  // เส้นตรงต่อกันจะดูสะดุด/ตายด้าน เส้นโค้งทำให้ดูเนียนและมีมิติขึ้นแม้ความต่างจริงจะน้อย
+  function smoothPathD(runPoints) {
+    if (runPoints.length < 2) return "";
+    let d = `M${runPoints[0].x},${runPoints[0].y} `;
+    for (let i = 0; i < runPoints.length - 1; i++) {
+      const p0 = runPoints[i - 1] || runPoints[i];
+      const p1 = runPoints[i];
+      const p2 = runPoints[i + 1];
+      const p3 = runPoints[i + 2] || p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+      d += `C${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y} `;
+    }
+    return d.trim();
+  }
+
+  // แบ่งจุดเป็นช่วงต่อเนื่อง (คั่นตรงที่ไม่มีค่า) เพราะอดีต/ปัจจุบัน/อนาคตบางจุดอาจไม่มีข้อมูล (null)
+  function toRuns(key, yFn) {
+    const runs = []; let current = [];
+    pts.forEach((p, i) => {
+      const v = p[key];
+      if (v == null) { if (current.length) runs.push(current); current = []; return; }
+      current.push({ x: xFor(i), y: yFn(v) });
+    });
+    if (current.length) runs.push(current);
+    return runs;
+  }
+
+  function drawPath(key, yFn, color, gradientId) {
+    const runs = toRuns(key, yFn);
+    const baseY = padding.top + plotH; // เส้นฐานล่างสุดของพื้นที่กราฟ สำหรับปิดรูปแรเงาใต้เส้น
+
+    // พื้นที่ไล่สีใต้เส้น (เริ่มทึบที่เส้น จางหายไปที่ฐาน) — เพิ่มน้ำหนักให้กราฟดูมีเนื้อหา ไม่โล่งจนดูว่างเปล่า
+    const gradient = document.createElementNS(ns, "linearGradient");
+    gradient.setAttribute("id", gradientId);
+    gradient.setAttribute("x1", "0"); gradient.setAttribute("y1", "0");
+    gradient.setAttribute("x2", "0"); gradient.setAttribute("y2", "1");
+    const stop1 = document.createElementNS(ns, "stop");
+    stop1.setAttribute("offset", "0%"); stop1.setAttribute("stop-color", color); stop1.setAttribute("stop-opacity", "0.28");
+    const stop2 = document.createElementNS(ns, "stop");
+    stop2.setAttribute("offset", "100%"); stop2.setAttribute("stop-color", color); stop2.setAttribute("stop-opacity", "0");
+    gradient.appendChild(stop1); gradient.appendChild(stop2);
+    let defs = svg.querySelector("defs");
+    if (!defs) { defs = document.createElementNS(ns, "defs"); svg.insertBefore(defs, svg.firstChild); }
+    defs.appendChild(gradient);
+
+    runs.forEach((run) => {
+      if (run.length < 2) return;
+      const lineD = smoothPathD(run);
+      const areaD = `${lineD} L${run[run.length - 1].x},${baseY} L${run[0].x},${baseY} Z`;
+      const area = document.createElementNS(ns, "path");
+      area.setAttribute("d", areaD);
+      area.setAttribute("fill", `url(#${gradientId})`);
+      area.setAttribute("stroke", "none");
+      svg.appendChild(area);
+
+      const line = document.createElementNS(ns, "path");
+      line.setAttribute("d", lineD);
+      line.setAttribute("fill", "none");
+      line.setAttribute("stroke", color);
+      line.setAttribute("stroke-width", "2");
+      line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("stroke-linejoin", "round");
+      svg.appendChild(line);
+    });
+
+    // จุดกลมบนเส้นทุกชั่วโมงที่มีค่า (ไม่ใช่แค่เส้นเปล่า) — เน้นจุด "ตอนนี้"/ที่เลือกให้ใหญ่กว่าจุดอื่น
+    pts.forEach((p, i) => {
+      const v = p[key];
+      if (v == null) return;
+      const circle = document.createElementNS(ns, "circle");
+      circle.setAttribute("cx", xFor(i));
+      circle.setAttribute("cy", yFn(v));
+      circle.setAttribute("r", p.is_now || i === selectedIdx.value ? "4" : "2.5");
+      circle.setAttribute("fill", color);
+      svg.appendChild(circle);
+    });
+  }
+  drawPath("pm25", yPm, "var(--w-pm25)", "pm25-area-gradient");
+}
+
+// เลื่อนแถวการ์ด/กราฟให้ "ตอนนี้" อยู่ชิดขอบซ้าย (พฤติกรรมเดิมก่อนเพิ่มอดีต — อดีตเลื่อนย้อนดูเพิ่มเอง)
+function scrollToNow() {
+  const el = weatherScrollEl.value;
+  const nowIdx = hourlyTimeline.value.findIndex((p) => p.is_now);
+  if (!el || nowIdx < 0) return;
+  el.scrollLeft = Math.max(0, nowIdx * WEATHER_POINT_GAP - 8);
+}
+
+const pageClass = computed(() => bodyClassFor(current.value.status));
+const dailyAvgDisplay = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) return SAMPLE_DAILY.avg;
+  return dailySummary.value.daily_avg_pm25 !== null && dailySummary.value.daily_avg_pm25 !== undefined
+    ? dailySummary.value.daily_avg_pm25
+    : "-";
+});
+const dailyTextDisplay = computed(() =>
+  SAMPLE_EXTRA_CARDS_DATA ? SAMPLE_DAILY.text : dailySummary.value.explanation || "กำลังเตรียมข้อมูลสำหรับวันนี้"
+);
+// horizon (1..24) -> เวลานาฬิกาของจุดนั้นใน forecast[] — ใช้ display_time (ตรง convention เดียวกับเว็บ
+// OpenAQ เอง, ดู OPENAQ_DISPLAY_LABEL_SHIFT_H ใน app.py) ไม่ใช่ time ดิบที่ backend ใช้คำนวณภายใน
+const fallbackTimesText = computed(() =>
+  fallbackHorizons.value.map((h) => forecast.value[h - 1]?.display_time).filter(Boolean).join(", ")
+);
+
+// ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) อยู่ใน notifications.js (ใช้ร่วมกับ AppHeader.vue)
+const warningMessage = computed(() => buildWarningMessage(riskGroup.value));
+
+const markerPct = computed(() => scaleMarkerPct(current.value.pm25));
+const currentAdvice = computed(() => adviceForStatus(current.value.status));
+const updatedLabel = computed(() =>
+  current.value.datetime_th && current.value.datetime_th !== "-" ? formatCardTime(current.value.datetime_th) : ""
+);
+const activeLevelIndex = computed(() => PM25_LEVELS.findIndex((l) => l.status === current.value.status));
+
+// ช่วงเวลาที่อากาศดีที่สุด (ค่าเดียว ไม่ใช่ top-3) กรองเฉพาะ 06:00-20:00 ก่อน sort, fallback ไป forecast
+// ทั้งหมดถ้าว่าง
+const topBestTime = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) return SAMPLE_BEST_TIMES[0] ?? null;
+  const activeHours = forecast.value.filter((f) => f.display_hour_thai >= 6 && f.display_hour_thai <= 20);
+  const pool = activeHours.length > 0 ? activeHours : forecast.value;
+  return [...pool].sort((a, b) => a.pm25 - b.pm25)[0] ?? null;
+});
+
+// Personalized Risk Score (proposal) — ผสาน pm25 ปัจจุบัน + risk_group + activity (เลือกสดหน้าเว็บ)
+// เป็นคะแนนเดียว 0-100 สูตร/offset ทั้งหมดมาจาก riskScoreConfig ที่ backend ส่งมา
+const currentRiskScore = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) {
+    const row = SAMPLE_RISK_TABLE[riskScoreState.activity] ?? SAMPLE_RISK_TABLE["ปานกลาง"];
+    return { score: row.score, level: row.level, effective_pm25: null };
+  }
+  return computeRiskScore(current.value.pm25, riskScoreConfig.value, riskScoreState.activity);
+});
+const currentRiskAdvice = computed(() =>
+  SAMPLE_EXTRA_CARDS_DATA
+    ? (SAMPLE_RISK_TABLE[riskScoreState.activity] ?? SAMPLE_RISK_TABLE["ปานกลาง"]).advice
+    : riskScoreAdvice(currentRiskScore.value.level)
+);
+// ตำแหน่ง segment ที่ active บนเกจ์ 5 ระดับ (คะแนน breakpoint 0/20/40/60/80/100 ตรงกับขอบ PM25_LEVELS
+// พอดี เพราะ RISK_SCORE_BREAKPOINTS ใน app.py ตั้งใจแมปตามขอบเดียวกัน — ดู CHANGELOG ส่วนเกจ์ความเสี่ยง)
+const riskLevelIndex = computed(() => PM25_LEVELS.findIndex((l) => l.status === currentRiskScore.value.level));
+
+// เหมือน topBestTimes แต่ personalize ตามกิจกรรมที่เลือก (sort ด้วยคะแนนความเสี่ยงแทน pm25 ดิบ)
+const bestActivityTimes = computed(() => {
+  if (SAMPLE_EXTRA_CARDS_DATA) return (SAMPLE_RISK_TABLE[riskScoreState.activity] ?? SAMPLE_RISK_TABLE["ปานกลาง"]).times;
+  if (!riskScoreConfig.value) return [];
+  const activeHours = forecast.value.filter((f) => f.display_hour_thai >= 6 && f.display_hour_thai <= 20);
+  const pool = activeHours.length > 0 ? activeHours : forecast.value;
+  return [...pool]
+    .map((f) => {
+      const r = computeRiskScore(f.pm25, riskScoreConfig.value, riskScoreState.activity);
+      return { ...f, riskScore: r.score, riskLevel: r.level };
+    })
+    .sort((a, b) => a.riskScore - b.riskScore)
+    .slice(0, 3);
+});
+
+const selectedPoint = computed(() => (selectedIdx.value == null ? null : hourlyTimeline.value[selectedIdx.value] || null));
+
+// อธิบาย "ทำไมโมเดลพยากรณ์ชั่วโมงนี้ถึงเป็นค่านี้" ด้วย SHAP (ตอบคอมเมนต์กรรมการ: ต้องมีอิทธิพลจาก SHAP
+// กำกับคู่กับ Actual vs Predicted) — คำนวณเฉพาะชั่วโมงพยากรณ์ที่ผู้ใช้แตะเลือกจริง ไม่ใช่ทั้ง 24 ชม. (ต้นทุน
+// คำนวณ SHAP สูง เหตุผลเดียวกับที่ NLG รายวันอธิบายแค่ horizon ตัวแทน ดู REP_HORIZON_FOR_SHAP ใน app.py)
+const shapLoading = ref(false);
+const shapResult = ref(null); // { model_used, horizon, factors } หรือ null = ยังไม่ได้โหลด/ไม่เกี่ยวข้อง
+const shapExpanded = ref(false); // false = โชว์แค่ SHAP_LIST_COLLAPSED_N ตัวแรก, true = โชว์ทั้งหมดที่ backend ส่งมา
+const shapPanelOpen = ref(false); // false = โชว์แค่ปุ่ม "ดูปัจจัยที่มีผล", true = กดแล้วค่อยแสดงรายการจริง
+const SHAP_LIST_COLLAPSED_N = 3;
+
+async function loadShapFactors(province, horizon) {
+  shapLoading.value = true;
+  shapResult.value = null;
+  try {
+    const res = await fetch(`/api/forecast/shap?province=${province}&horizon=${horizon}`);
+    shapResult.value = res.ok ? await res.json() : null;
+  } catch {
+    shapResult.value = null;
+  } finally {
+    shapLoading.value = false;
+  }
+}
+
+const shapFactorsShown = computed(() => {
+  const factors = shapResult.value?.factors;
+  if (!factors) return [];
+  return shapExpanded.value ? factors : factors.slice(0, SHAP_LIST_COLLAPSED_N);
+});
+
+watch(selectedPoint, (point) => {
+  shapExpanded.value = false;
+  shapPanelOpen.value = false;
+  if (point && point.is_forecast && !point.is_gap_fill && point.horizon != null) {
+    loadShapFactors(provinceState.selected, point.horizon);
+  } else {
+    shapLoading.value = false;
+    shapResult.value = null;
+  }
+});
+
+// แนวโน้มของชั่วโมงที่เลือก เทียบกับ "ตอนนี้" — ใช้ pm25 ที่ backend คำนวณมาแล้วตรงๆ (คือ residual ของโมเดล
+// pm25_t+h - pm25_now นั่นเอง ไม่ต้องคำนวณซ้ำฝั่ง frontend) ไม่โชว์ถ้าใกล้ 0 เกินไปจนดูเป็น noise — ไม่โชว์
+// สำหรับจุด "ช่องว่าง" (is_gap_fill) ด้วย เพราะผู้ใช้มองว่าควรปฏิบัติเหมือนข้อมูลย้อนหลัง (ไม่ใช่พยากรณ์ที่
+// ควรเชื่อถือรายละเอียดเท่าพยากรณ์จริง)
+const trendInfo = computed(() => {
+  if (!selectedPoint.value?.is_forecast || selectedPoint.value?.is_gap_fill || current.value.pm25 === "-") return null;
+  const diff = selectedPoint.value.pm25 - current.value.pm25;
+  if (Math.abs(diff) < 0.5) return { label: "ใกล้เคียงกับค่าตอนนี้", diff, kind: "flat" };
+  return { label: diff > 0 ? "ฝุ่นมีแนวโน้มสูงขึ้น" : "ฝุ่นมีแนวโน้มลดลง", diff, kind: diff > 0 ? "up" : "down" };
+});
+
+
+async function loadForecast() {
+  state.value = "loading";
+  selectedIdx.value = null;
+  try {
+    const data = await fetchForecast();
+    current.value = data.current;
+    currentWeather.value = data.current_weather || {};
+    dailySummary.value = data.daily_summary || {};
+    forecast.value = data.forecast;
+    hourlyTimeline.value = data.hourly_timeline || [];
+    // ค่าเริ่มต้นเลือกจุด "ตอนนี้" ไว้ก่อนเลย (แทนที่จะปล่อยว่าง) กันการ์ดกราฟมีช่องว่างเปล่าๆ รอผู้ใช้กดเลือก
+    // ชั่วโมงเองก่อนถึงจะมีเนื้อหา — ผู้ใช้ยังกดเลือกชั่วโมงอื่นทับได้ตามปกติ
+    const nowIdx = hourlyTimeline.value.findIndex((p) => p.is_now);
+    selectedIdx.value = nowIdx >= 0 ? nowIdx : null;
+    highPollutionRisk.value = data.high_pollution_risk;
+    riskGroup.value = data.risk_group || "ทั่วไป";
+    fallbackHorizons.value = data.fallback_triggered_horizons || [];
+    dataQuality.value = data.data_quality || { target_stale: false, target_age_hours: 0 };
+    provinceInfo.value = data.province || { th: "", en: "", is_zero_shot: false };
+    riskScoreConfig.value = data.risk_score_config || null;
+    state.value = "content";
+  } catch (err) {
+    errorMessage.value = err.dataUnavailable ? err.message : "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
+    state.value = "error";
+    console.error("โหลดข้อมูลพยากรณ์ล้มเหลว:", err);
+  }
+}
+
+// วาดกราฟ/เลื่อนไปจุด "ตอนนี้" ได้ก็ต่อเมื่อ DOM ของการ์ดเนื้อหาจริงมีอยู่แล้วเท่านั้น (chartEl/weatherScrollEl
+// เป็น ref ของ element ข้างใน .layout) เดิมเรียกหลัง nextTick() ทันทีที่ state เปลี่ยนเป็น "content" ใช้ได้
+// เพราะ DOM แปะเข้าไปใน tick เดียวกัน แต่ตอนนี้ .layout อยู่ใน <Transition mode="out-in"> ที่รอให้
+// skeleton/error เดิม leave เสร็จก่อนค่อย mount เนื้อหาจริง (ช้ากว่า 1 tick) nextTick() เฉยๆ จึงมาเร็วเกินไป
+// (chartEl ยังเป็น null) ต้องรอ event "after-enter" ของ Transition แทนถึงจะชัวร์ว่า DOM มาแล้วจริง
+function onContentEntered() {
+  if (state.value === "content") {
+    drawWeatherChart(hourlyTimeline.value);
+    scrollToNow();
+  }
+}
+
+// สลับจังหวัดจาก ProvincePickerSheet -> provinceState.selected เปลี่ยน -> โหลดพยากรณ์ใหม่
+watch(() => provinceState.selected, loadForecast);
+
+// วาดกราฟใหม่ตอนเลือก/ยกเลิกเลือกการ์ด ให้จุดที่เลือกอยู่ขยายใหญ่ขึ้นตามจริง (ไม่ใช่แค่ครั้งแรกตอนโหลดข้อมูล)
+watch(selectedIdx, () => drawWeatherChart(hourlyTimeline.value));
+
+onMounted(loadForecast);
+
+// รีเฟรชแค่การ์ด "ปัจจุบัน" เป็นระยะผ่าน /api/current_pm25 (แยกจาก loadForecast() ทั้งก้อน) อ่าน
+// provinceState.selected สดทุก tick จึงตามจังหวัดที่เลือกอยู่เสมอโดยไม่ต้อง clear/ตั้ง interval ใหม่
+const CURRENT_PM25_POLL_MS = 2 * 60 * 1000;
+let currentPm25IntervalId = null;
+
+async function refreshCurrentPm25() {
+  const province = provinceState.selected;
+  const data = await fetchCurrentPm25(province);
+  // เงียบๆ ข้ามถ้า fetch พลาด (data=null) หรือผู้ใช้สลับจังหวัดไปแล้วระหว่างรอ response (กัน race เขียนทับ
+  // ด้วยค่าของจังหวัดเก่า)
+  if (data && provinceState.selected === province) {
+    current.value = { pm25: data.pm25, datetime_th: data.datetime_th, status: data.status };
+  }
+}
+
+onMounted(() => {
+  currentPm25IntervalId = setInterval(refreshCurrentPm25, CURRENT_PM25_POLL_MS);
+});
+onUnmounted(() => {
+  if (currentPm25IntervalId) clearInterval(currentPm25IntervalId);
+});
+
+defineExpose({ loadForecast });
+</script>
+
+<template>
+  <div class="forecast-page" :class="pageClass">
+    <div class="wrap">
+      <div class="top-row">
+        <button type="button" class="province-chip" aria-haspopup="dialog" @click="pickerOpen = true">
+          <MapPin :size="18" :stroke-width="2" aria-hidden="true" />
+          <span class="province-chip-name">{{ provinceInfo.th || "..." }}</span>
+          <span v-if="provinceInfo.is_zero_shot" class="zs-badge">zero-shot</span>
+          <ChevronDown :size="16" :stroke-width="2" aria-hidden="true" />
+        </button>
+        <span class="page-title">พยากรณ์ PM2.5</span>
+      </div>
+
+      <!-- ภาพรวมทั้งภาค (พรีวิว: ย้ายมาจาก MapView.vue /map — โหลด/แสดงผลอิสระจากการ์ดพยากรณ์ด้านล่าง)
+           ตัดหัวข้อ/คำอธิบายออกตามคำขอ เหลือแต่ตัวแผนที่ + legend ปุ่ม "ดูภาพรวมทั้งภาค" ย้ายไปลอยทับแผนที่
+           แทน (ไม่มีที่ซ่อนเหมือนเดิมเพราะ card-head ถูกตัดออกไปแล้ว) -->
+      <section class="card map-overview-card">
+        <div v-if="overviewState === 'error'" class="card error-box" role="alert">
+          <p>{{ overviewError }}</p>
+          <button type="button" class="retry-btn" @click="loadOverview">ลองอีกครั้ง</button>
+        </div>
+        <div class="map-card-inner">
+          <div ref="mapEl" class="leaflet-container-el"></div>
+          <div v-if="overviewState === 'loading'" class="map-loading-overlay">กำลังโหลดข้อมูล...</div>
+          <button v-if="focusedProvince" type="button" class="map-back-btn map-back-btn-float" @click="clearProvinceFocus">← ซูมออก</button>
+        </div>
+        <div class="legend-mini">
+          <span class="legend-chip"><span class="dot" style="background: var(--excellent)"></span>ดีมาก</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--good)"></span>ดี</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--moderate)"></span>ปานกลาง</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--unhealthy)"></span>เริ่มมีผลกระทบ</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--bad)"></span>มีผลกระทบ</span>
+        </div>
+      </section>
+
+      <Transition name="fade" mode="out-in" @after-enter="onContentEntered">
+      <!-- Loading skeleton — เลียนโครงจริงของการ์ดแต่ละใบ (ไม่ใช่กรอบเปล่าทั่วไป) กันหน้ากระโดดตอนข้อมูลจริงโหลดมา -->
+      <div v-if="state === 'loading'" key="loading" class="stack">
+        <div class="skeleton-card skeleton-hero-card">
+          <div class="skeleton skeleton-pill"></div>
+          <div class="skeleton skeleton-bignum"></div>
+          <div class="skeleton skeleton-chip"></div>
+          <div class="skeleton skeleton-scale"></div>
+          <div class="skeleton-tiles">
+            <div class="skeleton skeleton-tile"></div>
+            <div class="skeleton skeleton-tile"></div>
+            <div class="skeleton skeleton-tile"></div>
+          </div>
+        </div>
+        <div class="card skeleton-card">
+          <div class="skeleton skeleton-line" style="width: 180px"></div>
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+        </div>
+        <div class="card skeleton-card">
+          <div class="skeleton skeleton-line" style="width: 200px"></div>
+          <div class="skeleton skeleton-chart"></div>
+        </div>
+        <div class="card skeleton-card">
+          <div class="skeleton skeleton-line" style="width: 220px"></div>
+          <div class="skeleton skeleton-segmented"></div>
+          <div class="skeleton skeleton-gauge"></div>
+        </div>
+      </div>
+
+      <!-- Error state -->
+      <div v-else-if="state === 'error'" key="error" class="card error-box">
+        <p>{{ errorMessage }}</p>
+        <button type="button" class="retry-btn" @click="loadForecast">ลองอีกครั้ง</button>
+      </div>
+
+      <!-- Content -->
+      <div v-else key="content" class="layout">
+        <div class="col-primary">
+          <div v-if="highPollutionRisk" class="banner banner-warn" role="alert">
+            <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
+            <div>
+              <div class="banner-title">ช่วงนี้ฝุ่นอยู่ในระดับสูง</div>
+              <div class="banner-text">{{ warningMessage }}</div>
+            </div>
+          </div>
+
+          <div v-if="dataQuality.target_stale" class="banner banner-warn" role="alert">
+            <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">
+              ข้อมูลล่าสุดของสถานีตรวจวัดในจังหวัดนี้เก่ากว่า {{ Math.round(dataQuality.target_age_hours) }} ชั่วโมง
+              (สถานีอาจขัดข้อง) ค่าที่แสดงอาจไม่ตรงกับสถานการณ์ปัจจุบัน
+            </div>
+          </div>
+
+          <div v-if="dataQuality.input_imputed" class="banner banner-info">
+          <Info :size="22" :stroke-width="2" aria-hidden="true" />
+          <div class="banner-text">
+            สถานีตรวจวัดในจังหวัดนี้ขาดการรายงานประมาณ {{ dataQuality.input_imputed.k_hours }} ชั่วโมง
+            ค่าที่แสดงเป็นค่าประมาณจากจังหวัดข้างเคียง (ค่าที่วัดได้ล่าสุด {{ dataQuality.input_imputed.last_observed_pm25 }} µg/m³
+            เมื่อ {{ formatCardTime(dataQuality.input_imputed.last_observed_datetime_th) }}) ช่วงความเชื่อมั่นจึงกว้างกว่าปกติ
+          </div>
+        </div>
+
+        <div v-if="dataQuality.series_source === 'stale_cache' || dataQuality.weather_source === 'climatology'" class="banner banner-info">
+            <Info :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">
+              <template v-if="dataQuality.series_source === 'stale_cache'">
+                ระบบเชื่อมต่อแหล่งข้อมูลฝุ่นไม่ได้ชั่วคราว จึงใช้ข้อมูลที่บันทึกไว้ล่าสุด (เมื่อประมาณ {{ Math.max(1, Math.round(dataQuality.series_age_hours)) }} ชั่วโมงก่อน)
+              </template>
+              <template v-if="dataQuality.weather_source === 'climatology'">
+                ระบบดึงสภาพอากาศล่าสุดไม่ได้ จึงใช้ค่าเฉลี่ยตามฤดูกาลของจังหวัดนี้แทน ความแม่นยำอาจลดลงเล็กน้อย
+              </template>
+            </div>
+          </div>
+
+        <div v-if="fallbackHorizons.length > 0" class="banner banner-info">
+            <Info :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">
+              ข้อมูลบางช่วงไม่ครบ ระบบจึงใช้ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)
+              <template v-if="fallbackTimesText"> ที่เวลา {{ fallbackTimesText }} น.</template>
+            </div>
+          </div>
+
+          <!-- Hero: ค่า PM2.5 ปัจจุบัน -->
+          <section class="hero" aria-label="PM2.5 ตอนนี้">
+            <div class="hero-head">
+              <span class="hero-label">PM2.5 ตอนนี้<span v-if="dataQuality.input_imputed" class="estimate-tag">ค่าประมาณ</span></span>
+              <span v-if="SHOW_UPDATED_LABEL && updatedLabel" class="hero-updated">อัปเดต {{ updatedLabel }}</span>
+            </div>
+            <div class="pm-value-row">
+              <span class="pm-value">{{ current.pm25 }}</span>
+              <span class="pm-unit">µg/m³</span>
+            </div>
+            <div class="level-chip" :class="statusClass(current.status)">
+              <component :is="moodIconFor(current.status)" :size="28" :stroke-width="2" class="level-icon" />
+              <span class="level-text">{{ current.status }}</span>
+            </div>
+            <div class="scale" aria-hidden="true">
+              <div class="scale-track">
+                <span
+                  v-for="(l, i) in PM25_LEVELS"
+                  :key="l.status"
+                  class="scale-seg"
+                  :class="{ 'scale-seg-active': i === activeLevelIndex }"
+                  :style="{ background: `var(${l.cssVar})` }"
+                ></span>
+                <span class="scale-marker" :style="{ left: markerPct + '%' }"></span>
+              </div>
+              <div class="scale-ends"><span>ดีมาก</span><span>มีผลกระทบ</span></div>
+            </div>
+            <p class="hero-advice">{{ currentAdvice }}</p>
+            <p class="hero-note">ค่ารายชั่วโมงล่าสุด ไม่ใช่ค่าเฉลี่ย 24 ชม. แบบ AQI ทางการ</p>
+
+            <div v-if="currentWeather.temp_c != null" class="stat-tiles">
+              <div class="stat-tile">
+                <ThermometerSun :size="20" :stroke-width="2" aria-hidden="true" />
+                <div class="stat-tile-value">{{ currentWeather.temp_c }}°C</div>
+                <div class="stat-tile-label">อุณหภูมิ</div>
+              </div>
+              <div class="stat-tile">
+                <Droplets :size="20" :stroke-width="2" aria-hidden="true" />
+                <div class="stat-tile-value">{{ currentWeather.humidity_pct }}%</div>
+                <div class="stat-tile-label">ความชื้น</div>
+              </div>
+              <div class="stat-tile">
+                <Wind :size="20" :stroke-width="2" aria-hidden="true" />
+                <div class="stat-tile-value">{{ currentWeather.wind_speed_kmh }} กม./ชม.</div>
+                <div class="stat-tile-label">ลม</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ช่วงเวลาที่ฝุ่นต่ำที่สุด -->
+          <section v-if="SHOW_EXTRA_CARDS" class="card">
+            <div class="card-head">
+              <h2>ช่วงเวลาที่ฝุ่นต่ำที่สุด</h2>
+              <span class="card-head-sub">24 ชม. ข้างหน้า</span>
+            </div>
+            <div v-if="topBestTime" class="best-single">
+              <span class="best-single-time">{{ topBestTime.display_time }} น.</span>
+              <span class="best-pm">
+                <span class="dot" :style="{ background: barColor(topBestTime.pm25) }"></span>{{ topBestTime.pm25 }}
+                <span class="best-unit">µg/m³</span>
+              </span>
+            </div>
+          </section>
+
+          <!-- สรุปวันนี้ -->
+          <section v-if="SHOW_EXTRA_CARDS" class="card">
+            <div class="summary-eyebrow">
+              <Sparkles :size="18" :stroke-width="2" aria-hidden="true" />
+              <span>สรุปวันนี้ · อัปเดต 06:00 น.</span>
+            </div>
+            <div class="summary-value">
+              {{ dailyAvgDisplay }}<span class="summary-unit"> µg/m³ ค่าเฉลี่ยพยากรณ์ 24 ชม.</span>
+            </div>
+            <p class="summary-text">{{ dailyTextDisplay }}</p>
+            <p class="disclaimer-text">คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์</p>
+          </section>
+        </div>
+
+        <div class="col-secondary">
+          <!-- พยากรณ์อากาศรายชั่วโมง: การ์ด + กราฟเส้น เลื่อนดูได้ทั้งอดีต 24 ชม. และอนาคต 24 ชม. -->
+          <section class="card chart-card">
+            <div class="card-head chart-head">
+              <div>
+                <h2>พยากรณ์รายชั่วโมง</h2>
+              </div>
+            </div>
+            <div class="weather-scroll" ref="weatherScrollEl">
+              <div class="weather-inner" :style="{ width: (hourlyTimeline.length * WEATHER_POINT_GAP + 32) + 'px' }">
+                <div class="hour-cards" role="group" aria-label="สภาพอากาศรายชั่วโมง อดีตและพยากรณ์">
+                  <button
+                    v-for="(point, i) in hourlyTimeline"
+                    :key="point.time + '-' + i"
+                    type="button"
+                    class="hour-card"
+                    :class="{
+                      selected: selectedIdx === i,
+                      'hour-card-now': point.is_now,
+                      'hour-card-past': !point.is_forecast && !point.is_now,
+                      'hour-card-gap': point.is_gap_fill,
+                    }"
+                    :aria-pressed="selectedIdx === i"
+                    :aria-label="`${point.is_now ? 'ตอนนี้' : point.time} น. ${point.is_gap_fill ? '(ประมาณการ ข้อมูลจริงยังไม่มา) ' : (!point.is_forecast && !point.is_now ? '(ข้อมูลย้อนหลัง) ' : '')}PM2.5 ${point.pm25 ?? '-'}`"
+                    @click="selectedIdx = selectedIdx === i ? null : i"
+                  >
+                    <span class="hour-card-time">{{ point.is_now ? "ตอนนี้" : point.time }}</span>
+                    <component :is="weatherIconFor(point.weather_code)" :size="20" :stroke-width="1.8" class="hour-card-icon" />
+                    <span class="hour-card-pm25">{{ point.pm25 ?? "-" }}</span>
+                  </button>
+                </div>
+                <svg ref="chartEl" class="weather-chart-svg"></svg>
+              </div>
+            </div>
+            <div class="chart-foot">
+              <div v-if="SHOW_CHART_LEGEND" class="weather-legend">
+                <span><span class="dot" style="background: var(--w-pm25)"></span>PM2.5</span>
+                <span><span class="thr-swatch"></span>เกณฑ์ 37.5 µg/m³</span>
+              </div>
+              <span class="scroll-hint">ข้อมูลย้อนหลัง ← ตอนนี้ → พยากรณ์</span>
+            </div>
+            <p v-if="SHOW_CHART_LEGEND" class="chart-caption">
+              พื้นที่แรเงา = ช่วงเวลาที่ผ่านไปแล้ว (ค่าจริง ไม่ใช่พยากรณ์) · เส้นประตั้งตรงกลาง = เวลาปัจจุบัน
+              ("ตอนนี้") · จุดบนเส้นที่ใหญ่กว่าจุดอื่น = ชั่วโมงที่กำลังดูอยู่
+            </p>
+            <div class="bar-detail" aria-live="polite">
+              <template v-if="selectedPoint">
+                <div class="bar-detail-time">
+                  {{ selectedPoint.is_now ? `ตอนนี้ (${String(selectedPoint.hour_thai).padStart(2, "0")}:00 น.)` : selectedPoint.time + " น." }}
+                  <span v-if="!selectedPoint.is_forecast && !selectedPoint.is_now" class="hist-tag">ข้อมูลย้อนหลัง</span>
+                  <span v-else-if="selectedPoint.is_gap_fill" class="hist-tag">ประมาณการ (ข้อมูลจริงยังไม่มา)</span>
+                </div>
+                <div class="bar-detail-main">
+                  <span class="bar-detail-value">{{ selectedPoint.pm25 ?? "-" }}</span>
+                  <span class="best-unit">µg/m³</span>
+                </div>
+                <div v-if="selectedPoint.is_forecast && !selectedPoint.is_gap_fill && selectedPoint.pm25_lo != null" class="bar-detail-meta">
+                  คาดว่าค่าฝุ่น PM2.5 จะอยู่ระหว่าง {{ selectedPoint.pm25_lo }}–{{ selectedPoint.pm25_hi }} µg/m³
+                </div>
+                <div v-if="trendInfo" class="trend-row" :class="`trend-${trendInfo.kind}`">
+                  <component
+                    v-if="trendInfo.kind !== 'flat'"
+                    :is="trendInfo.kind === 'up' ? TrendingUp : TrendingDown"
+                    :size="16" :stroke-width="2.5"
+                  />
+                  <span>
+                    {{ trendInfo.label }}
+                    <template v-if="trendInfo.kind !== 'flat'">({{ trendInfo.diff > 0 ? "+" : "" }}{{ trendInfo.diff.toFixed(1) }} µg/m³ จากตอนนี้)</template>
+                  </span>
+                </div>
+                <div v-if="selectedPoint.is_forecast && !selectedPoint.is_gap_fill" class="shap-block">
+                  <button
+                    type="button"
+                    class="shap-toggle shap-reveal-btn"
+                    :aria-expanded="shapPanelOpen"
+                    @click="shapPanelOpen = !shapPanelOpen"
+                  >
+                    <ChevronDown :size="14" :stroke-width="2.5" :class="{ 'shap-reveal-icon-open': shapPanelOpen }" />
+                    {{ shapPanelOpen ? "ซ่อนปัจจัยที่มีผล" : "ดูปัจจัยที่มีผลต่อค่าพยากรณ์นี้" }}
+                  </button>
+                  <template v-if="shapPanelOpen">
+                    <div v-if="shapLoading" class="shap-loading">กำลังวิเคราะห์ปัจจัย...</div>
+                    <div v-else-if="shapResult?.model_used === 'naive_fallback'" class="shap-loading">
+                      ชั่วโมงนี้ใช้ค่าคงที่ล่าสุด (Persistence) ไม่มีปัจจัยให้วิเคราะห์
+                    </div>
+                    <template v-else-if="shapResult?.factors?.length">
+                      <div class="shap-label">ปัจจัยที่มีอิทธิพลต่อค่าพยากรณ์นี้มากที่สุด</div>
+                      <ul class="shap-list">
+                        <li v-for="f in shapFactorsShown" :key="f.feature" class="shap-item">
+                          <component
+                            :is="f.direction === 'up' ? TrendingUp : TrendingDown"
+                            :size="14" :stroke-width="2.5"
+                            :class="f.direction === 'up' ? 'shap-up' : 'shap-down'"
+                          />
+                          <span class="shap-item-name">{{ f.narrative_th }}</span>
+                          <span class="shap-item-val" :class="f.direction === 'up' ? 'shap-up' : 'shap-down'">
+                            {{ f.shap_value > 0 ? "+" : "" }}{{ f.shap_value.toFixed(2) }} µg/m³
+                          </span>
+                        </li>
+                      </ul>
+                      <button
+                        v-if="shapResult.factors.length > SHAP_LIST_COLLAPSED_N"
+                        type="button"
+                        class="shap-toggle"
+                        @click="shapExpanded = !shapExpanded"
+                      >
+                        {{ shapExpanded ? "แสดงน้อยลง" : `ดูเพิ่มเติม (${shapResult.factors.length - SHAP_LIST_COLLAPSED_N})` }}
+                      </button>
+                    </template>
+                  </template>
+                </div>
+              </template>
+              <div v-else class="bar-detail-empty">แตะชั่วโมงที่ต้องการ เพื่อดูรายละเอียด</div>
+            </div>
+          </section>
+
+          <!-- ความเสี่ยงตามกิจกรรมของคุณ -->
+          <section v-if="SHOW_EXTRA_CARDS" class="card">
+            <h2>ความเสี่ยงจากฝุ่นตามกิจกรรม</h2>
+            <p class="card-caption">เลือกความหนักของกิจกรรมกลางแจ้งที่วางแผนจะทำ</p>
+            <div class="segmented" role="group" aria-label="ความหนักของกิจกรรม">
+              <button
+                v-for="level in ACTIVITY_LEVELS"
+                :key="level"
+                type="button"
+                class="segmented-btn"
+                :class="{ active: riskScoreState.activity === level }"
+                :aria-pressed="riskScoreState.activity === level"
+                @click="setActivity(level)"
+              >
+                <component :is="activityIconFor(level)" :size="20" :stroke-width="2" aria-hidden="true" />
+                <span class="segmented-label">{{ level }}</span>
+                <span class="segmented-examples">
+                  <span v-for="ex in ACTIVITY_EXAMPLES[level]" :key="ex">● {{ ex }}</span>
+                </span>
+              </button>
+            </div>
+            <div class="level-chip-lg" :class="statusClass(currentRiskScore.level)">
+              <span class="level-icon-badge">
+                <component :is="moodIconFor(currentRiskScore.level)" :size="24" :stroke-width="2" class="level-icon-lg" />
+              </span>
+              <div>
+                <div class="level-name-lg">{{ currentRiskScore.level || "-" }}</div>
+                <div class="level-score-sm">{{ currentRiskScore.score ?? "-" }} จาก 100 คะแนน</div>
+              </div>
+            </div>
+            <div class="gauge-track" aria-hidden="true">
+              <span
+                v-for="(l, i) in PM25_LEVELS"
+                :key="l.status"
+                class="gauge-seg"
+                :class="{ 'gauge-seg-active': i === riskLevelIndex }"
+                :style="{ background: `var(${l.cssVar})` }"
+              ></span>
+              <span class="gauge-marker" :style="{ left: (currentRiskScore.score ?? 0) + '%' }"></span>
+            </div>
+            <div class="gauge-ends"><span>ปลอดภัย</span><span>เสี่ยงสูง</span></div>
+            <p class="risk-advice">{{ currentRiskAdvice }}</p>
+            <template v-if="bestActivityTimes.length">
+              <div class="risk-sublabel">ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด</div>
+              <ol class="best-list">
+                <li v-for="point in bestActivityTimes" :key="point.display_time" class="best-row">
+                  <span class="best-dot" :class="statusClass(point.riskLevel)"></span>
+                  <span class="best-time">{{ point.display_time }} น.</span>
+                </li>
+              </ol>
+            </template>
+          </section>
+        </div>
+      </div>
+      </Transition>
+    </div>
+
+    <ProvincePickerSheet
+      :open="pickerOpen"
+      :selected="provinceState.selected"
+      @select="selectProvince"
+      @close="pickerOpen = false"
+    />
+  </div>
+</template>
+
+<style scoped>
+.forecast-page {
+  /* โทเคนกลาง (ground/card/ink/muted/line/track/accent/warn/info) มาจาก :root ใน assets/main.css
+     เหลือแค่โทเคนที่หน้านี้ใช้เฉพาะตัวเอง (สีระดับฝุ่น/โมเดล/การ์ดหลัก) */
+  --chip-bg: rgba(255, 255, 255, 0.72);
+
+  --excellent: #3b82f6;
+  --good: #22c55e;
+  --moderate: #eab308;
+  --unhealthy: #f97316;
+  --bad: #ef4444;
+
+  /* สีใน "พยากรณ์อากาศรายชั่วโมง" — w-pm25 คือเส้นกราฟ, w-icon แค่สีไอคอนสภาพอากาศบนการ์ด */
+  --w-icon: #3b82f6;
+  --w-pm25: #f97316;
+
+  --hero-bg: #faefc1;
+  --hero-ink: #4f3b00;
+
+  min-height: 100vh;
+  background: var(--ground);
+  color: var(--ink);
+  padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
+}
+
+  :root[data-theme="dark"] .forecast-page {
+    --chip-bg: rgba(255, 255, 255, 0.09);
+  }
+
+
+
+.forecast-page.aqi-excellent { --hero-bg: #e3edfd; --hero-ink: #1e3a8a; }
+.forecast-page.aqi-good      { --hero-bg: #dff4e6; --hero-ink: #14532d; }
+.forecast-page.aqi-moderate  { --hero-bg: #faefc1; --hero-ink: #4f3b00; }
+.forecast-page.aqi-unhealthy { --hero-bg: #fce4ce; --hero-ink: #6e2a00; }
+.forecast-page.aqi-bad       { --hero-bg: #fadada; --hero-ink: #7f1d1d; }
+
+  :root[data-theme="dark"] .forecast-page.aqi-excellent { --hero-bg: #14233f; --hero-ink: #c3d8ff; }
+  :root[data-theme="dark"] .forecast-page.aqi-good { --hero-bg: #12291b; --hero-ink: #bdebcb; }
+  :root[data-theme="dark"] .forecast-page.aqi-moderate { --hero-bg: #2b2410; --hero-ink: #f5de8a; }
+  :root[data-theme="dark"] .forecast-page.aqi-unhealthy { --hero-bg: #33200f; --hero-ink: #ffc999; }
+  :root[data-theme="dark"] .forecast-page.aqi-bad { --hero-bg: #351516; --hero-ink: #ffb8b8; }
+
+
+.wrap { max-width: 1080px; margin: 0 auto; }
+
+.top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.page-title { color: var(--muted); font-weight: 600; font-size: 0.95rem; }
+
+@media (max-width: 720px) { .page-title { display: none; } }
+
+.province-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px 0 12px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.province-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.zs-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--track);
+  color: var(--muted);
+}
+
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.layout { display: flex; flex-direction: column; gap: 16px; }
+.col-primary, .col-secondary { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+@media (min-width: 960px) {
+  .layout { display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 20px; align-items: start; }
+}
+
+/* banners */
+.banner {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid;
+  line-height: 1.55;
+}
+.banner > svg { flex-shrink: 0; margin-top: 1px; }
+.banner-warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-ink); }
+.banner-info { background: var(--info-bg); border-color: var(--info-line); color: var(--info-ink); }
+.banner-title { font-weight: 600; font-size: 0.95rem; line-height: 1.4; }
+.banner-text { font-size: 0.9rem; }
+
+/* hero */
+.hero {
+  background: var(--hero-bg);
+  color: var(--hero-ink);
+  border-radius: 32px;
+  padding: 24px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: background 0.4s ease, color 0.4s ease;
+}
+.hero-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
+.hero-label { font-weight: 600; color: var(--ink); }
+.hero-updated { color: var(--muted); }
+.estimate-tag {
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.pm-value-row { display: flex; align-items: flex-end; gap: 8px; line-height: 1; }
+.pm-value {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 6rem;
+  letter-spacing: -0.02em;
+}
+.pm-unit { font-size: 1rem; padding-bottom: 14px; opacity: 0.85; }
+.level-chip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 10px;
+  padding: 8px 16px 8px 10px;
+  border-radius: 24px;
+  background: var(--chip-bg);
+  color: var(--hero-ink);
+}
+.level-icon { flex-shrink: 0; }
+.status-excellent .level-icon { color: var(--excellent); }
+.status-good .level-icon { color: var(--good); }
+.status-moderate .level-icon { color: var(--moderate); }
+.status-unhealthy .level-icon { color: var(--unhealthy); }
+.status-bad .level-icon { color: var(--bad); }
+.level-text { font-size: 1.05rem; font-weight: 600; }
+
+.scale-track { position: relative; display: flex; gap: 4px; padding: 4px 0; }
+.scale-seg { flex: 1; height: 8px; border-radius: 4px; opacity: 0.35; }
+.scale-seg-active { opacity: 1; }
+.scale-marker {
+  position: absolute;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 3px solid var(--hero-ink);
+  transition: left 0.5s ease;
+}
+.scale-ends { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+
+.hero-advice { margin: 0; font-size: 0.95rem; line-height: 1.55; color: var(--ink); }
+.hero-note { margin: -6px 0 0; font-size: 0.75rem; color: var(--muted); }
+
+.stat-tiles { display: flex; gap: 8px; padding-top: 4px; }
+.stat-tile {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--chip-bg);
+  color: var(--ink);
+}
+.stat-tile-value { font-size: 1.1rem; font-weight: 600; color: var(--ink); }
+.stat-tile-label { font-size: 0.75rem; color: var(--muted); }
+
+/* การ์ดทั่วไป */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 20px;
+}
+.card h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-bottom: 8px; }
+.card-head-sub { font-size: 0.8rem; color: var(--muted); }
+.card-caption { margin: 4px 0 12px; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+
+/* รายการอันดับ (ช่วงที่ควรออก / เหมาะกับกิจกรรม) */
+.best-list { list-style: none; margin: 0; padding: 0; }
+.best-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.best-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.best-dot.status-excellent { background: var(--excellent); }
+.best-dot.status-good { background: var(--good); }
+.best-dot.status-moderate { background: var(--moderate); }
+.best-dot.status-unhealthy { background: var(--unhealthy); }
+.best-dot.status-bad { background: var(--bad); }
+.best-time { flex: 1; font-size: 1.05rem; font-weight: 600; }
+.best-pm { display: inline-flex; align-items: center; font-size: 0.95rem; }
+.best-unit { color: var(--muted); font-size: 0.8rem; margin-left: 4px; }
+.best-single {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.best-single-time { font-size: 1.3rem; font-weight: 700; }
+
+/* กราฟพยากรณ์อากาศ (การ์ด + เส้น) */
+.chart-head { padding-bottom: 12px; }
+.chart-card { padding-left: 0; padding-right: 0; }
+.chart-card .card-head, .chart-card .chart-foot, .chart-card .chart-caption, .chart-card .bar-detail { padding-left: 20px; padding-right: 20px; }
+
+.weather-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+}
+.weather-inner { position: relative; }
+
+.hour-cards { display: flex; padding: 0 16px; }
+.hour-card {
+  flex: 0 0 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+}
+.hour-card.selected { background: var(--track); }
+.hour-card-now { font-weight: 700; }
+.hour-card-past { opacity: 0.55; }
+.hour-card-past.selected { opacity: 0.85; }
+.hour-card-gap { opacity: 0.78; }
+.hour-card-gap.selected { opacity: 0.95; }
+.hour-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hour-card-time { font-size: 0.72rem; color: var(--muted); }
+.hour-card-icon { color: var(--w-icon); }
+.hour-card-pm25 { font-size: 1rem; font-weight: 600; }
+
+.weather-chart-svg { display: block; margin-top: 4px; }
+.weather-chart-svg :deep(.axis-label) { font-size: 9px; fill: var(--muted); }
+.weather-chart-svg :deep(.now-line) { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.weather-chart-svg :deep(.thr-grid-line) { stroke: var(--w-pm25); stroke-width: 1; opacity: 0.25; stroke-dasharray: 2 3; }
+.weather-chart-svg :deep(.past-band) { fill: var(--track); opacity: 0.55; }
+.weather-chart-svg :deep(.past-label) { font-size: 8px; fill: var(--muted); }
+
+.chart-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.weather-legend { display: flex; gap: 12px; }
+.weather-legend span { display: inline-flex; align-items: center; }
+.thr-swatch { width: 16px; margin-right: 6px; border-top: 1.5px dashed var(--w-pm25); }
+.chart-caption { margin: 6px 0 0; font-size: 0.72rem; color: var(--muted); line-height: 1.5; }
+
+.bar-detail {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  min-height: 92px;
+}
+.bar-detail-time { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+.hist-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--track);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.bar-detail-main { display: flex; align-items: baseline; gap: 6px; margin: 2px 0 6px; }
+.bar-detail-value { font-family: var(--font-display); font-weight: 600; font-size: 1.8rem; line-height: 1.1; }
+.bar-detail-meta { display: flex; align-items: center; font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
+.bar-detail-empty { font-size: 0.9rem; color: var(--muted); padding-top: 8px; }
+
+.trend-row { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; margin: 2px 0 0; }
+.trend-up { color: var(--bad); }
+.trend-down { color: var(--good); }
+.trend-flat { color: var(--muted); }
+
+.shap-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.shap-loading { font-size: 0.82rem; color: var(--muted); }
+.shap-label { font-size: 0.72rem; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+.shap-up { color: var(--bad); flex-shrink: 0; }
+.shap-down { color: var(--good); flex-shrink: 0; }
+
+.shap-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.shap-item { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }
+.shap-item-name { flex: 1; min-width: 0; }
+.shap-item-val { font-size: 0.78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.shap-toggle {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.shap-reveal-btn { display: flex; align-items: center; gap: 4px; margin-top: 0; }
+.shap-reveal-btn :deep(svg) { transition: transform 0.15s ease; }
+.shap-reveal-btn :deep(.shap-reveal-icon-open) { transform: rotate(180deg); }
+.shap-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ความเสี่ยงส่วนบุคคล — ปุ่มเลือกความหนักกิจกรรม มีไอคอน + ชื่อระดับ + ตัวอย่างกิจกรรม 2 อย่าง (ไม่ใช่แค่ชื่อ
+   ระดับเฉยๆ เพราะ "เบา/ปานกลาง/หนัก" กำกวม ไม่บอกว่าหมายถึงกิจกรรมอะไรบ้าง) */
+.segmented {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 18px;
+  background: var(--track);
+  margin-bottom: 16px;
+}
+.segmented-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 14px;
+  padding: 14px 6px 12px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  cursor: pointer;
+}
+.segmented-btn.active { background: var(--ink); color: var(--card); }
+.segmented-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.segmented-label { font-size: 0.92rem; font-weight: 600; }
+.segmented-examples { display: flex; flex-direction: column; gap: 3px; align-items: center; }
+.segmented-examples span { font-size: 0.7rem; line-height: 1.2; white-space: nowrap; }
+/* ปุ่มที่ไม่ได้เลือก: ไอคอน/ชื่อระดับ (ตัวหลัก) เข้มกว่าปกติ เป็น var(--ink) ทั้งสองธีม (เดิมสืบทอด
+   var(--muted) จาก .segmented-btn ดูจางไปกับพื้น var(--track)) ส่วนตัวอย่างกิจกรรม (รอง) ยังคง var(--muted)
+   เดิมต่อไป (สืบทอดจาก .segmented-btn ตามปกติ ไม่ต้องตั้งซ้ำ) */
+.segmented-btn:not(.active) .segmented-label,
+.segmented-btn:not(.active) svg {
+  color: var(--ink);
+}
+/* เกจ์ความเสี่ยงกิจกรรม — รูปแบบเดียวกับ .level-chip/.scale ของการ์ด "PM2.5 ตอนนี้" (ด้านบน) ตั้งใจให้
+   ผู้ใช้จำภาษาภาพได้ทันทีข้ามสองการ์ด คะแนน breakpoint ของ risk score (0/20/40/60/80/100) แมปตรงกับขอบ
+   PM25_LEVELS ทั้ง 5 ช่วงพอดี (ดูคอมเมนต์ที่ riskLevelIndex) จึงใช้ currentRiskScore.score เป็น % ตำแหน่ง
+   บนแถบได้ตรงๆ โดยไม่ต้องคำนวณสัดส่วนแบบ scaleMarkerPct() */
+.level-chip-lg {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: var(--track);
+  margin-bottom: 4px;
+}
+.level-icon-badge {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.status-excellent .level-icon-lg { color: var(--excellent); }
+.status-good .level-icon-lg { color: var(--good); }
+.status-moderate .level-icon-lg { color: var(--moderate); }
+.status-unhealthy .level-icon-lg { color: var(--unhealthy); }
+.status-bad .level-icon-lg { color: var(--bad); }
+.level-name-lg { font-size: 1.05rem; font-weight: 600; line-height: 1.3; }
+.level-score-sm { font-size: 0.8rem; color: var(--muted); margin-top: 1px; }
+.gauge-track { position: relative; display: flex; gap: 4px; padding: 8px 0; }
+.gauge-seg { flex: 1; height: 8px; border-radius: 4px; opacity: 0.35; }
+.gauge-seg-active { opacity: 1; }
+.gauge-marker {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 3px solid var(--ink);
+  transform: translateY(-50%);
+  transition: left 0.5s ease;
+}
+.gauge-ends { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); margin-top: 5px; }
+.risk-advice { margin: 12px 0 0; font-size: 0.92rem; line-height: 1.55; color: var(--muted); }
+.disclaimer-text { margin: 8px 0 0; font-size: 0.78rem; line-height: 1.5; color: var(--muted); opacity: 0.85; }
+.risk-sublabel { margin: 16px 0 4px; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+
+/* สรุปวันนี้ */
+.summary-eyebrow { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.8rem; font-weight: 500; }
+.summary-value { font-family: var(--font-display); font-weight: 600; font-size: 2rem; line-height: 1.2; margin: 8px 0; }
+.summary-unit { font-family: var(--font-sans); font-weight: 400; font-size: 0.85rem; color: var(--muted); }
+.summary-text { margin: 0; font-size: 0.95rem; line-height: 1.6; }
+
+/* loading skeleton — เลียนโครงจริงของแต่ละการ์ด (ไม่ใช่กรอบเปล่าทั่วไป) กันหน้ากระโดดตอนสลับจากโครงร่างเป็น
+   เนื้อหาจริง ความสูงรวมควรใกล้เคียงของจริงมากที่สุด */
+.skeleton {
+  background: linear-gradient(90deg, var(--line) 25%, transparent 37%, var(--line) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: 8px;
+}
+@keyframes shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+.skeleton-card { display: flex; flex-direction: column; gap: 10px; }
+.skeleton-hero-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 32px;
+  padding: 24px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.skeleton-pill { width: 140px; height: 14px; }
+.skeleton-bignum { width: 160px; height: 64px; border-radius: 14px; }
+.skeleton-chip { width: 110px; height: 36px; border-radius: 24px; }
+.skeleton-scale { width: 100%; height: 10px; border-radius: 6px; }
+.skeleton-tiles { display: flex; gap: 8px; }
+.skeleton-tile { flex: 1; height: 64px; border-radius: 16px; }
+.skeleton-line { width: 220px; height: 16px; margin: 6px 0; }
+.skeleton-row { width: 100%; height: 40px; border-radius: 12px; margin: 8px 0; }
+.skeleton-chart { width: 100%; height: 200px; }
+.skeleton-segmented { width: 100%; height: 90px; border-radius: 18px; }
+.skeleton-gauge { width: 100%; height: 50px; border-radius: 16px; margin-top: 8px; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* error state */
+.error-box { text-align: center; padding: 32px 20px; }
+.error-box p { color: var(--muted); margin: 0 0 16px; }
+.retry-btn {
+  min-height: 44px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0 24px;
+  border-radius: 22px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.retry-btn:hover { opacity: 0.9; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero, .scale-marker, .bar, .bar-range-cap { transition: none; }
+  .skeleton { animation: none; }
+  .fade-enter-active, .fade-leave-active { transition: none; }
+}
+
+/* ===== ภาพรวมทั้งภาค (พรีวิว) — ย้าย CSS ของแผนที่มาจาก MapView.vue ปรับให้ใช้โทเคนของหน้านี้ ===== */
+.map-overview-card { padding-bottom: 14px; margin-bottom: 16px; }
+.map-back-btn {
+  border: 0; background: var(--track); color: var(--ink); font-family: inherit; font-weight: 600;
+  font-size: 0.8rem; padding: 6px 12px; border-radius: 999px; cursor: pointer; flex-shrink: 0;
+}
+.map-back-btn:hover { background: var(--line); }
+.map-back-btn-float {
+  /* z-index:600 ต้องสูงกว่า .map-loading-overlay (500) ที่นี่ ไม่งั้นตอนโหลดข้อมูลใหม่ปุ่มจะถูกบัง —
+     เทียบกันแค่ภายใน .map-card-inner เอง เพราะ isolation:isolate กันไม่ให้แข่งกับ z-index นอกกล่องนี้แล้ว */
+  position: absolute; top: 10px; left: 10px; z-index: 600;
+  background: var(--card); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+/* isolation:isolate กันปัญหา "แผนที่บังป๊อปอัปเลือกจังหวัด" — Leaflet ตั้ง z-index ภายใน (.leaflet-pane
+   400-700, ปุ่ม zoom .leaflet-top/.leaflet-bottom 1000) ไว้สูงมากเพราะคิดว่าตัวเองเป็นคอนเทนต์หลักของหน้า
+   พอ .map-card-inner เองไม่มี stacking context เป็นของตัวเอง ค่า z-index พวกนี้เลยไปเทียบชั้นกับทั้งหน้า
+   โดยตรง สูงกว่า ProvincePickerSheet.vue (z-index:300) เลยทะลุไปบังมันได้ — isolation:isolate ทำให้ลูกข้างใน
+   (รวมปุ่ม zoom/ชั้นต่างๆ ของ Leaflet) ซ้อนกันเองได้ตามปกติ แต่ไม่ทะลุออกไปแข่ง z-index กับของนอกกล่องนี้เลย */
+.map-card-inner { position: relative; isolation: isolate; border-radius: 18px; overflow: hidden; }
+.leaflet-container-el { width: 100%; height: 320px; background: var(--track); }
+.map-loading-overlay {
+  position: absolute; inset: 0; z-index: 500; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--card) 70%, transparent); font-weight: 600; color: var(--ink);
+}
+.legend-mini { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.legend-chip { display: flex; align-items: center; gap: 5px; font-size: 0.74rem; color: var(--muted); }
+.legend-chip .dot { margin-right: 0; }
+
+:deep(.leaflet-container) { font-family: inherit; }
+:deep(.leaflet-bar) { border: 1px solid var(--line); box-shadow: none; border-radius: 14px; overflow: hidden; }
+:deep(.leaflet-bar a) { width: 36px; height: 36px; line-height: 36px; background: var(--card); color: var(--ink); border-bottom: 1px solid var(--line); }
+:deep(.leaflet-bar a:last-child) { border-bottom: 0; }
+:deep(.leaflet-bar a:hover) { background: var(--track); }
+:deep(.leaflet-control-attribution) { background: color-mix(in srgb, var(--card) 80%, transparent); color: var(--muted); font-size: 0.6rem; }
+:deep(.leaflet-control-attribution a) { color: var(--accent); }
+:deep(.map-marker-badge-wrap) { background: transparent; border: none; }
+:deep(.map-marker-badge) {
+  width: 30px; height: 30px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  display: flex; align-items: center; justify-content: center; color: #ffffff; font-weight: 600; font-size: 0.65rem;
+  font-family: inherit; letter-spacing: -0.2px; line-height: 1; padding-top: 1px;
+}
+:deep(.map-hover-tooltip) { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); opacity: 1; }
+:deep(.map-hover-tooltip)::before { border-top-color: var(--card); }
+:deep(.map-hover-title) { font-weight: 700; font-size: 0.8rem; margin-bottom: 2px; }
+:deep(.map-hover-row) { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+:deep(.leaflet-popup-content-wrapper) { background: var(--card); color: var(--ink); border-radius: 18px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); }
+:deep(.leaflet-popup-tip) { background: var(--card); }
+:deep(.leaflet-popup-content) { margin: 14px 16px; }
+:deep(.leaflet-popup-close-button) { color: var(--muted) !important; width: 32px !important; height: 32px !important; font-size: 22px !important; }
+:deep(.map-popup) { font-size: 0.9rem; line-height: 1.5; min-width: 190px; }
+:deep(.map-popup-title) { font-weight: 700; font-size: 1rem; margin-bottom: 6px; padding-right: 16px; }
+:deep(.map-popup-pm25) { font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; line-height: 1.2; }
+:deep(.map-popup-status) { color: var(--ink); font-weight: 500; }
+
+@media (max-width: 600px) {
+  .leaflet-container-el { height: 240px; }
+}
+</style>

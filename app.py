@@ -151,6 +151,10 @@ IMPUTATION_CONFIG_PATH = "models/imputation_h_lite_20260924_204956.json"
 IMPUTATION_MIN_K = 3   
 IMPUTATION_MAX_K = 48  
 
+# ===== เครื่องมือ debug ถาวร: วัดเวลาแต่ละขั้นตอนของ get_forecast() (ใช้ตอนไล่ปัญหา "โหลดนาน" ดู
+# CHANGELOG 222) ปิดเป็นค่าเริ่มต้น — เปิดเฉพาะตอนต้องการดู log [timing] ไล่คอขวดใหม่ =====
+DEBUG_TIMING = False
+
 # ===== ทางสำรองเมื่อดึง OpenAQ / Open-Meteo ไม่ได้  =====
 
 USE_INPUT_FALLBACK = True
@@ -500,6 +504,7 @@ _WEATHER_BREAKER = _CircuitBreaker("open-meteo", threshold=5, cooldown_s=60)
 
 def _openaq_get(kind, sensor_id, params, attempts, timeout=15):
     """GET /v3/sensors/{id}/{kind} พร้อม retry แบบ backoff เฉพาะ 429/5xx/network — 4xx อื่น raise ทันที; retry หมด -> RuntimeError"""
+    _t0 = time.perf_counter() if DEBUG_TIMING else None
     for attempt in range(attempts):
         try:
             r = requests.get(f"https://api.openaq.org/v3/sensors/{sensor_id}/{kind}",
@@ -509,9 +514,15 @@ def _openaq_get(kind, sensor_id, params, attempts, timeout=15):
         if r is not None:
             if not (r.status_code == 429 or r.status_code >= 500):
                 r.raise_for_status()
+                if DEBUG_TIMING and attempt > 0:
+                    print(f"[timing] _openaq_get {kind} sensor {sensor_id}: สำเร็จหลัง retry {attempt} ครั้ง "
+                          f"({time.perf_counter() - _t0:.2f}s)")
                 return r
         if attempt < attempts - 1:
             time.sleep(2 ** attempt)
+    if DEBUG_TIMING:
+        print(f"[timing] _openaq_get {kind} sensor {sensor_id}: ล้มเหลวทั้งหมด {attempts} ครั้ง "
+              f"({time.perf_counter() - _t0:.2f}s)")
     raise RuntimeError(f"ดึง pm25 จาก OpenAQ ({kind}) ไม่สำเร็จหลัง retry (sensor {sensor_id})")
 
 
@@ -636,6 +647,11 @@ def _load_weather_climatology():
 WEATHER_CLIM = _load_weather_climatology()
 _WEATHER_CACHE = {}  # province_en -> (เวลา monotonic ที่ดึงสำเร็จ, dict current weather)
 _WEATHER_LOCK = threading.Lock()
+
+HOURLY_WEATHER_TTL_S = 30 * 60        # ข้อมูลรายชั่วโมงไม่ต้องสดเท่า current weather — กันยิง Open-Meteo ซ้ำ
+                                       # ทุก request (เดิมไม่มี cache เลย เป็นจุดที่กินโควตารายวันมากสุด)
+HOURLY_WEATHER_STALE_MAX_AGE_H = 24   # ดึงสดไม่ได้เลย (เช่น โควตารายวันหมด) ใช้ของเก่าได้ไม่เกินนี้ กันกราฟว่าง
+_HOURLY_WEATHER_CACHE = {}  # province_en -> (เวลา monotonic ที่ดึงสำเร็จ, dict hourly จาก fetch_hourly_weather_openmeteo)
 
 
 def weather_climatology(province, at=None):
@@ -824,6 +840,11 @@ NEIGHBOR_RANKING = {
 
 _SERIES_CACHE = {}  # province_en -> (เวลา monotonic ที่ดึง, DataFrame[datetime_utc, pm25])
 _SERIES_LOCK = threading.Lock()
+
+# เรียกข้อมูลสดหลายจุดของ get_forecast() พร้อมกันแทนทีละจุด (target/weather/fire/r2/air4thai ไม่ขึ้นกับกันเลย
+# วัดแล้วว่าเวลารวมตอนสลับจังหวัดไปจังหวัดที่ cache เย็นส่วนใหญ่มาจากการต่อคิวนี้ ดูแผนที่
+# C:\Users\junta\.claude\plans\effervescent-finding-mccarthy.md) เลียน pattern _gemini_executor ที่มีอยู่แล้ว
+_IO_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="forecast-io")
 
 
 def _series_disk_path(province):
@@ -1849,17 +1870,18 @@ def _nan_to_none(x):
     return None if x is None or (isinstance(x, float) and np.isnan(x)) else x
 
 
-def build_hourly_timeline(province_meta, latest_time, df_observed, forecast, live_now=None):
-    """รวม PM2.5+สภาพอากาศ 'จริง' ของ 24 ชม.ที่ผ่านมา กับ PM2.5 พยากรณ์ 24 ชม.ข้างหน้า (จาก forecast[] ที่คำนวณ
-    ไปแล้ว บวกอุณหภูมิ/โอกาสฝนรายชั่วโมงจาก Open-Meteo) เป็นเส้นเวลาเดียว 49 จุด สำหรับกราฟ 'พยากรณ์อากาศ'
-    รายชั่วโมงฝั่ง frontend (เลื่อนดูอดีตได้) — ล้มเหลวได้แบบไม่กระทบ /api/forecast เดิม (คืน [] ให้ frontend
-    fallback ไปโหมดไม่มีสภาพอากาศ/อดีต)
-
-    live_now: ผลจาก get_air4thai_live() (หรือ None) — ถ้ามี ใช้ค่า pm25 สดของ Air4Thai ที่จุด "ตอนนี้" เท่านั้น
-    ข้อมูลย้อนหลังเป็น OpenAQ ล้วน (เคยลองใช้ Air4Thai ด้วยใน CHANGELOG 188 แล้วย้อนกลับใน 189: ผู้ใช้เทียบ
-    ข้อมูลจริงแล้วพบว่า OpenAQ เป็นค่าเฉลี่ยเคลื่อนที่ 24 ชม. ราบเรียบ ต่างจาก Air4Thai ที่เป็นค่าดิบผันผวนมาก
-    ทำให้เส้นย้อนหลัง(ผันผวน)กับเส้นพยากรณ์ที่เทรนบน OpenAQ (ราบเรียบ)ดูไม่กลืนกัน จึงเลือกคงย้อนหลังเป็น OpenAQ
-    ไว้ ยอมรับว่าจะมีช่องว่าง 1-2 ชม.ก่อนถึง "ตอนนี้" เพราะ OpenAQ ล่าช้ากว่า Air4Thai)"""
+def get_hourly_weather_cached(province_meta):
+    """fetch_hourly_weather_openmeteo() พร้อม cache (TTL HOURLY_WEATHER_TTL_S) — เดิมจุดนี้ไม่มี cache เลย
+    ยิง Open-Meteo ใหม่ทุกครั้งที่มีคนเปิด/รีเฟรชพยากรณ์จังหวัดไหนก็ได้ เป็นจุดที่กินโควตารายวันมากที่สุด
+    (เทียบกับ get_current_weather() ที่มี cache 10 นาทีอยู่แล้ว) ถ้าดึงสดไม่ได้เลย (เช่น โควตารายวันหมด)
+    จะใช้ค่า cache เก่าต่อได้ไม่เกิน HOURLY_WEATHER_STALE_MAX_AGE_H ชม. ก่อนจะคืน {} (เลียน pattern
+    get_current_weather() ทุกจุด) คืน dict เวลา(floor ชม.)->(temp, precip_prob, weather_code) หรือ {}"""
+    prov = province_meta["province_en"]
+    now = time.monotonic()
+    with _WEATHER_LOCK:
+        hit = _HOURLY_WEATHER_CACHE.get(prov)
+    if hit is not None and now - hit[0] < HOURLY_WEATHER_TTL_S:
+        return hit[1]
     try:
         hourly = fetch_hourly_weather_openmeteo(province_meta["lat"], province_meta["lon"])
         weather_times = pd.to_datetime(hourly["time"], utc=True)
@@ -1867,9 +1889,35 @@ def build_hourly_timeline(province_meta, latest_time, df_observed, forecast, liv
             t: (hourly["temperature_2m"][i], hourly["precipitation_probability"][i], hourly["weather_code"][i])
             for i, t in enumerate(weather_times)
         }
+        with _WEATHER_LOCK:
+            _HOURLY_WEATHER_CACHE[prov] = (time.monotonic(), weather_by_hour)
+        return weather_by_hour
     except Exception as e:
-        print(f"[hourly_timeline] ดึงสภาพอากาศรายชั่วโมงไม่สำเร็จ ({type(e).__name__}) — กราฟจะไม่มีอุณหภูมิ/โอกาสฝน")
-        weather_by_hour = {}
+        age_s = time.monotonic() - hit[0] if hit is not None else None
+        if hit is not None and age_s <= HOURLY_WEATHER_STALE_MAX_AGE_H * 3600:
+            print(f"[hourly_timeline] {prov}: ดึงสภาพอากาศรายชั่วโมงไม่สำเร็จ ({type(e).__name__}) — "
+                  f"ใช้ของเก่าที่ cache ไว้ {age_s / 60:.0f} นาทีที่แล้ว")
+            return hit[1]
+        print(f"[hourly_timeline] {prov}: ดึงสภาพอากาศรายชั่วโมงไม่สำเร็จ ({type(e).__name__}) และไม่มีค่า "
+              f"cache ที่ใหม่พอ — กราฟจะไม่มีอุณหภูมิ/โอกาสฝน")
+        return {}
+
+
+def build_hourly_timeline(weather_by_hour, latest_time, df_observed, forecast, live_now=None):
+    """รวม PM2.5+สภาพอากาศ 'จริง' ของ 24 ชม.ที่ผ่านมา กับ PM2.5 พยากรณ์ 24 ชม.ข้างหน้า (จาก forecast[] ที่คำนวณ
+    ไปแล้ว บวกอุณหภูมิ/โอกาสฝนรายชั่วโมงจาก Open-Meteo) เป็นเส้นเวลาเดียว 49 จุด สำหรับกราฟ 'พยากรณ์อากาศ'
+    รายชั่วโมงฝั่ง frontend (เลื่อนดูอดีตได้) — ล้มเหลวได้แบบไม่กระทบ /api/forecast เดิม (คืน [] ให้ frontend
+    fallback ไปโหมดไม่มีสภาพอากาศ/อดีต)
+
+    weather_by_hour: ผลจาก get_hourly_weather_cached(province_meta) — ย้ายมาดึง "ล่วงหน้า" แบบขนานกับ
+    target/weather/fire ตั้งแต่ build_live_feature_row() แทนที่จะดึงตรงนี้ (เดิมดึงตอนนี้เลย ต้องรอจน
+    model ทำนายครบ 24 horizon เสร็จก่อนจะเริ่มดึงได้ ทั้งที่ไม่ได้ขึ้นกับ forecast เลย)
+
+    live_now: ผลจาก get_air4thai_live() (หรือ None) — ถ้ามี ใช้ค่า pm25 สดของ Air4Thai ที่จุด "ตอนนี้" เท่านั้น
+    ข้อมูลย้อนหลังเป็น OpenAQ ล้วน (เคยลองใช้ Air4Thai ด้วยใน CHANGELOG 188 แล้วย้อนกลับใน 189: ผู้ใช้เทียบ
+    ข้อมูลจริงแล้วพบว่า OpenAQ เป็นค่าเฉลี่ยเคลื่อนที่ 24 ชม. ราบเรียบ ต่างจาก Air4Thai ที่เป็นค่าดิบผันผวนมาก
+    ทำให้เส้นย้อนหลัง(ผันผวน)กับเส้นพยากรณ์ที่เทรนบน OpenAQ (ราบเรียบ)ดูไม่กลืนกัน จึงเลือกคงย้อนหลังเป็น OpenAQ
+    ไว้ ยอมรับว่าจะมีช่องว่าง 1-2 ชม.ก่อนถึง "ตอนนี้" เพราะ OpenAQ ล่าช้ากว่า Air4Thai)"""
 
     def weather_at(ts):
         return weather_by_hour.get(ts.floor("h"), (None, None, None))
@@ -1960,31 +2008,60 @@ def build_live_feature_row(province):
     เป็นส่วน "เตรียม feature" ของ get_forecast() เดิม แยกออกมาเป็นฟังก์ชันของตัวเอง เพื่อให้
     /api/forecast/shap (อธิบายค่าพยากรณ์ชั่วโมงที่ผู้ใช้เลือกด้วย SHAP) เรียกซ้ำได้โดยไม่ต้อง copy โค้ด
     fetch ข้อมูลสดทั้งชุด — raise DataUnavailableError เหมือนเดิมถ้าไม่มีข้อมูล PM2.5 เลย"""
+    _t = {}  # DEBUG_TIMING: ชื่อขั้นตอน -> วินาทีที่ใช้ (ดูแผนวัดเวลา)
     province_meta = PROVINCES_BY_SLUG[province]
     series_info = {}
-    df_recent = get_recent_series(province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
+    # target/weather/fire ไม่ขึ้นกับกันเลย (weather/fire ไม่ต้องรอผลของ target) ยิงพร้อมกันแทนทีละจุด —
+    # weather ใช้ at=None (เวลา "ตอนนี้" แทน reference_time ของ target) เพราะ at มีผลแค่ชั้น fallback
+    # climatology เท่านั้น (ชั้น live fetch หลักไม่ใช้เวลาเลย) ผลต่างที่ยอมรับได้แลกกับการไม่ต้องรอ target ก่อน
+    _t_parallel0 = time.perf_counter()
+    _target_future = _IO_EXECUTOR.submit(get_recent_series, province, strict=True, max_age_s=TARGET_CACHE_TTL_S, info=series_info)
+    _weather_future = _IO_EXECUTOR.submit(get_current_weather, province_meta, at=None)
+    _fire_future = _IO_EXECUTOR.submit(get_fire_hotspots) if USES_FIRE else None
+    # ดึงสภาพอากาศรายชั่วโมง (ใช้แค่กราฟ "พยากรณ์อากาศ" ฝั่ง frontend) ล่วงหน้าตั้งแต่ตรงนี้เลย — ไม่ได้ขึ้นกับ
+    # forecast[] ที่ยังไม่คำนวณเลย (เดิมดึงตอนท้ายสุดใน build_hourly_timeline() ทำให้ต้องรอ 24 horizon เสร็จก่อน)
+    _hourly_weather_future = _IO_EXECUTOR.submit(get_hourly_weather_cached, province_meta)
+
+    df_recent = _target_future.result()
+    _t["target"] = time.perf_counter() - _t_parallel0
     if df_recent is None or df_recent.empty:
         raise DataUnavailableError(f"ไม่มีข้อมูล PM2.5 ล่าสุดของ {province} จาก OpenAQ (สถานีอาจขัดข้อง)")
     df_observed = df_recent  # ข้อมูลจริงล้วน (ก่อนเติมค่า) — ใช้กับ backfill_actuals()/อายุข้อมูลเสมอ ห้ามใช้ df_recent หลัง impute
     imputed_info = None
+    _t0 = time.perf_counter()
     if IMPUTATION_CFG is not None:
         df_recent, imputed_info = impute_target_series(province, df_recent)
+    _t["impute"] = time.perf_counter() - _t0
     imputed = imputed_info is not None
 
     # feature เพื่อนบ้าน + จุดความร้อน — เวลาอ้างอิงเดียวกับที่ใช้คิด lag; คำนวณ/ดึงเฉพาะเมื่อโมเดลที่โหลดใช้ feature นั้นจริง
     reference_time = df_recent["datetime_utc"].max()
     # สภาพอากาศพร้อมทางสำรอง : ค่าที่ดึงไว้ -> สด -> ค่าเก่า <=2 ชม. -> climatology; source != live เก็บไว้ใน data_quality
-    current_weather, weather_info = get_current_weather(province_meta, at=reference_time)
+    _t0 = time.perf_counter()
+    current_weather, weather_info = _weather_future.result()
+    _t["weather"] = time.perf_counter() - _t0
     input_degraded = series_info.get("source") == "stale_cache" or weather_info["source"] == "climatology"
+    _t0 = time.perf_counter()
+    _neighbor_fetch_count = [0]
     if USES_NEIGHBOR:
-        neighbor = compute_neighbor_features(province, reference_time)
+        def _counting_fetch(q):
+            _neighbor_fetch_count[0] += 1
+            return get_recent_series(q)
+        neighbor = compute_neighbor_features(province, reference_time, fetch=_counting_fetch)
     else:
         neighbor = {"status": "not_used", "policy": None, "neighbors_used": [], "pm25_neighbor_avg": np.nan, "nb_trend_12h": np.nan}
+    _t["neighbor"] = time.perf_counter() - _t0
+    _t["neighbor_fetch_n"] = _neighbor_fetch_count[0]
+    _t0 = time.perf_counter()
     if USES_FIRE:
-        hotspots_df, fire_source = get_fire_hotspots()
+        hotspots_df, fire_source = _fire_future.result()
         fire_count = count_fire_hotspots(province_meta, reference_time, hotspots_df)
     else:
         fire_source, fire_count = "not_used", 0
+    _t["fire"] = time.perf_counter() - _t0
+    _t0 = time.perf_counter()
+    hourly_weather_by_hour = _hourly_weather_future.result()
+    _t["hourly_weather_prefetch"] = time.perf_counter() - _t0
     # โมเดลใช้เพื่อนบ้านแต่ไม่มีเพื่อนบ้านสดเลย -> ไม่มีค่า neighbor ให้โมเดล ต้องใช้ naive_fallback ทุก horizon (ห้ามส่ง NaN เข้าโมเดล)
     force_naive = USES_NEIGHBOR and neighbor["status"] != "ok"
 
@@ -1999,12 +2076,20 @@ def build_live_feature_row(province):
         "target_age_hours": target_age_hours, "target_stale": target_stale, "input_degraded": input_degraded,
         "force_naive": force_naive, "current_weather": current_weather, "weather_info": weather_info,
         "series_info": series_info, "fire_source": fire_source, "fire_count": fire_count, "neighbor": neighbor,
+        "hourly_weather_by_hour": hourly_weather_by_hour,
+        "_t": _t,
     }
 
 
 def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
+    _t_req0 = time.perf_counter()
+    # r2/air4thai ไม่ขึ้นกับ build_live_feature_row() เลย (ใช้แค่ province) ยิงพร้อมกันไปตั้งแต่ตอนนี้ ผลจะ
+    # พร้อมใช้ (หรือเกือบพร้อม) ตอนที่โค้ดด้านล่างต้องใช้จริงโดยไม่ต้องรอเพิ่ม
+    _r2_future = _IO_EXECUTOR.submit(fetch_rolling_r2_lookup, province)
+    _air4thai_future = _IO_EXECUTOR.submit(get_air4thai_live, province)
     ctx = build_live_feature_row(province)
     province_meta = ctx["province_meta"]
+    hourly_weather_by_hour = ctx["hourly_weather_by_hour"]
     X_now, latest_time, latest_pm25 = ctx["X_now"], ctx["latest_time"], ctx["latest_pm25"]
     df_observed, imputed_info, imputed = ctx["df_observed"], ctx["imputed_info"], ctx["imputed"]
     target_age_hours, target_stale, input_degraded = ctx["target_age_hours"], ctx["target_stale"], ctx["input_degraded"]
@@ -2012,7 +2097,10 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     series_info, fire_source, fire_count, neighbor = ctx["series_info"], ctx["fire_source"], ctx["fire_count"], ctx["neighbor"]
     latest_time_th = latest_time.tz_convert("Asia/Bangkok")
 
-    r2_lookup = fetch_rolling_r2_lookup(province)
+    _t = ctx["_t"]
+    _t0 = time.perf_counter()
+    r2_lookup = _r2_future.result()
+    _t["r2"] = time.perf_counter() - _t0
 
     forecast = []
     log_rows = []
@@ -2081,7 +2169,9 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     # จุด "ตอนนี้" บนกราฟพยากรณ์รายชั่วโมง) เท่านั้น latest_pm25 ด้านบน (ฐานพยากรณ์ของโมเดล, บวกเข้ากับ
     # residual ทุก horizon) ยังคงมาจาก OpenAQ เหมือนเดิมทุกจุด ไม่แตะ เพราะ Air4Thai อาจสเกลไม่ตรงกับที่โมเดล
     # เทรนมา (ดู docstring get_air4thai_live/fetch_air4thai_live_all)
-    live_now = get_air4thai_live(province)
+    _t0 = time.perf_counter()
+    live_now = _air4thai_future.result()
+    _t["air4thai"] = time.perf_counter() - _t0
     current_pm25 = live_now["pm25"] if live_now is not None else float(latest_pm25)
     # Air4Thai ไม่มีปัญหา period-label ambiguity แบบ OpenAQ เลยไม่ต้อง shift — fallback ไป latest_time_th
     # (OpenAQ) เท่านั้นที่ต้องบวก OPENAQ_DISPLAY_LABEL_SHIFT_H ให้ตรง convention เดียวกับจุดอื่นบนหน้า
@@ -2089,6 +2179,15 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         live_now["datetime_utc"].tz_convert("Asia/Bangkok") if live_now is not None
         else latest_time_th + pd.Timedelta(hours=OPENAQ_DISPLAY_LABEL_SHIFT_H)
     )
+
+    _t0 = time.perf_counter()
+    hourly_timeline_value = build_hourly_timeline(hourly_weather_by_hour, latest_time, df_observed, forecast, live_now=live_now)
+    _t["hourly_timeline"] = time.perf_counter() - _t0
+
+    if DEBUG_TIMING:
+        _t["total"] = time.perf_counter() - _t_req0
+        _parts = " ".join(f"{k}={v:.2f}s" if k != "neighbor_fetch_n" else f"neighbor_fetch_n={v}" for k, v in _t.items())
+        print(f"[timing] {province}: {_parts}")
 
     return {
         "province": {"th": province_meta["province_th"], "en": province_meta["province_en"],
@@ -2104,7 +2203,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             "wind_speed_kmh": round(current_weather["wind_speed_10m"], 1),
         },
         "forecast": forecast,
-        "hourly_timeline": build_hourly_timeline(province_meta, latest_time, df_observed, forecast, live_now=live_now),
+        "hourly_timeline": hourly_timeline_value,
         "best_time": best_time,
         "high_pollution_risk": high_pollution_risk,
         "risk_horizons": risk_horizons,

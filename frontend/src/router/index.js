@@ -22,6 +22,14 @@ const router = createRouter({
       component: () => import('../views/MapView.vue'),
     },
     {
+      // พรีวิวชั่วคราว: Dashboard ที่ฝังการ์ด "ภาพรวมทั้งภาค" (ของเดิมจาก /map) เข้ามาเป็นส่วนหนึ่งของหน้า
+      // ไม่ใช่แท็บแยก — ยังไม่ผูกกับ nav ไหนทั้งนั้น เข้าถึงได้แค่พิมพ์ URL ตรงๆ ให้ดูของจริงก่อนตัดสินใจ
+      // ย้ายเข้า "/" ถาวร (ลบ route นี้ทิ้งถ้าตัดสินใจไม่เอา หรือแทนที่ ForecastView ถ้าตัดสินใจเอา)
+      path: '/dashboard-map-preview',
+      name: 'dashboard-map-preview',
+      component: () => import('../views/DashboardMapPreview.vue'),
+    },
+    {
       path: '/notifications',
       name: 'notifications',
       component: () => import('../views/NotificationsView.vue'),

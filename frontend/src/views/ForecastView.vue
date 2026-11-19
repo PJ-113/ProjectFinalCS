@@ -1,13 +1,13 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import {
-  Laugh, Smile, Meh, Frown, Angry, Thermometer, Droplet, Wind,
+  Laugh, Smile, Meh, Frown, Angry, ThermometerSun, Droplets, Wind,
   MapPin, ChevronDown, TriangleAlert, Info, Sparkles,
   Sun, CloudSun, Cloud, CloudFog, CloudRain, CloudSnow, CloudLightning,
-  TrendingUp, TrendingDown,
+  TrendingUp, TrendingDown, Footprints, Bike, Flame,
 } from "@lucide/vue";
 import { fetchForecast, fetchCurrentPm25, buildWarningMessage, formatCardTime } from "../notifications";
-import { riskScoreState, setActivity, ACTIVITY_LEVELS, computeRiskScore, riskScoreAdvice } from "../riskScore";
+import { riskScoreState, setActivity, ACTIVITY_LEVELS, ACTIVITY_EXAMPLES, computeRiskScore, riskScoreAdvice } from "../riskScore";
 import { provinceState, selectProvince } from "../provinces";
 import { statusClass, severityVar, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
 import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
@@ -30,16 +30,28 @@ const SAMPLE_BEST_TIMES = [
 // ค่าตัวอย่าง คำนวณจากสูตรจริงใน app.py (compute_risk_score())
 const SAMPLE_RISK_TABLE = {
   เบา: {
-    score: 45, level: "ปานกลาง", advice: "ความเสี่ยงปานกลาง ทำได้แต่ควรสังเกตอาการตนเอง",
-    times: [{ time: "05:00", display_time: "05:00", riskScore: 13 }, { time: "04:00", display_time: "04:00", riskScore: 17 }, { time: "06:00", display_time: "06:00", riskScore: 22 }],
+    score: 45, level: "ปานกลาง", advice: "ทำกิจกรรมได้แต่ควรสังเกตอาการตนเอง",
+    times: [
+      { time: "05:00", display_time: "05:00", riskScore: 13, riskLevel: "ดีมาก" },
+      { time: "04:00", display_time: "04:00", riskScore: 17, riskLevel: "ดีมาก" },
+      { time: "06:00", display_time: "06:00", riskScore: 22, riskLevel: "ดี" },
+    ],
   },
   ปานกลาง: {
-    score: 53, level: "ปานกลาง", advice: "ความเสี่ยงปานกลาง ทำได้แต่ควรสังเกตอาการตนเอง",
-    times: [{ time: "05:00", display_time: "05:00", riskScore: 20 }, { time: "04:00", display_time: "04:00", riskScore: 26 }, { time: "06:00", display_time: "06:00", riskScore: 32 }],
+    score: 53, level: "ปานกลาง", advice: "ทำกิจกรรมได้แต่ควรสังเกตอาการตนเอง",
+    times: [
+      { time: "05:00", display_time: "05:00", riskScore: 20, riskLevel: "ดีมาก" },
+      { time: "04:00", display_time: "04:00", riskScore: 26, riskLevel: "ดี" },
+      { time: "06:00", display_time: "06:00", riskScore: 32, riskLevel: "ดี" },
+    ],
   },
   หนัก: {
-    score: 60, level: "เริ่มมีผลกระทบต่อสุขภาพ", advice: "ความเสี่ยงเริ่มสูง ควรลดความหนักหรือระยะเวลาของกิจกรรมนี้",
-    times: [{ time: "05:00", display_time: "05:00", riskScore: 30 }, { time: "04:00", display_time: "04:00", riskScore: 36 }, { time: "06:00", display_time: "06:00", riskScore: 42 }],
+    score: 60, level: "เริ่มมีผลกระทบต่อสุขภาพ", advice: "ควรลดความหนักของกิจกรรมลงกว่าปกติ",
+    times: [
+      { time: "05:00", display_time: "05:00", riskScore: 30, riskLevel: "ดี" },
+      { time: "04:00", display_time: "04:00", riskScore: 36, riskLevel: "ดี" },
+      { time: "06:00", display_time: "06:00", riskScore: 42, riskLevel: "ปานกลาง" },
+    ],
   },
 };
 const SAMPLE_DAILY = {
@@ -93,6 +105,12 @@ function moodIconFor(status) {
 
 function barColor(pm25) {
   return `var(${severityVar(pm25)})`;
+}
+
+function activityIconFor(level) {
+  if (level === "เบา") return Footprints;
+  if (level === "หนัก") return Flame;
+  return Bike;
 }
 
 // ไอคอนสภาพอากาศจากรหัส WMO ที่ Open-Meteo ส่งมา (hourly_timeline[].weather_code) — ใช้กับการ์ดรายชั่วโมง
@@ -345,6 +363,9 @@ const currentRiskAdvice = computed(() =>
     ? (SAMPLE_RISK_TABLE[riskScoreState.activity] ?? SAMPLE_RISK_TABLE["ปานกลาง"]).advice
     : riskScoreAdvice(currentRiskScore.value.level)
 );
+// ตำแหน่ง segment ที่ active บนเกจ์ 5 ระดับ (คะแนน breakpoint 0/20/40/60/80/100 ตรงกับขอบ PM25_LEVELS
+// พอดี เพราะ RISK_SCORE_BREAKPOINTS ใน app.py ตั้งใจแมปตามขอบเดียวกัน — ดู CHANGELOG ส่วนเกจ์ความเสี่ยง)
+const riskLevelIndex = computed(() => PM25_LEVELS.findIndex((l) => l.status === currentRiskScore.value.level));
 
 // เหมือน topBestTimes แต่ personalize ตามกิจกรรมที่เลือก (sort ด้วยคะแนนความเสี่ยงแทน pm25 ดิบ)
 const bestActivityTimes = computed(() => {
@@ -353,7 +374,10 @@ const bestActivityTimes = computed(() => {
   const activeHours = forecast.value.filter((f) => f.display_hour_thai >= 6 && f.display_hour_thai <= 20);
   const pool = activeHours.length > 0 ? activeHours : forecast.value;
   return [...pool]
-    .map((f) => ({ ...f, riskScore: computeRiskScore(f.pm25, riskScoreConfig.value, riskScoreState.activity).score }))
+    .map((f) => {
+      const r = computeRiskScore(f.pm25, riskScoreConfig.value, riskScoreState.activity);
+      return { ...f, riskScore: r.score, riskLevel: r.level };
+    })
     .sort((a, b) => a.riskScore - b.riskScore)
     .slice(0, 3);
 });
@@ -421,6 +445,10 @@ async function loadForecast() {
     dailySummary.value = data.daily_summary || {};
     forecast.value = data.forecast;
     hourlyTimeline.value = data.hourly_timeline || [];
+    // ค่าเริ่มต้นเลือกจุด "ตอนนี้" ไว้ก่อนเลย (แทนที่จะปล่อยว่าง) กันการ์ดกราฟมีช่องว่างเปล่าๆ รอผู้ใช้กดเลือก
+    // ชั่วโมงเองก่อนถึงจะมีเนื้อหา — ผู้ใช้ยังกดเลือกชั่วโมงอื่นทับได้ตามปกติ
+    const nowIdx = hourlyTimeline.value.findIndex((p) => p.is_now);
+    selectedIdx.value = nowIdx >= 0 ? nowIdx : null;
     highPollutionRisk.value = data.high_pollution_risk;
     riskGroup.value = data.risk_group || "ทั่วไป";
     fallbackHorizons.value = data.fallback_triggered_horizons || [];
@@ -428,13 +456,22 @@ async function loadForecast() {
     provinceInfo.value = data.province || { th: "", en: "", is_zero_shot: false };
     riskScoreConfig.value = data.risk_score_config || null;
     state.value = "content";
-    await nextTick();
-    drawWeatherChart(hourlyTimeline.value);
-    scrollToNow();
   } catch (err) {
     errorMessage.value = err.dataUnavailable ? err.message : "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
     state.value = "error";
     console.error("โหลดข้อมูลพยากรณ์ล้มเหลว:", err);
+  }
+}
+
+// วาดกราฟ/เลื่อนไปจุด "ตอนนี้" ได้ก็ต่อเมื่อ DOM ของการ์ดเนื้อหาจริงมีอยู่แล้วเท่านั้น (chartEl/weatherScrollEl
+// เป็น ref ของ element ข้างใน .layout) เดิมเรียกหลัง nextTick() ทันทีที่ state เปลี่ยนเป็น "content" ใช้ได้
+// เพราะ DOM แปะเข้าไปใน tick เดียวกัน แต่ตอนนี้ .layout อยู่ใน <Transition mode="out-in"> ที่รอให้
+// skeleton/error เดิม leave เสร็จก่อนค่อย mount เนื้อหาจริง (ช้ากว่า 1 tick) nextTick() เฉยๆ จึงมาเร็วเกินไป
+// (chartEl ยังเป็น null) ต้องรอ event "after-enter" ของ Transition แทนถึงจะชัวร์ว่า DOM มาแล้วจริง
+function onContentEntered() {
+  if (state.value === "content") {
+    drawWeatherChart(hourlyTimeline.value);
+    scrollToNow();
   }
 }
 
@@ -484,21 +521,45 @@ defineExpose({ loadForecast });
         <span class="page-title">พยากรณ์ PM2.5</span>
       </div>
 
-      <!-- Loading skeleton -->
-      <div v-if="state === 'loading'" class="stack">
-        <div class="skeleton skeleton-hero"></div>
-        <div class="card"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line" style="width: 60%"></div></div>
-        <div class="card"><div class="skeleton skeleton-chart"></div></div>
+      <Transition name="fade" mode="out-in" @after-enter="onContentEntered">
+      <!-- Loading skeleton — เลียนโครงจริงของการ์ดแต่ละใบ (ไม่ใช่กรอบเปล่าทั่วไป) กันหน้ากระโดดตอนข้อมูลจริงโหลดมา -->
+      <div v-if="state === 'loading'" key="loading" class="stack">
+        <div class="skeleton-card skeleton-hero-card">
+          <div class="skeleton skeleton-pill"></div>
+          <div class="skeleton skeleton-bignum"></div>
+          <div class="skeleton skeleton-chip"></div>
+          <div class="skeleton skeleton-scale"></div>
+          <div class="skeleton-tiles">
+            <div class="skeleton skeleton-tile"></div>
+            <div class="skeleton skeleton-tile"></div>
+            <div class="skeleton skeleton-tile"></div>
+          </div>
+        </div>
+        <div class="card skeleton-card">
+          <div class="skeleton skeleton-line" style="width: 180px"></div>
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+          <div class="skeleton skeleton-row"></div>
+        </div>
+        <div class="card skeleton-card">
+          <div class="skeleton skeleton-line" style="width: 200px"></div>
+          <div class="skeleton skeleton-chart"></div>
+        </div>
+        <div class="card skeleton-card">
+          <div class="skeleton skeleton-line" style="width: 220px"></div>
+          <div class="skeleton skeleton-segmented"></div>
+          <div class="skeleton skeleton-gauge"></div>
+        </div>
       </div>
 
       <!-- Error state -->
-      <div v-else-if="state === 'error'" class="card error-box">
+      <div v-else-if="state === 'error'" key="error" class="card error-box">
         <p>{{ errorMessage }}</p>
         <button type="button" class="retry-btn" @click="loadForecast">ลองอีกครั้ง</button>
       </div>
 
       <!-- Content -->
-      <div v-else class="layout">
+      <div v-else key="content" class="layout">
         <div class="col-primary">
           <div v-if="highPollutionRisk" class="banner banner-warn" role="alert">
             <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
@@ -577,19 +638,19 @@ defineExpose({ loadForecast });
 
             <div v-if="currentWeather.temp_c != null" class="stat-tiles">
               <div class="stat-tile">
-                <Thermometer :size="20" :stroke-width="2" aria-hidden="true" />
+                <ThermometerSun :size="20" :stroke-width="2" aria-hidden="true" />
                 <div class="stat-tile-value">{{ currentWeather.temp_c }}°C</div>
                 <div class="stat-tile-label">อุณหภูมิ</div>
               </div>
               <div class="stat-tile">
-                <Droplet :size="20" :stroke-width="2" aria-hidden="true" />
+                <Droplets :size="20" :stroke-width="2" aria-hidden="true" />
                 <div class="stat-tile-value">{{ currentWeather.humidity_pct }}%</div>
                 <div class="stat-tile-label">ความชื้น</div>
               </div>
               <div class="stat-tile">
                 <Wind :size="20" :stroke-width="2" aria-hidden="true" />
-                <div class="stat-tile-value">{{ currentWeather.wind_speed_kmh }}</div>
-                <div class="stat-tile-label">กม./ชม. · ลม</div>
+                <div class="stat-tile-value">{{ currentWeather.wind_speed_kmh }} กม./ชม.</div>
+                <div class="stat-tile-label">ลม</div>
               </div>
             </div>
           </section>
@@ -607,6 +668,19 @@ defineExpose({ loadForecast });
                 <span class="best-unit">µg/m³</span>
               </span>
             </div>
+          </section>
+
+          <!-- สรุปวันนี้ -->
+          <section v-if="SHOW_EXTRA_CARDS" class="card">
+            <div class="summary-eyebrow">
+              <Sparkles :size="18" :stroke-width="2" aria-hidden="true" />
+              <span>สรุปวันนี้ · อัปเดต 06:00 น.</span>
+            </div>
+            <div class="summary-value">
+              {{ dailyAvgDisplay }}<span class="summary-unit"> µg/m³ ค่าเฉลี่ยพยากรณ์ 24 ชม.</span>
+            </div>
+            <p class="summary-text">{{ dailyTextDisplay }}</p>
+            <p class="disclaimer-text">คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์</p>
           </section>
         </div>
 
@@ -722,13 +796,13 @@ defineExpose({ loadForecast });
                   </template>
                 </div>
               </template>
-              <div v-else class="bar-detail-empty">แตะการ์ดเพื่อดูรายละเอียดของชั่วโมงนั้น</div>
+              <div v-else class="bar-detail-empty">แตะชั่วโมงที่ต้องการ เพื่อดูรายละเอียด</div>
             </div>
           </section>
 
           <!-- ความเสี่ยงตามกิจกรรมของคุณ -->
           <section v-if="SHOW_EXTRA_CARDS" class="card">
-            <h2>ความเสี่ยงตามกิจกรรมของคุณ</h2>
+            <h2>ความเสี่ยงจากฝุ่นตามกิจกรรม</h2>
             <p class="card-caption">เลือกความหนักของกิจกรรมกลางแจ้งที่วางแผนจะทำ</p>
             <div class="segmented" role="group" aria-label="ความหนักของกิจกรรม">
               <button
@@ -739,48 +813,48 @@ defineExpose({ loadForecast });
                 :class="{ active: riskScoreState.activity === level }"
                 :aria-pressed="riskScoreState.activity === level"
                 @click="setActivity(level)"
-              >{{ level }}</button>
-            </div>
-            <div class="risk-row">
-              <span class="risk-score">
-                <span class="risk-score-value">{{ currentRiskScore.score ?? "-" }}</span>
-                <span class="risk-score-unit">/100</span>
-              </span>
-              <span class="risk-tag">
-                <span class="risk-tag-label">ระดับความเสี่ยงของคุณ</span>
-                <span class="risk-chip" :class="statusClass(currentRiskScore.level)">
-                  <span class="dot"></span>{{ currentRiskScore.level || "-" }}
+              >
+                <component :is="activityIconFor(level)" :size="20" :stroke-width="2" aria-hidden="true" />
+                <span class="segmented-label">{{ level }}</span>
+                <span class="segmented-examples">
+                  <span v-for="ex in ACTIVITY_EXAMPLES[level]" :key="ex">● {{ ex }}</span>
                 </span>
-              </span>
+              </button>
             </div>
+            <div class="level-chip-lg" :class="statusClass(currentRiskScore.level)">
+              <span class="level-icon-badge">
+                <component :is="moodIconFor(currentRiskScore.level)" :size="24" :stroke-width="2" class="level-icon-lg" />
+              </span>
+              <div>
+                <div class="level-name-lg">{{ currentRiskScore.level || "-" }}</div>
+                <div class="level-score-sm">{{ currentRiskScore.score ?? "-" }} จาก 100 คะแนน</div>
+              </div>
+            </div>
+            <div class="gauge-track" aria-hidden="true">
+              <span
+                v-for="(l, i) in PM25_LEVELS"
+                :key="l.status"
+                class="gauge-seg"
+                :class="{ 'gauge-seg-active': i === riskLevelIndex }"
+                :style="{ background: `var(${l.cssVar})` }"
+              ></span>
+              <span class="gauge-marker" :style="{ left: (currentRiskScore.score ?? 0) + '%' }"></span>
+            </div>
+            <div class="gauge-ends"><span>ปลอดภัย</span><span>เสี่ยงสูง</span></div>
             <p class="risk-advice">{{ currentRiskAdvice }}</p>
-            <p class="disclaimer-text">คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์</p>
             <template v-if="bestActivityTimes.length">
               <div class="risk-sublabel">ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด</div>
               <ol class="best-list">
-                <li v-for="(point, i) in bestActivityTimes" :key="point.display_time" class="best-row">
-                  <span class="rank-badge" :class="`rank-${i + 1}`">{{ i + 1 }}</span>
+                <li v-for="point in bestActivityTimes" :key="point.display_time" class="best-row">
+                  <span class="best-dot" :class="statusClass(point.riskLevel)"></span>
                   <span class="best-time">{{ point.display_time }} น.</span>
-                  <span class="best-pm">{{ point.riskScore }} <span class="best-unit">คะแนน</span></span>
                 </li>
               </ol>
             </template>
           </section>
-
-          <!-- สรุปวันนี้ -->
-          <section v-if="SHOW_EXTRA_CARDS" class="card">
-            <div class="summary-eyebrow">
-              <Sparkles :size="18" :stroke-width="2" aria-hidden="true" />
-              <span>สรุปวันนี้ · อัปเดต 06:00 น.</span>
-            </div>
-            <div class="summary-value">
-              {{ dailyAvgDisplay }}<span class="summary-unit"> µg/m³ ค่าเฉลี่ยพยากรณ์ 24 ชม.</span>
-            </div>
-            <p class="summary-text">{{ dailyTextDisplay }}</p>
-            <p class="disclaimer-text">คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์</p>
-          </section>
         </div>
       </div>
+      </Transition>
     </div>
 
     <ProvincePickerSheet
@@ -909,8 +983,8 @@ defineExpose({ loadForecast });
   transition: background 0.4s ease, color 0.4s ease;
 }
 .hero-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
-.hero-label { font-weight: 600; }
-.hero-updated { opacity: 0.85; }
+.hero-label { font-weight: 600; color: var(--ink); }
+.hero-updated { color: var(--muted); }
 .estimate-tag {
   margin-left: 8px;
   padding: 2px 10px;
@@ -959,10 +1033,10 @@ defineExpose({ loadForecast });
   border: 3px solid var(--hero-ink);
   transition: left 0.5s ease;
 }
-.scale-ends { display: flex; justify-content: space-between; font-size: 0.75rem; opacity: 0.85; margin-top: 4px; }
+.scale-ends { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
 
-.hero-advice { margin: 0; font-size: 0.95rem; line-height: 1.55; }
-.hero-note { margin: -6px 0 0; font-size: 0.75rem; opacity: 0.75; }
+.hero-advice { margin: 0; font-size: 0.95rem; line-height: 1.55; color: var(--ink); }
+.hero-note { margin: -6px 0 0; font-size: 0.75rem; color: var(--muted); }
 
 .stat-tiles { display: flex; gap: 8px; padding-top: 4px; }
 .stat-tile {
@@ -973,9 +1047,10 @@ defineExpose({ loadForecast });
   padding: 12px;
   border-radius: 16px;
   background: var(--chip-bg);
+  color: var(--ink);
 }
-.stat-tile-value { font-size: 1.1rem; font-weight: 600; }
-.stat-tile-label { font-size: 0.75rem; opacity: 0.85; }
+.stat-tile-value { font-size: 1.1rem; font-weight: 600; color: var(--ink); }
+.stat-tile-label { font-size: 0.75rem; color: var(--muted); }
 
 /* การ์ดทั่วไป */
 .card {
@@ -999,20 +1074,12 @@ defineExpose({ loadForecast });
   padding: 12px 0;
   border-top: 1px solid var(--line);
 }
-.rank-badge {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.85rem;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-.rank-1 { background: #e9b949; color: #3b2a00; }
-.rank-2 { background: #c9cdd3; color: #22262c; }
-.rank-3 { background: #d9a377; color: #3b1f08; }
+.best-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.best-dot.status-excellent { background: var(--excellent); }
+.best-dot.status-good { background: var(--good); }
+.best-dot.status-moderate { background: var(--moderate); }
+.best-dot.status-unhealthy { background: var(--unhealthy); }
+.best-dot.status-bad { background: var(--bad); }
 .best-time { flex: 1; font-size: 1.05rem; font-weight: 600; }
 .best-pm { display: inline-flex; align-items: center; font-size: 0.95rem; }
 .best-unit { color: var(--muted); font-size: 0.8rem; margin-left: 4px; }
@@ -1136,51 +1203,89 @@ defineExpose({ loadForecast });
 .shap-reveal-btn :deep(.shap-reveal-icon-open) { transform: rotate(180deg); }
 .shap-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ความเสี่ยงส่วนบุคคล */
+/* ความเสี่ยงส่วนบุคคล — ปุ่มเลือกความหนักกิจกรรม มีไอคอน + ชื่อระดับ + ตัวอย่างกิจกรรม 2 อย่าง (ไม่ใช่แค่ชื่อ
+   ระดับเฉยๆ เพราะ "เบา/ปานกลาง/หนัก" กำกวม ไม่บอกว่าหมายถึงกิจกรรมอะไรบ้าง) */
 .segmented {
   display: flex;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 16px;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 18px;
   background: var(--track);
   margin-bottom: 16px;
 }
 .segmented-btn {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   min-height: 44px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 14px;
+  padding: 14px 6px 12px;
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 0.95rem;
-  font-weight: 600;
   cursor: pointer;
 }
 .segmented-btn.active { background: var(--ink); color: var(--card); }
 .segmented-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.risk-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.risk-score { display: inline-flex; align-items: baseline; gap: 4px; }
-.risk-score-value { font-family: var(--font-display); font-weight: 600; font-size: 2.75rem; line-height: 1; }
-.risk-score-unit { color: var(--muted); font-size: 0.95rem; }
-.risk-tag { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.risk-tag-label { font-size: 0.7rem; font-weight: 600; color: var(--muted); }
-.risk-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 14px;
-  border-radius: 20px;
-  background: var(--track);
-  font-size: 0.9rem;
-  font-weight: 600;
-  white-space: nowrap;
+.segmented-label { font-size: 0.92rem; font-weight: 600; }
+.segmented-examples { display: flex; flex-direction: column; gap: 3px; align-items: center; }
+.segmented-examples span { font-size: 0.7rem; line-height: 1.2; white-space: nowrap; }
+/* ปุ่มที่ไม่ได้เลือก: ไอคอน/ชื่อระดับ (ตัวหลัก) เข้มกว่าปกติ เป็น var(--ink) ทั้งสองธีม (เดิมสืบทอด
+   var(--muted) จาก .segmented-btn ดูจางไปกับพื้น var(--track)) ส่วนตัวอย่างกิจกรรม (รอง) ยังคง var(--muted)
+   เดิมต่อไป (สืบทอดจาก .segmented-btn ตามปกติ ไม่ต้องตั้งซ้ำ) */
+.segmented-btn:not(.active) .segmented-label,
+.segmented-btn:not(.active) svg {
+  color: var(--ink);
 }
-.risk-chip .dot { margin-right: 8px; }
-.risk-chip.status-excellent .dot { background: var(--excellent); }
-.risk-chip.status-good .dot { background: var(--good); }
-.risk-chip.status-moderate .dot { background: var(--moderate); }
-.risk-chip.status-unhealthy .dot { background: var(--unhealthy); }
-.risk-chip.status-bad .dot { background: var(--bad); }
+/* เกจ์ความเสี่ยงกิจกรรม — รูปแบบเดียวกับ .level-chip/.scale ของการ์ด "PM2.5 ตอนนี้" (ด้านบน) ตั้งใจให้
+   ผู้ใช้จำภาษาภาพได้ทันทีข้ามสองการ์ด คะแนน breakpoint ของ risk score (0/20/40/60/80/100) แมปตรงกับขอบ
+   PM25_LEVELS ทั้ง 5 ช่วงพอดี (ดูคอมเมนต์ที่ riskLevelIndex) จึงใช้ currentRiskScore.score เป็น % ตำแหน่ง
+   บนแถบได้ตรงๆ โดยไม่ต้องคำนวณสัดส่วนแบบ scaleMarkerPct() */
+.level-chip-lg {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: var(--track);
+  margin-bottom: 4px;
+}
+.level-icon-badge {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.status-excellent .level-icon-lg { color: var(--excellent); }
+.status-good .level-icon-lg { color: var(--good); }
+.status-moderate .level-icon-lg { color: var(--moderate); }
+.status-unhealthy .level-icon-lg { color: var(--unhealthy); }
+.status-bad .level-icon-lg { color: var(--bad); }
+.level-name-lg { font-size: 1.05rem; font-weight: 600; line-height: 1.3; }
+.level-score-sm { font-size: 0.8rem; color: var(--muted); margin-top: 1px; }
+.gauge-track { position: relative; display: flex; gap: 4px; padding: 8px 0; }
+.gauge-seg { flex: 1; height: 8px; border-radius: 4px; opacity: 0.35; }
+.gauge-seg-active { opacity: 1; }
+.gauge-marker {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 3px solid var(--ink);
+  transform: translateY(-50%);
+  transition: left 0.5s ease;
+}
+.gauge-ends { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); margin-top: 5px; }
 .risk-advice { margin: 12px 0 0; font-size: 0.92rem; line-height: 1.55; color: var(--muted); }
 .disclaimer-text { margin: 8px 0 0; font-size: 0.78rem; line-height: 1.5; color: var(--muted); opacity: 0.85; }
 .risk-sublabel { margin: 16px 0 4px; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
@@ -1191,7 +1296,8 @@ defineExpose({ loadForecast });
 .summary-unit { font-family: var(--font-sans); font-weight: 400; font-size: 0.85rem; color: var(--muted); }
 .summary-text { margin: 0; font-size: 0.95rem; line-height: 1.6; }
 
-/* loading skeleton */
+/* loading skeleton — เลียนโครงจริงของแต่ละการ์ด (ไม่ใช่กรอบเปล่าทั่วไป) กันหน้ากระโดดตอนสลับจากโครงร่างเป็น
+   เนื้อหาจริง ความสูงรวมควรใกล้เคียงของจริงมากที่สุด */
 .skeleton {
   background: linear-gradient(90deg, var(--line) 25%, transparent 37%, var(--line) 63%);
   background-size: 400% 100%;
@@ -1202,9 +1308,30 @@ defineExpose({ loadForecast });
   0% { background-position: 100% 50%; }
   100% { background-position: 0 50%; }
 }
-.skeleton-hero { height: 340px; border-radius: 32px; }
+.skeleton-card { display: flex; flex-direction: column; gap: 10px; }
+.skeleton-hero-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 32px;
+  padding: 24px 22px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.skeleton-pill { width: 140px; height: 14px; }
+.skeleton-bignum { width: 160px; height: 64px; border-radius: 14px; }
+.skeleton-chip { width: 110px; height: 36px; border-radius: 24px; }
+.skeleton-scale { width: 100%; height: 10px; border-radius: 6px; }
+.skeleton-tiles { display: flex; gap: 8px; }
+.skeleton-tile { flex: 1; height: 64px; border-radius: 16px; }
 .skeleton-line { width: 220px; height: 16px; margin: 6px 0; }
+.skeleton-row { width: 100%; height: 40px; border-radius: 12px; margin: 8px 0; }
 .skeleton-chart { width: 100%; height: 200px; }
+.skeleton-segmented { width: 100%; height: 90px; border-radius: 18px; }
+.skeleton-gauge { width: 100%; height: 50px; border-radius: 16px; margin-top: 8px; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 /* error state */
 .error-box { text-align: center; padding: 32px 20px; }
@@ -1226,5 +1353,6 @@ defineExpose({ loadForecast });
 @media (prefers-reduced-motion: reduce) {
   .hero, .scale-marker, .bar, .bar-range-cap { transition: none; }
   .skeleton { animation: none; }
+  .fade-enter-active, .fade-leave-active { transition: none; }
 }
 </style>
