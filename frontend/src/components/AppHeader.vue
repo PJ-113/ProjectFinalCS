@@ -20,8 +20,8 @@ import logoIcon from '../assets/logo-icon.svg'
 const SHOW_EXTRA_FEATURES = true
 // เปิด/ปิดลิงก์หน้าเปรียบเทียบ (/compare) — สิทธิ์เข้าหน้าจริงบังคับโดย route guard ใน router/index.js
 const SHOW_COMPARE = true
-// เปิด/ปิดลิงก์หน้าแผนที่ภาพรวม (/map)
-const SHOW_MAP = true
+// เปิด/ปิดลิงก์หน้าแผนที่ภาพรวม (/map) — ปิดไว้: รวมเข้า Dashboard ที่ "/" แล้ว (DashboardMap.vue)
+const SHOW_MAP = false
 
 const notifOpen = ref(false)
 const notifWrapperEl = ref(null)

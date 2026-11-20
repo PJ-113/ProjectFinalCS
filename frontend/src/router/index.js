@@ -1,14 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import ForecastView from '../views/ForecastView.vue'
+import DashboardMap from '../views/DashboardMap.vue'
 import { authState, fetchCurrentUser, isLoggedIn, isAdmin } from '../auth'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
+      // ตัดสินใจรวม Dashboard (เดิม ForecastView) กับ Maps (เดิม MapView) เข้าเป็นหน้าเดียวแล้ว
+      // DashboardMap.vue คือหน้าที่รวมทั้งสอง ย้ายขึ้นมาเป็นหน้าแรก (/) แทน ForecastView
       path: '/',
       name: 'forecast',
-      component: ForecastView,
+      component: DashboardMap,
     },
     {
       path: '/compare',
@@ -17,17 +19,16 @@ const router = createRouter({
       meta: { requiresAdmin: true },
     },
     {
+      // หน้าแผนที่แยกเดิม — ไม่อยู่ใน nav แล้วหลังรวมเข้า "/" เก็บ route/ไฟล์ไว้ไม่ลบ เผื่อย้อนกลับ
       path: '/map',
       name: 'map',
       component: () => import('../views/MapView.vue'),
     },
     {
-      // พรีวิวชั่วคราว: Dashboard ที่ฝังการ์ด "ภาพรวมทั้งภาค" (ของเดิมจาก /map) เข้ามาเป็นส่วนหนึ่งของหน้า
-      // ไม่ใช่แท็บแยก — ยังไม่ผูกกับ nav ไหนทั้งนั้น เข้าถึงได้แค่พิมพ์ URL ตรงๆ ให้ดูของจริงก่อนตัดสินใจ
-      // ย้ายเข้า "/" ถาวร (ลบ route นี้ทิ้งถ้าตัดสินใจไม่เอา หรือแทนที่ ForecastView ถ้าตัดสินใจเอา)
-      path: '/dashboard-map-preview',
-      name: 'dashboard-map-preview',
-      component: () => import('../views/DashboardMapPreview.vue'),
+      // หน้า Dashboard แยกเดิม (ก่อนรวมกับแผนที่) — ไม่อยู่ใน nav แล้ว เก็บ route/ไฟล์ไว้ไม่ลบ เผื่อย้อนกลับ
+      path: '/dashboard-old',
+      name: 'dashboard-old',
+      component: () => import('../views/ForecastView.vue'),
     },
     {
       path: '/notifications',

@@ -43,6 +43,11 @@ Thumbs.db
 CLAUDE.md
 CHANGELOG.md
 
+# ===== Impeccable design-tool context (PRODUCT.md/DESIGN.md + config) — local only =====
+PRODUCT.md
+DESIGN.md
+.impeccable/
+
 # ===== ไฟล์ใหญ่/ชั่วคราวที่ไม่ขึ้น git (ดู README.md หัวข้อ "ไฟล์โมเดลที่ไม่ได้อยู่ใน git") =====
 # โมเดล pooled ใหม่ (เกิน 100MB ต่อไฟล์) — ไฟล์เก่าที่ track อยู่แล้วไม่กระทบ
 models/*multiprovince*.pkl

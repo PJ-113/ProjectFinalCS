@@ -16,9 +16,8 @@ import "leaflet/dist/leaflet.css";
 import isaanMaskGeoJson from "../assets/isaan_provinces_mask.json";
 import isaanBoundaryGeoJson from "../assets/isaan_provinces_boundary.json";
 
-// ===== พรีวิว: การ์ด "ภาพรวมทั้งภาค" (ย้ายมาจาก MapView.vue /map ตามดีไซน์ "ฝังเป็นส่วนหนึ่งของหน้า
-// ไม่ใช่แท็บ") — นี่เป็นไฟล์พรีวิวแยกต่างหาก (route /dashboard-map-preview) ยังไม่ได้แทนที่ ForecastView.vue
-// ตัวจริง ให้ดูของจริงก่อนตัดสินใจย้ายเข้า "/" ถาวร
+// ===== การ์ด "ภาพรวมทั้งภาค" (ย้ายมาจาก MapView.vue /map ตามดีไซน์ "ฝังเป็นส่วนหนึ่งของหน้า ไม่ใช่แท็บ")
+// — หน้านี้คือ "/" ตัวจริงแล้ว (แทนที่ ForecastView.vue เดิม) ไม่ใช่พรีวิวอีกต่อไป
 const overviewState = ref("loading"); // "loading" | "error" | "content"
 const overviewError = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
 const mapEl = ref(null);
@@ -737,7 +736,7 @@ defineExpose({ loadForecast });
         <span class="page-title">พยากรณ์ PM2.5</span>
       </div>
 
-      <!-- ภาพรวมทั้งภาค (พรีวิว: ย้ายมาจาก MapView.vue /map — โหลด/แสดงผลอิสระจากการ์ดพยากรณ์ด้านล่าง)
+      <!-- ภาพรวมทั้งภาค (ย้ายมาจาก MapView.vue /map — โหลด/แสดงผลอิสระจากการ์ดพยากรณ์ด้านล่าง)
            ตัดหัวข้อ/คำอธิบายออกตามคำขอ เหลือแต่ตัวแผนที่ + legend ปุ่ม "ดูภาพรวมทั้งภาค" ย้ายไปลอยทับแผนที่
            แทน (ไม่มีที่ซ่อนเหมือนเดิมเพราะ card-head ถูกตัดออกไปแล้ว) -->
       <section class="card map-overview-card">
@@ -1594,7 +1593,7 @@ defineExpose({ loadForecast });
   .fade-enter-active, .fade-leave-active { transition: none; }
 }
 
-/* ===== ภาพรวมทั้งภาค (พรีวิว) — ย้าย CSS ของแผนที่มาจาก MapView.vue ปรับให้ใช้โทเคนของหน้านี้ ===== */
+/* ===== ภาพรวมทั้งภาค — ย้าย CSS ของแผนที่มาจาก MapView.vue ปรับให้ใช้โทเคนของหน้านี้ ===== */
 .map-overview-card { padding-bottom: 14px; margin-bottom: 16px; }
 .map-back-btn {
   border: 0; background: var(--track); color: var(--ink); font-family: inherit; font-weight: 600;

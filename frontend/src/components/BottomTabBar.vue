@@ -1,14 +1,14 @@
 <script setup>
 import { computed } from 'vue'
-import { House, Map as MapIcon, ChartColumn, User, LogIn } from '@lucide/vue'
+import { House, ChartColumn, User, LogIn } from '@lucide/vue'
 import { authState, isAdmin } from '../auth'
 
 // แถบนำทางล่างสำหรับมือถือ (≤720px) แสดงผลเฉพาะจอแคบด้วย CSS เดสก์ท็อปใช้ top nav ใน AppHeader
 // "เปรียบเทียบ" เป็น admin-only (route guard อยู่ที่ router/index.js)
+// แท็บ "แผนที่" ถูกเอาออก — รวมเข้าเป็นส่วนหนึ่งของหน้า "/" แล้ว (DashboardMap.vue)
 const tabs = computed(() => {
   const list = [
     { to: '/', label: 'พยากรณ์', icon: House },
-    { to: '/map', label: 'แผนที่', icon: MapIcon },
   ]
   if (isAdmin()) list.push({ to: '/compare', label: 'เปรียบเทียบ', icon: ChartColumn })
   list.push(

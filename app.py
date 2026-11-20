@@ -196,6 +196,43 @@ def find_best_time(forecast):
     return min(active_hours or forecast, key=lambda x: x["pm25"])
 
 
+# ช่วงเวลาของวัน ใช้ display_hour_thai (เวลาที่ "ควรโชว์ผู้ใช้" ตาม OPENAQ_DISPLAY_LABEL_SHIFT_H ไม่ใช่ hour_thai
+# ดิบ) — ใช้สำหรับสรุปแนวโน้มรายวันเท่านั้น ไม่เกี่ยวกับ ACTIVE_HOURS_START_TH/END_TH ด้านบนซึ่งเป็นคนละ convention
+# (ช่วงเวลาที่ "ควรออกไปทำกิจกรรม" ไม่ใช่ช่วงเวลาของวัน)
+DAILY_TREND_PERIODS = (
+    ("เช้า", range(6, 12)),
+    ("บ่าย", range(12, 18)),
+    ("เย็น-กลางคืน", list(range(18, 24)) + list(range(0, 6))),
+)
+
+
+def classify_daily_trend(forecast, flat_threshold_ugm3=3.0):
+    """แบ่ง forecast (24 จุด) ตามช่วงเวลาของวัน เทียบค่าเฉลี่ยแต่ละช่วงกับค่าเฉลี่ยของ "ช่วงเวลาที่เหลือทั้งหมด"
+    (leave-one-out ไม่ใช่ค่าเฉลี่ยทั้งวันรวมตัวเอง) หาช่วงที่เบี่ยงเบนมากที่สุด — จงใจไม่เทียบกับค่าเฉลี่ยทั้งวัน
+    เพราะช่วงเย็น-กลางคืนมี 12 ชม. พอๆ กับเช้า+บ่ายรวมกัน ถ้าเทียบกับค่าเฉลี่ยทั้งวัน (ซึ่งรวมตัวมันเองด้วยน้ำหนัก
+    ครึ่งหนึ่ง) ช่วง 12 ชม. นี้จะไม่มีทางชนะช่วง 6 ชม. ได้เลยไม่ว่าค่าจะต่างกันแค่ไหน (พิสูจน์ด้วยพีชคณิต: ผลรวม
+    ถ่วงน้ำหนักของค่าเบี่ยงเบนทุกจุดต้องเป็น 0 เสมอ ทำให้ magnitude ของกลุ่มที่มีน้ำหนักเท่ากันสองฝั่งเท่ากันเป๊ะ)
+    คืน (direction, period_label): direction คือ "flat"/"up"/"down", period_label คือชื่อช่วงเวลาที่เบี่ยงเบน
+    มากที่สุด (None ถ้า flat) — ใช้ทั้งใน prompt (บอกข้อเท็จจริงให้ Gemini) และ validator (เช็คว่า Gemini ไม่พูด
+    สวนทาง) ต้องเรียกด้วยค่าเดียวกันทั้งสองที่"""
+
+    deviations = []
+    for label, hours in DAILY_TREND_PERIODS:
+        in_bucket = [f["pm25"] for f in forecast if f["display_hour_thai"] in hours]
+        out_bucket = [f["pm25"] for f in forecast if f["display_hour_thai"] not in hours]
+        if not in_bucket or not out_bucket:
+            continue
+        deviations.append((label, (sum(in_bucket) / len(in_bucket)) - (sum(out_bucket) / len(out_bucket))))
+
+    if not deviations:
+        return "flat", None
+
+    label, dev = max(deviations, key=lambda d: abs(d[1]))
+    if abs(dev) < flat_threshold_ugm3:
+        return "flat", None
+    return ("up" if dev > 0 else "down"), label
+
+
 def compute_risk_score(pm25, risk_group, activity):
 
     effective_pm25 = pm25 - RISK_GROUP_THRESHOLD_OFFSET.get(risk_group, 0.0) - ACTIVITY_INTENSITY_OFFSET.get(activity, 0.0)
@@ -526,6 +563,70 @@ def _openaq_get(kind, sensor_id, params, attempts, timeout=15):
     raise RuntimeError(f"ดึง pm25 จาก OpenAQ ({kind}) ไม่สำเร็จหลัง retry (sensor {sensor_id})")
 
 
+# ===== ตรวจสอบคุณภาพข้อมูลนำเข้าแบบ real-time (กรองค่า PM2.5 ผิดปกติจากเซนเซอร์) =====
+# False = เหมือนพฤติกรรมเดิมเป๊ะ (dropna เฉพาะ null เหมือนเดิม ไม่เช็คค่าสมเหตุสมผล) — ดู scripts/test_outlier_filter.py
+USE_OUTLIER_FILTER = True
+
+PM25_HARD_MIN = 0.0
+PM25_HARD_MAX = 1500.0  # เพดาน sentinel (ดักค่าพัง เช่น -999/9999) สูงกว่าค่าสูงสุดจริงที่เคยเจอหลายเท่า
+                         # (226.4 µg/m³ ที่ buengkan 2026-04-17 05:00 UTC — เหตุการณ์หมอกควันรุนแรงจริง ไม่ใช่ sensor
+                         # glitch) ไม่ใช่เพดาน "ค่าฝุ่นสูงสุดที่น่าเชื่อ" — เหตุการณ์จริงต้องผ่านชั้นนี้ได้เสมอ
+PM25_SPIKE_REVERT_THRESHOLD = 15.0  # sweep จริงกับข้อมูล 20 จังหวัด 363,306 แถว (multiprovince_pm25_features_raw_
+                                     # 20260919_172201.csv): threshold 12-25 ให้ผลเหมือนกันเป๊ะ (เจอแค่ 2 จุด,
+                                     # khonkaen 2024-06-14 03:00 และ 2024-08-28 05:00 รูปแบบ ~18->~55->~17 ดูเหมือน
+                                     # sensor glitch ทั้งคู่) ไม่แตะเหตุการณ์หมอกควันจริงที่ buengkan เลย (226.4,
+                                     # ค่อยๆ ลดลงต่อเนื่อง ไม่ revert) — เลือก 15 เพราะอยู่กลาง plateau ที่เสถียร
+PM25_ANCHOR_JUMP_MULTIPLIER = 8.0
+PM25_ANCHOR_JUMP_FLOOR = 150.0
+_OUTLIER_NEIGHBOR_MAX_GAP_H = 2.0
+
+
+def _filter_pm25_outliers(df):
+    """กรองค่า PM2.5 ที่ผิดปกติจากเซนเซอร์ก่อนเข้ากระบวนการพยากรณ์ — ตั้งค่าที่ตัดสินว่าผิดปกติเป็น NaN (ผู้เรียก
+    dropna ทิ้งเองต่อ ไม่ลบแถวตรงนี้โดยตรง) ออกแบบอนุรักษ์นิยม (เอนเอียงไปทาง "ปล่อยผ่านเมื่อไม่แน่ใจ") เพราะเป็น
+    health-alert system — กรองเหตุการณ์ฝุ่นพุ่งสูงจริงทิ้งเสียหายกว่าปล่อยให้ sensor glitch หลุดเข้ามาบ้าง
+
+    3 ชั้น เรียงจากเข้มงวดน้อยไปมาก:
+    1) hard bound (ทุกแถว รวมแถวล่าสุด): pm25 นอกช่วง [PM25_HARD_MIN, PM25_HARD_MAX]
+    2) isolated spike-revert (เฉพาะแถวกลาง ไม่ใช่แถวแรก/แถวล่าสุด, มีเพื่อนบ้านทั้งสองข้างห่าง ≤2 ชม.): ต่างจากทั้ง
+       แถวก่อนหน้าและแถวถัดไปเกิน threshold แต่แถวก่อนหน้า/ถัดไปใกล้เคียงกันเอง (แยก "จุดเดียวกระโดดแล้วกลับคืน"
+       ออกจากเหตุการณ์จริงที่ค่อยๆ เปลี่ยนแปลงต่อเนื่องหลายชั่วโมง ซึ่งจะไม่ "กลับคืน" ในชั่วโมงถัดไป)
+    3) anchor one-sided jump (เฉพาะแถวล่าสุด เพราะไม่มีแถวถัดไปให้ยืนยันแบบข้อ 2): กระโดดสุดโต่งจากฐานปกติเท่านั้น
+       (prev ต่ำกว่า floor ด้วย — ถ้า prev เองก็สูงอยู่แล้วถือเป็นเหตุการณ์ต่อเนื่อง ไม่ใช่ sensor error)
+
+    ข้อจำกัดที่ทราบและยอมรับ: ค่าที่เพี้ยนแต่ "ดูสมเหตุสมผลในตัวเอง" (เช่น sensor ค้างค่าเดิมซ้ำ หรือคลาดเคลื่อน
+    ปานกลางที่ไม่โดดจากบริบท) จะหลุดผ่านไปได้เสมอถ้าไม่มีจุดข้อมูลที่สองมายืนยัน — ข้อจำกัดโดยธรรมชาติ ไม่ใช่บั๊ก"""
+    df = df.copy()
+    pm25 = df["pm25"].to_numpy(dtype=float)
+    n = len(df)
+    flagged = (pm25 < PM25_HARD_MIN) | (pm25 > PM25_HARD_MAX)
+
+    if n >= 3:
+        gap_h = df["datetime_utc"].diff().dt.total_seconds().to_numpy() / 3600.0
+        for i in range(1, n - 1):
+            if flagged[i] or gap_h[i] > _OUTLIER_NEIGHBOR_MAX_GAP_H or gap_h[i + 1] > _OUTLIER_NEIGHBOR_MAX_GAP_H:
+                continue
+            prev_v, cur_v, next_v = pm25[i - 1], pm25[i], pm25[i + 1]
+            if (abs(cur_v - prev_v) > PM25_SPIKE_REVERT_THRESHOLD and
+                    abs(cur_v - next_v) > PM25_SPIKE_REVERT_THRESHOLD and
+                    abs(prev_v - next_v) <= PM25_SPIKE_REVERT_THRESHOLD):
+                flagged[i] = True
+
+    if n >= 2 and not flagged[n - 1]:
+        gap_last_h = (df["datetime_utc"].iloc[-1] - df["datetime_utc"].iloc[-2]).total_seconds() / 3600.0
+        if gap_last_h <= _OUTLIER_NEIGHBOR_MAX_GAP_H:
+            prev_v, last_v = pm25[n - 2], pm25[n - 1]
+            if (prev_v < PM25_ANCHOR_JUMP_FLOOR and
+                    last_v > max(PM25_ANCHOR_JUMP_FLOOR, PM25_ANCHOR_JUMP_MULTIPLIER * prev_v)):
+                flagged[n - 1] = True
+
+    n_flagged = int(flagged.sum())
+    if n_flagged:
+        print(f"[openaq] กรองค่า PM2.5 ผิดปกติทิ้ง {n_flagged} จุด จาก {n} แถว")
+        df.loc[flagged, "pm25"] = np.nan
+    return df
+
+
 def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
 
     end = pd.Timestamp.now(tz="UTC")
@@ -541,6 +642,8 @@ def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
         return df
     df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
     df = df.dropna(subset=["pm25"]).drop_duplicates(subset=["datetime_utc"]).sort_values("datetime_utc").reset_index(drop=True)
+    if USE_OUTLIER_FILTER:
+        df = _filter_pm25_outliers(df).dropna(subset=["pm25"]).reset_index(drop=True)
     if offset_hours and not df.empty:
         shifted_max = df["datetime_utc"].max() + offset
         if shifted_max > end + pd.Timedelta(hours=OFFSET_FUTURE_TOLERANCE_H):
@@ -561,7 +664,10 @@ def fetch_recent_pm25_openaq_hours(sensor_id, hours_back=72):
     if df.empty:
         return df
     df["datetime_utc"] = pd.to_datetime(df["datetime_utc"], utc=True)
-    return df.dropna(subset=["pm25"]).drop_duplicates(subset=["datetime_utc"]).sort_values("datetime_utc").reset_index(drop=True)
+    df = df.dropna(subset=["pm25"]).drop_duplicates(subset=["datetime_utc"]).sort_values("datetime_utc").reset_index(drop=True)
+    if USE_OUTLIER_FILTER:
+        df = _filter_pm25_outliers(df).dropna(subset=["pm25"]).reset_index(drop=True)
+    return df
 
 
 WEATHER_CURRENT_VARS = "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,wind_direction_10m,surface_pressure"
@@ -584,10 +690,26 @@ def _open_meteo_get(params, attempts, timeout):
     raise RuntimeError("ดึงสภาพอากาศจาก Open-Meteo ไม่สำเร็จหลัง retry")
 
 
+# ช่วงที่เป็นไปได้ทางฟิสิกส์ กว้างกว่าสภาพอากาศจริงของอีสานมาก (จงใจ) — เป้าหมายคือดักค่า API พัง (เช่น -999/9999)
+# ไม่ใช่ตรวจจับสภาพอากาศผิดปกติทางอุตุนิยมวิทยา ส่วนหนึ่งของ USE_OUTLIER_FILTER (ดู fetch_recent_pm25_openaq ด้านบน)
+WEATHER_PLAUSIBLE_RANGES = {
+    "relative_humidity_2m": (0, 100),
+    "wind_speed_10m": (0, 300),
+    "precipitation": (0, 300),
+    "surface_pressure": (850, 1050),
+    "temperature_2m": (-10, 55),
+}
+
+
 def _check_weather(w):
 
     if not isinstance(w, dict) or any(w.get(k) is None for k in WEATHER_REQUIRED_KEYS):
         raise ValueError("ข้อมูลสภาพอากาศจาก Open-Meteo ไม่ครบ")
+    if USE_OUTLIER_FILTER:
+        for key, (lo, hi) in WEATHER_PLAUSIBLE_RANGES.items():
+            v = w.get(key)
+            if v is not None and not (lo <= v <= hi):
+                raise ValueError(f"ค่าสภาพอากาศผิดปกติ: {key}={v} (ช่วงที่เป็นไปได้ {lo}-{hi})")
 
 
 def fetch_current_weather_openmeteo(lat, lon):
@@ -842,8 +964,8 @@ _SERIES_CACHE = {}  # province_en -> (เวลา monotonic ที่ดึง,
 _SERIES_LOCK = threading.Lock()
 
 # เรียกข้อมูลสดหลายจุดของ get_forecast() พร้อมกันแทนทีละจุด (target/weather/fire/r2/air4thai ไม่ขึ้นกับกันเลย
-# วัดแล้วว่าเวลารวมตอนสลับจังหวัดไปจังหวัดที่ cache เย็นส่วนใหญ่มาจากการต่อคิวนี้ ดูแผนที่
-# C:\Users\junta\.claude\plans\effervescent-finding-mccarthy.md) เลียน pattern _gemini_executor ที่มีอยู่แล้ว
+# วัดแล้วว่าเวลารวมตอนสลับจังหวัดไปจังหวัดที่ cache เย็นส่วนใหญ่มาจากการต่อคิวนี้ (วัดจริงด้วย timing log ชั่วคราว
+# ดู CHANGELOG 222) เลียน pattern _gemini_executor ที่มีอยู่แล้ว
 _IO_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="forecast-io")
 
 
@@ -1360,14 +1482,18 @@ def backfill_actuals(df_recent, province):
 # ===== ดัชนีคุณภาพอากาศ PM2.5 มาตรฐาน คพ. ประกาศ พ.ศ. 2566 (ราชกิจจานุเบกษา 3 ก.ค. 2566) =====
 PM25_LEVELS = [
     (15, "ดีมาก", ["ดีมาก", "อากาศดีมาก"]),
-    (25, "ดี", [("อากาศ", "ดี"), ("คุณภาพอากาศ", "ดี"), "ปลอดภัย"]),
+    (25, "ดี", [("อากาศ", "ดี"), ("คุณภาพอากาศ", "ดี"), ("อยู่ใน", "เกณฑ์ดี"), "ปลอดภัย", "อากาศโปร่ง", "น่าพอใจ"]),
     (37.5, "ปานกลาง", ["ปานกลาง"]),
     (75, "เริ่มมีผลกระทบต่อสุขภาพ", ["เริ่มมีผลกระทบต่อสุขภาพ", "เริ่มมีผลกระทบ", "ส่งผลกระทบต่อสุขภาพ"]),
     (float("inf"), "มีผลกระทบต่อสุขภาพ", ["มีผลกระทบต่อสุขภาพ", "อันตราย", "อันตรายถึงชีวิต"]),
 ]
 
 _GENERIC_CAUTION_KEYWORDS = [
-    ("ปานกลาง", [("หลีกเลี่ยง", "กิจกรรมกลางแจ้ง"), ("ลด", "กิจกรรมกลางแจ้ง"), "ระคายเคือง"]),
+    # "ลด"+"กิจกรรมกลางแจ้ง" ถูกตัดออก (เคยอยู่ตรงนี้) — "ลด" เป็นคำทั่วไปเกินไป (ใช้บ่อยตอนพูดว่า "ฝุ่นลดลง"
+    # ซึ่งเป็นข่าวดี) พบจริงว่าทำให้ข้อความที่ถูกต้องสมบูรณ์ถูก reject ผิดๆ ตอนทดสอบกับ Gemini จริง เพราะ "ลด" ใน
+    # ประโยคนึง (เช่น "ฝุ่นลดลง") บังเอิญอยู่ในระยะ max_gap=20 ตัวอักษรจาก "กิจกรรมกลางแจ้ง" ในอีกประโยคที่ไม่
+    # เกี่ยวข้องกันเลย — "หลีกเลี่ยง"/"ระคายเคือง" เป็นคำเฉพาะเจาะจงกว่ามาก ไม่มีปัญหานี้ เก็บไว้ตามเดิม
+    ("ปานกลาง", [("หลีกเลี่ยง", "กิจกรรมกลางแจ้ง"), "ระคายเคือง"]),
 ]
 
 _NEGATION_WORDS = ["ไม่ใช่", "ไม่ค่อย", "มิได้", "ไม่"]  
@@ -1440,13 +1566,21 @@ def _find_keyword_occurrences(message_text, keyword, max_gap=_MAX_FLEX_GAP):
 
 
 def _mentioned_levels(message_text):
- 
+
     all_occurrences = []
     for _, level_name, keywords in PM25_LEVELS:
         for kw in keywords:
             is_flexible = not isinstance(kw, str)
             for start, end in _find_keyword_occurrences(message_text, kw, max_gap=_MAX_FLEX_GAP_STATUS):
                 all_occurrences.append((start, end, level_name, is_flexible))
+
+    # flexible match (เช่น ("อากาศ","ดี")) เป็นแค่ตัวสำรองไว้ใช้ตอนไม่มี keyword ตรงตัว (literal) เจอเลยในทั้ง
+    # ข้อความ — ถ้ามี literal match อยู่แล้วที่ไหนก็ได้ในข้อความ (ไม่ว่าระดับไหน) ไม่ให้ flexible match ของระดับอื่น
+    # มาเพิ่มเป็น mention ซ้อนอีก เพราะมักเป็นแค่คำบรรยายทั่วไปที่ไม่เกี่ยวกับการประกาศระดับ (เจอจริง: ข้อความประกาศ
+    # "ดีมาก" ไปแล้วตอนต้น แต่ท้ายประโยคพูด "สภาพอากาศที่ดีนี้" เป็นคำบรรยายทั่วไป ไม่ใช่การประกาศระดับ "ดี" ซ้ำ
+    # ทำให้ false-reject เพราะดูเหมือนพูดถึง 2 ระดับ)
+    if any(not is_flexible for _, _, _, is_flexible in all_occurrences):
+        all_occurrences = [o for o in all_occurrences if not o[3]]
 
     all_occurrences.sort(key=lambda o: (o[3], -(o[1] - o[0])))
 
@@ -1473,14 +1607,41 @@ def _mentions_generic_caution_below(message_text, actual_idx):
     return False
 
 
+# เช็คเฉพาะตอนคำนวณแนวโน้มได้ชัดเจน ("up"/"down" จาก classify_daily_trend) — ตอน "flat" ปล่อยผ่านเสมอ เพราะคำทั่วไป
+# เช่น "ลดลงเล็กน้อย" ใช้บรรยายความผันผวนเล็กๆ ได้โดยไม่ได้ขัดแย้งกับ "ทรงตัว" จริงๆ (เข้มงวดเกินจะ false-reject ข้อความ
+# ที่ถูกต้องอยู่แล้ว เหมือนที่เจอใน scripts/test_nlg_safety_check.py เคส (e))
+#
+# ต้องเช็คแบบมีคำว่า "แนวโน้ม" อยู่ใกล้ๆ ด้วย (ไม่ใช่แค่หาคำว่า "ลดลง"/"สูงขึ้น" เดี่ยวๆ ทั้งข้อความ) — ทดสอบจริงกับ
+# Gemini พบว่าส่วน (2) ของ prompt (สาเหตุจาก SHAP factor) มักมีคำพวกนี้ปนอยู่แล้วเพื่อบรรยาย "ปัจจัยย่อย" (เช่น
+# "ฝุ่นจากพื้นที่ใกล้เคียงลดลง" ซึ่งเป็นสาเหตุหนึ่ง ไม่ใช่ข้อสรุปแนวโน้มรวม) ถ้าจับแบบเจอคำเดี่ยวๆ ทั้งข้อความจะ
+# false-reject ข้อความที่ถูกต้องอยู่แล้วบ่อยมาก เพราะ prompt สั่งให้พูดถึงปัจจัยพวกนี้อยู่แล้ว — การกำหนดให้ต้องอยู่
+# ใกล้คำว่า "แนวโน้ม" (คำที่ _trend_fact_th() ใช้เองตอนป้อนข้อเท็จจริงให้ Gemini เขียนตาม) ปลอดภัยกว่ามาก เพราะ
+# Gemini มักเอาคำนี้มาใช้ซ้ำตอนพูดถึง "แนวโน้มรวม" จริงๆ ตามที่สั่งไว้ใน prompt ข้อ (1)
+_TREND_CONTRADICTION_KEYWORDS = {
+    "up": ["ลดลง", "ดีขึ้น"],
+    "down": ["สูงขึ้น", "เพิ่มขึ้น", "แย่ลง"],
+}
+_TREND_PROXIMITY_WORD = "แนวโน้ม"
+_TREND_PROXIMITY_GAP = 15
+
+
+def _mentions_contradicting_trend(message_text, trend):
+    direction, _period = trend
+    for kw in _TREND_CONTRADICTION_KEYWORDS.get(direction, []):
+        if (_find_keyword_occurrences(message_text, (_TREND_PROXIMITY_WORD, kw), max_gap=_TREND_PROXIMITY_GAP) or
+                _find_keyword_occurrences(message_text, (kw, _TREND_PROXIMITY_WORD), max_gap=_TREND_PROXIMITY_GAP)):
+            return True
+    return False
+
+
 def _fallback_message(level):
     if level is None:
         return "ไม่สามารถประเมินคุณภาพอากาศได้ในขณะนี้ กรุณาตรวจสอบใหม่ภายหลัง"
     return _HEALTH_MESSAGE_TEMPLATES[level]
 
 
-def validate_health_message(message_text, predicted_pm25, risk_group="ทั่วไป"):
- 
+def validate_health_message(message_text, predicted_pm25, risk_group="ทั่วไป", trend=("flat", None)):
+
     if predicted_pm25 is None or (isinstance(predicted_pm25, float) and np.isnan(predicted_pm25)):
         return False, None, _fallback_message(None)
 
@@ -1500,8 +1661,11 @@ def validate_health_message(message_text, predicted_pm25, risk_group="ทั่�
         return False, actual_level, _fallback_message(actual_level)  # ข้อความรุนแรงเกินจริง
     if all(idx < actual_idx for idx in mentioned_indices):
         return False, actual_level, _fallback_message(actual_level)  # ข้อความประเมินต่ำเกินไป
-    if risk_group == "ทั่วไป" and _mentions_generic_caution_below(message_text, actual_idx):
+    # เช็คทุก risk_group เหมือนกัน (ไม่ใช่แค่ "ทั่วไป") — คำเตือนระดับสูงกว่าจริงผิดสำหรับทุกกลุ่ม ไม่ใช่แค่กลุ่มทั่วไป
+    if _mentions_generic_caution_below(message_text, actual_idx):
         return False, actual_level, _fallback_message(actual_level)  # คำเตือนทั่วไปที่สูงกว่า floor ของระดับจริง
+    if _mentions_contradicting_trend(message_text, trend):
+        return False, actual_level, _fallback_message(actual_level)  # พูดแนวโน้มสวนทางกับที่คำนวณได้จริง
 
     return True, actual_level, message_text
 
@@ -1613,6 +1777,32 @@ _USER_GROUP_TONE = {
 # ใช้ตรวจ risk_group ตอนสมัคร/แก้โปรไฟล์ — ผูกกับโทน NLG รายวันและ alert threshold แล้ว
 VALID_RISK_GROUPS = set(_USER_GROUP_TONE.keys())
 
+# คำแนะนำเจาะจงต่อ (risk_group, ระดับ PM2.5 จริง) ใช้เสริม _USER_GROUP_TONE ด้านบนใน prompt (ไม่ได้แทนที่ — ห้าม
+# ลบ/แก้ _USER_GROUP_TONE เพราะ scripts/test_risk_group_e2e.py เช็ค string ของมันตรงๆ) ส่งเป็น "แนวทางให้เลือกใช้"
+# ไม่ใช่ข้อความบังคับยกคำ — ยังต้องผ่าน _mentions_generic_caution_below เหมือนข้อความอื่น (ไม่ใช่ safety bypass)
+# หมายเหตุ: ร่างโดยอิงโทนเดิม + ตัวอย่างจากเอกสาร ไม่ใช่คำแนะนำทางการแพทย์ ควรให้ผู้ใช้ทบทวนเนื้อหาก่อน ship จริง
+_RISK_GROUP_ACTION_HINTS = {
+    ("ทั่วไป", "ดีมาก"): "ทำกิจกรรมกลางแจ้งได้เต็มที่ตามปกติ",
+    ("ทั่วไป", "ดี"): "ทำกิจกรรมกลางแจ้งได้ตามปกติ",
+    ("ทั่วไป", "ปานกลาง"): "ยังทำกิจกรรมกลางแจ้งได้ตามปกติ แต่ควรสังเกตอาการตนเองหากรู้สึกระคายเคือง",
+    ("ทั่วไป", "เริ่มมีผลกระทบต่อสุขภาพ"): "ควรลดระยะเวลาหรือความหนักของกิจกรรมกลางแจ้งลงจากปกติ",
+    ("ทั่วไป", "มีผลกระทบต่อสุขภาพ"): "ควรเลี่ยงกิจกรรมกลางแจ้งที่ใช้แรงมาก และสวมหน้ากากป้องกันฝุ่นหากจำเป็นต้องออกนอกอาคาร",
+    ("เด็ก-ผู้สูงอายุ", "ดีมาก"): "เด็กและผู้สูงอายุทำกิจกรรมกลางแจ้งได้ตามปกติ",
+    ("เด็ก-ผู้สูงอายุ", "ดี"): "เด็กและผู้สูงอายุทำกิจกรรมกลางแจ้งได้ตามปกติ แต่ควรสังเกตอาการหากทำกิจกรรมต่อเนื่องเป็นเวลานาน",
+    ("เด็ก-ผู้สูงอายุ", "ปานกลาง"): "เด็กและผู้สูงอายุควรลดระยะเวลาทำกิจกรรมกลางแจ้งลงบ้าง และสังเกตอาการระคายเคืองตาหรือจมูก",
+    ("เด็ก-ผู้สูงอายุ", "เริ่มมีผลกระทบต่อสุขภาพ"): "เด็กและผู้สูงอายุควรเลี่ยงกิจกรรมกลางแจ้งที่ใช้แรงมาก และสวมหน้ากากป้องกันฝุ่นหากต้องออกนอกอาคาร",
+    ("เด็ก-ผู้สูงอายุ", "มีผลกระทบต่อสุขภาพ"): "เด็กและผู้สูงอายุควรงดกิจกรรมกลางแจ้ง อยู่ในอาคารที่มีอากาศถ่ายเทดี และสวมหน้ากาก N95 หากจำเป็นต้องออกนอกอาคาร",
+    ("มีโรคประจำตัว", "ดีมาก"): "ผู้มีโรคประจำตัวทำกิจกรรมกลางแจ้งได้ตามปกติ",
+    ("มีโรคประจำตัว", "ดี"): "ผู้มีโรคประจำตัวทำกิจกรรมกลางแจ้งได้ตามปกติ แต่ควรพกยาประจำตัวติดตัวไว้เสมอ",
+    ("มีโรคประจำตัว", "ปานกลาง"): "ผู้มีโรคประจำตัวทางเดินหายใจควรลดกิจกรรมกลางแจ้งที่ใช้แรงมาก และพกยาประจำตัวติดตัว",
+    ("มีโรคประจำตัว", "เริ่มมีผลกระทบต่อสุขภาพ"): "ผู้มีโรคประจำตัวควรเลี่ยงกิจกรรมกลางแจ้ง พกยาประจำตัวติดตัวเสมอ และสวมหน้ากาก N95 หากต้องออกนอกอาคาร",
+    ("มีโรคประจำตัว", "มีผลกระทบต่อสุขภาพ"): "ผู้มีโรคประจำตัวควรงดออกนอกอาคารโดยไม่จำเป็น พกยาประจำตัวติดตัวตลอดเวลา และสวมหน้ากาก N95 เมื่อจำเป็นต้องออกนอกอาคาร",
+}
+
+
+def _action_hint_th(risk_group, status):
+    return _RISK_GROUP_ACTION_HINTS.get((risk_group, status), "")
+
 _NLG_SYSTEM_PROMPT = (
     "คุณเป็นผู้ช่วยอธิบายค่าพยากรณ์คุณภาพอากาศ PM2.5 ให้ประชาชนทั่วไปฟัง ตอบเป็นภาษาไทยเท่านั้น "
     "ความยาวไม่เกิน 2-3 ประโยค กระชับ เข้าใจง่าย ห้ามใช้ศัพท์เทคนิคหรือชื่อโมเดล/ฟีเจอร์ตรงๆ "
@@ -1629,21 +1819,38 @@ def _format_shap_factor_lines(shap_pairs, limit=3):
     if not top_factors:
         return "- ไม่มีข้อมูลปัจจัยเพิ่มเติมสำหรับรอบนี้"
     return "\n".join(
-        f"- {_feature_name_th(name)}: {'ดันค่าฝุ่นให้สูงขึ้น' if val > 0 else 'ดันค่าฝุ่นให้ลดลง'}"
+        f"- {_factor_narrative_th(name, 'up' if val > 0 else 'down')}"
         for name, val in top_factors
     )
 
 
-def _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group="ทั่วไป"):
+def _trend_fact_th(trend):
+    direction, period = trend
+    if direction == "flat":
+        return "มีแนวโน้มทรงตัวตลอด 24 ชั่วโมงข้างหน้า ไม่เปลี่ยนแปลงมาก"
+    verb = "สูงขึ้น" if direction == "up" else "ลดลง"
+    return f"มีแนวโน้ม{verb}ชัดเจนในช่วง{period}"
+
+
+def _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group="ทั่วไป", trend=("flat", None)):
     factor_lines = _format_shap_factor_lines(shap_pairs)
     tone = _USER_GROUP_TONE.get(risk_group, _USER_GROUP_TONE["ทั่วไป"])
+    action_hint = _action_hint_th(risk_group, status)
+    trend_fact = _trend_fact_th(trend)
 
     return (
         f'ค่าเฉลี่ย PM2.5 ตลอดวันนี้ (สรุปจากค่าพยากรณ์ล่วงหน้า 24 ชั่วโมง) '
-        f'อยู่ที่ {daily_avg_pm25} ไมโครกรัม/ลูกบาศก์เมตร ซึ่งจัดอยู่ในระดับคุณภาพอากาศ "{status}"\n\n'
+        f'อยู่ที่ {daily_avg_pm25} ไมโครกรัม/ลูกบาศก์เมตร ซึ่งจัดอยู่ในระดับคุณภาพอากาศ "{status}" {trend_fact}\n\n'
         f"ปัจจัยที่มีอิทธิพลต่อแนวโน้มตลอดวันนี้มากที่สุด (ประเมินจากช่วงกลางวัน):\n{factor_lines}\n\n"
-        f"ช่วยเขียนคำอธิบายแนวโน้มคุณภาพอากาศตลอดทั้งวันนี้สั้นๆ ให้ผู้ใช้งานทั่วไปเข้าใจง่าย "
-        f"โดย{tone} "
+        f"แนวทางคำแนะนำที่ควรอ้างอิง (เลือกใช้ตามความเหมาะสม ไม่ต้องยกคำมาทั้งหมด): {action_hint}\n\n"
+        f"ช่วยเขียนคำอธิบายคุณภาพอากาศวันนี้สั้นๆ ไม่เกิน 2-3 ประโยค ให้ผู้ใช้งานทั่วไปเข้าใจง่าย "
+        f"เรียงเนื้อหาตามลำดับนี้: "
+        f"(1) สถานการณ์วันนี้ (ระดับคุณภาพอากาศ) และแนวโน้มตามข้อเท็จจริงที่ให้ไว้ข้างต้นเป๊ะๆ ห้ามเปลี่ยนทิศทาง"
+        f"แนวโน้มเอง ห้ามพูดตัวเลขค่าเฉลี่ย {daily_avg_pm25} ซ้ำอีก (มีตัวเลขแสดงแยกไว้บนหน้าจออยู่แล้ว ไม่ต้องย้ำ) "
+        f"(2) สาเหตุหลักโดยอ้างอิงจากปัจจัยที่ให้มาข้างต้นเท่านั้น ห้ามเดาสาเหตุเอง "
+        f"(3) คำแนะนำโดย{tone} "
+        f'ต้องใช้คำว่า "{status}" ตรงๆ ในส่วน (1) อย่างน้อยหนึ่งครั้งเสมอ (เช่น "อยู่ในระดับ{status}") '
+        f'แม้จะเป็นคำยาวหรือฟังดูเป็นทางการก็ตาม ห้ามเลี่ยงไปใช้คำอื่นแทนทั้งหมด '
         f'ห้ามเอ่ยชื่อระดับคุณภาพอากาศอื่นที่ไม่ใช่ "{status}" เด็ดขาด (เช่น ห้ามพูดถึงคำว่า '
         f'"ปานกลาง" หรือ "เริ่มมีผลกระทบต่อสุขภาพ" ถ้าระดับปัจจุบันไม่ใช่ระดับนั้น) '
         f"ให้บรรยายความระมัดระวังด้วยคำทั่วไปแทนการเอ่ยชื่อระดับ"
@@ -1781,7 +1988,7 @@ def generate_daily_nlg_explanation(forecast, feature_row, model_used, risk_group
 
     daily_avg_pm25 = round(sum(f["pm25"] for f in forecast) / len(forecast), 1)
     status = pm25_status(daily_avg_pm25)
-
+    trend = classify_daily_trend(forecast)
 
     try:
         shap_pairs = get_shap_explanation(model_used, REP_HORIZON_FOR_SHAP, feature_row)
@@ -1789,15 +1996,17 @@ def generate_daily_nlg_explanation(forecast, feature_row, model_used, risk_group
         print(f"[nlg-daily] SHAP explanation failed ({type(e).__name__}): {e}")
         shap_pairs = None
 
-    prompt = _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group)
+    prompt = _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group, trend)
     message_text = _call_gemini(prompt)
 
     used_fallback = False
     if message_text:
-        is_valid, _, final_message = validate_health_message(message_text, daily_avg_pm25, risk_group)
+        is_valid, _, final_message = validate_health_message(message_text, daily_avg_pm25, risk_group, trend)
         if not is_valid:
+            # log ข้อความดิบที่ Gemini ตอบมาไว้ด้วย (ไม่ใช่แค่บอกว่า fail) เพื่อให้ปรับ keyword list ใน
+            # PM25_LEVELS/_TREND_CONTRADICTION_KEYWORDS ได้จากของจริง แทนการเดา
             print(f"[nlg-daily] safety check failed: Gemini message did not match actual level "
-                  f"'{status}', using fallback template")
+                  f"'{status}' (trend={trend}), using fallback template. ข้อความที่ถูกปฏิเสธ: {message_text!r}")
             used_fallback = True
     else:
         final_message = _fallback_message(status)
