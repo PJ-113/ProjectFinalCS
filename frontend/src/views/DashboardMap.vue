@@ -6,7 +6,10 @@ import {
   Sun, CloudSun, Cloud, CloudFog, CloudRain, CloudSnow, CloudLightning,
   TrendingUp, TrendingDown, Footprints, Bike, Flame,
 } from "@lucide/vue";
-import { fetchForecast, fetchCurrentPm25, buildWarningMessage, formatCardTime } from "../notifications";
+import {
+  fetchForecast, fetchCurrentPm25, buildWarningMessage, formatCardTime,
+  buildImminentRiskMessage, buildImprovingTrendMessage,
+} from "../notifications";
 import { riskScoreState, setActivity, ACTIVITY_LEVELS, ACTIVITY_EXAMPLES, computeRiskScore, riskScoreAdvice } from "../riskScore";
 import { provinceState, selectProvince } from "../provinces";
 import { statusClass, severityVar, severityHex, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
@@ -48,10 +51,17 @@ const MIN_HORIZON = 0;
 const MAX_HORIZON = 24;
 const overviewHorizon = ref(0);
 
-function markerIcon(value, color) {
+function markerIcon(value, color, name, isSelected) {
   const label = value != null ? Math.round(value) : "-";
+  // โชว์ชื่อแบบถาวรแค่ "จังหวัดที่กำลังเลือกอยู่" (provinceState.selected) เท่านั้น ไม่ใช่ทั้ง 20 จังหวัด —
+  // ลองแบบโชว์ทุกจังหวัดมาก่อนแล้วแต่รกเกินไปเพราะบางจังหวัดอยู่ใกล้กันมาก (feedback ผู้ใช้) จังหวัดอื่น
+  // ที่ไม่ได้เลือกยังเห็นชื่อได้ผ่าน hover tooltip / แตะเปิด popup เหมือนเดิมทุกประการ
+  // ชื่อวางเป็น absolute ใต้ป้ายวงกลม (ดู CSS .map-marker-name) แทนที่จะขยาย iconSize/iconAnchor ตามความยาว
+  // ข้อความ — ทำให้จุดยึดพิกัด lat/lon ยังคงตรงกับกึ่งกลางวงกลมเป๊ะเหมือนเดิมไม่ว่าชื่อจะสั้นหรือยาว
+  const nameHtml = isSelected ? `<div class="map-marker-name">${name}</div>` : "";
+  const badgeClass = isSelected ? "map-marker-badge map-marker-badge-selected" : "map-marker-badge";
   return L.divIcon({
-    html: `<div class="map-marker-badge" style="background:${color}">${label}</div>`,
+    html: `<div class="map-marker-stack"><div class="${badgeClass}" style="background:${color}">${label}</div>${nameHtml}</div>`,
     className: "map-marker-badge-wrap",
     iconSize: [30, 30],
     iconAnchor: [15, 15],
@@ -80,9 +90,11 @@ function popupHtmlFor(p) {
   `;
 }
 
-// แตะหมุดจังหวัดใดก็ตาม -> ซูมเข้าเฉพาะขอบเขตจังหวัดนั้น (ไฮไลต์เติมสี ตามภาพตัวอย่างที่ผู้ใช้ส่งมา) +
-// สลับ provinceState ทันที (การ์ดอื่นในหน้านี้รีเฟรชข้อมูลจังหวัดใหม่ให้เองผ่าน watch ที่มีอยู่แล้ว)
-function focusProvince(provinceEn) {
+// ไฮไลต์เส้นขอบ + ซูมเข้าเฉพาะขอบเขตจังหวัดที่ระบุ + อัปเดตป้ายชื่อบนหมุด — แยกออกมาจาก focusProvince() เดิม
+// เพื่อให้เรียกได้จาก "ทุกทาง" ที่ provinceState.selected เปลี่ยนได้ ไม่ใช่แค่ตอนแตะแผนที่เอง (ดู watch
+// ด้านล่าง) เดิมถ้าเปลี่ยนจังหวัดผ่าน ProvincePickerSheet/header เส้นขอบที่ไฮไลต์ไว้จะค้างอยู่ที่จังหวัด
+// ล่าสุดที่เคยแตะบนแผนที่ ไม่ตามจังหวัดที่เลือกจริงไปด้วย (bug ที่ผู้ใช้เจอ)
+function highlightProvinceOnMap(provinceEn) {
   if (!mapInstance || !boundaryLayer) return;
   boundaryLayer.eachLayer((layer) => layer.setStyle(BOUNDARY_STYLE_DEFAULT));
   const target = boundaryLayerBySlug.get(provinceEn);
@@ -92,6 +104,13 @@ function focusProvince(provinceEn) {
     mapInstance.fitBounds(target.getBounds(), { padding: [40, 40] });
   }
   focusedProvince.value = provinceEn;
+  if (lastOverviewProvinces.length) createOrUpdateMarkers(lastOverviewProvinces);
+}
+
+// แตะหมุดจังหวัดใดก็ตามบนแผนที่ -> สลับ provinceState ทันที (การ์ดอื่นในหน้านี้รีเฟรชข้อมูลจังหวัดใหม่ให้เอง
+// ผ่าน watch ที่มีอยู่แล้ว) — ไฮไลต์เส้นขอบ/ซูม/ป้ายชื่อหมุด ทำผ่าน watch(() => provinceState.selected)
+// ด้านล่างทั้งหมด ไม่เรียก highlightProvinceOnMap() ตรงๆ ที่นี่ซ้ำ กันเหตุการณ์ซ้อนสองครั้งโดยไม่จำเป็น
+function focusProvince(provinceEn) {
   selectProvince(provinceEn);
 }
 
@@ -109,20 +128,25 @@ function createOrUpdateMarkers(provinces) {
   provinces.forEach((p) => {
     const valueForColor = horizon > 0 ? p.forecast_pm25 : p.current_pm25;
     const color = valueForColor != null ? severityHex(valueForColor) : NO_DATA_COLOR;
+    const isSelected = p.province_en === provinceState.selected;
     let marker = markerByProvince.get(p.province_en);
     if (!marker) {
-      marker = L.marker([p.lat, p.lon], { icon: markerIcon(valueForColor, color) }).addTo(mapInstance);
+      marker = L.marker([p.lat, p.lon], { icon: markerIcon(valueForColor, color, p.province_th, isSelected) }).addTo(mapInstance);
       marker.bindPopup(popupHtmlFor(p));
       marker.bindTooltip(tooltipHtmlFor(p), { direction: "top", offset: [0, -16], className: "map-hover-tooltip" });
       marker.on("click", () => focusProvince(p.province_en));
       markerByProvince.set(p.province_en, marker);
       return;
     }
-    marker.setIcon(markerIcon(valueForColor, color));
+    marker.setIcon(markerIcon(valueForColor, color, p.province_th, isSelected));
     marker.setPopupContent(popupHtmlFor(p));
     marker.setTooltipContent(tooltipHtmlFor(p));
   });
 }
+
+// เก็บผลล่าสุดไว้เรียก createOrUpdateMarkers() ซ้ำตอนจังหวัดที่เลือกเปลี่ยน (ดู watch ด้านล่าง) โดยไม่ต้อง
+// ยิง fetch ใหม่ — ข้อมูลของทั้ง 20 จังหวัดเหมือนเดิม เปลี่ยนแค่ว่าอันไหนควรไฮไลต์ชื่อเฉยๆ
+let lastOverviewProvinces = [];
 
 async function loadOverview() {
   if (markerByProvince.size === 0) overviewState.value = "loading";
@@ -134,6 +158,7 @@ async function loadOverview() {
     }
     const data = await res.json();
     overviewState.value = "content";
+    lastOverviewProvinces = data;
     createOrUpdateMarkers(data);
   } catch (err) {
     overviewError.value = "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
@@ -289,6 +314,14 @@ const weatherScrollEl = ref(null);
 const highPollutionRisk = ref(false);
 const riskGroup = ref("ทั่วไป");
 const fallbackHorizons = ref([]);
+// ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" และข้อ 3 "แนวโน้มฝุ่นจะดีขึ้น" — คู่ขนานกับ highPollutionRisk ข้างบน
+// (เป็น live state ของหน้านี้เอง ไม่ได้อ่านจาก notificationState เหมือนกระดิ่งใน AppHeader.vue)
+const riskImminent = ref(false);
+const minRiskHorizon = ref(null);
+const minRiskHorizonPm25 = ref(null);
+const minRiskHorizonDisplayTime = ref(null);
+const trendDirection = ref(null);
+const trendPeriod = ref(null);
 // สถานะข้อมูลที่ใช้ทำพยากรณ์ (data_quality จาก /api/forecast): target_stale = reading ล่าสุดของจังหวัดนี้เก่ากว่า 6 ชม.
 const dataQuality = ref({ target_stale: false, target_age_hours: 0 });
 const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
@@ -547,6 +580,15 @@ const fallbackTimesText = computed(() =>
 
 // ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) อยู่ใน notifications.js (ใช้ร่วมกับ AppHeader.vue)
 const warningMessage = computed(() => buildWarningMessage(riskGroup.value));
+// ข้อ 2/3 — ใช้ builder เดียวกับที่กระดิ่งใน AppHeader.vue ใช้ (notifications.js) ข้อความจะตรงกันทุกจุดในแอป
+const imminentRiskMessage = computed(() =>
+  buildImminentRiskMessage({
+    min_risk_horizon: minRiskHorizon.value,
+    min_risk_horizon_pm25: minRiskHorizonPm25.value,
+    min_risk_horizon_display_time: minRiskHorizonDisplayTime.value,
+  })
+);
+const improvingTrendMessage = computed(() => buildImprovingTrendMessage(trendPeriod.value));
 
 const markerPct = computed(() => scaleMarkerPct(current.value.pm25));
 const currentAdvice = computed(() => adviceForStatus(current.value.status));
@@ -667,6 +709,12 @@ async function loadForecast() {
     highPollutionRisk.value = data.high_pollution_risk;
     riskGroup.value = data.risk_group || "ทั่วไป";
     fallbackHorizons.value = data.fallback_triggered_horizons || [];
+    riskImminent.value = data.risk_imminent || false;
+    minRiskHorizon.value = data.min_risk_horizon ?? null;
+    minRiskHorizonPm25.value = data.min_risk_horizon_pm25 ?? null;
+    minRiskHorizonDisplayTime.value = data.min_risk_horizon_display_time ?? null;
+    trendDirection.value = data.trend_direction ?? null;
+    trendPeriod.value = data.trend_period ?? null;
     dataQuality.value = data.data_quality || { target_stale: false, target_age_hours: 0 };
     provinceInfo.value = data.province || { th: "", en: "", is_zero_shot: false };
     riskScoreConfig.value = data.risk_score_config || null;
@@ -692,6 +740,12 @@ function onContentEntered() {
 
 // สลับจังหวัดจาก ProvincePickerSheet -> provinceState.selected เปลี่ยน -> โหลดพยากรณ์ใหม่
 watch(() => provinceState.selected, loadForecast);
+
+// จังหวัดที่เลือกเปลี่ยน (ไม่ว่าจะแตะหมุด/เส้นขอบบนแผนที่เอง หรือเลือกจาก ProvincePickerSheet/header) ->
+// ไฮไลต์เส้นขอบ + ซูม + ป้ายชื่อบนหมุด ย้ายไปจังหวัดใหม่เสมอ ทางเดียวกันไม่ว่าจะเปลี่ยนจากที่ไหน
+watch(() => provinceState.selected, (provinceEn) => {
+  highlightProvinceOnMap(provinceEn);
+});
 
 // วาดกราฟใหม่ตอนเลือก/ยกเลิกเลือกการ์ด ให้จุดที่เลือกอยู่ขยายใหญ่ขึ้นตามจริง (ไม่ใช่แค่ครั้งแรกตอนโหลดข้อมูล)
 watch(selectedIdx, () => drawWeatherChart(hourlyTimeline.value));
@@ -798,12 +852,24 @@ defineExpose({ loadForecast });
       <!-- Content -->
       <div v-else key="content" class="layout">
         <div class="col-primary">
+          <!-- ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" แสดงก่อนแบนเนอร์เตือนทั่วไปเดิม เพราะเจาะจง/actionable กว่า -->
+          <div v-if="riskImminent" class="banner banner-warn" role="alert">
+            <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">{{ imminentRiskMessage }}</div>
+          </div>
+
           <div v-if="highPollutionRisk" class="banner banner-warn" role="alert">
             <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
             <div>
               <div class="banner-title">ช่วงนี้ฝุ่นอยู่ในระดับสูง</div>
               <div class="banner-text">{{ warningMessage }}</div>
             </div>
+          </div>
+
+          <!-- ข้อ 3 "แนวโน้มฝุ่นจะดีขึ้น" (ข่าวดี) -->
+          <div v-if="trendDirection === 'down'" class="banner banner-good">
+            <Sparkles :size="22" :stroke-width="2" aria-hidden="true" />
+            <div class="banner-text">{{ improvingTrendMessage }}</div>
           </div>
 
           <div v-if="dataQuality.target_stale" class="banner banner-warn" role="alert">
@@ -1205,6 +1271,7 @@ defineExpose({ loadForecast });
 .banner > svg { flex-shrink: 0; margin-top: 1px; }
 .banner-warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-ink); }
 .banner-info { background: var(--info-bg); border-color: var(--info-line); color: var(--info-ink); }
+.banner-good { background: var(--success-bg); border-color: color-mix(in srgb, var(--success-ink) 35%, transparent); color: var(--success-ink); }
 .banner-title { font-weight: 600; font-size: 0.95rem; line-height: 1.4; }
 .banner-text { font-size: 0.9rem; }
 
@@ -1628,11 +1695,27 @@ defineExpose({ loadForecast });
 :deep(.leaflet-bar a:hover) { background: var(--track); }
 :deep(.leaflet-control-attribution) { background: color-mix(in srgb, var(--card) 80%, transparent); color: var(--muted); font-size: 0.6rem; }
 :deep(.leaflet-control-attribution a) { color: var(--accent); }
-:deep(.map-marker-badge-wrap) { background: transparent; border: none; }
+:deep(.map-marker-badge-wrap) { background: transparent; border: none; overflow: visible; }
+:deep(.map-marker-stack) { position: relative; width: 30px; height: 30px; }
 :deep(.map-marker-badge) {
   width: 30px; height: 30px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
   display: flex; align-items: center; justify-content: center; color: #ffffff; font-weight: 600; font-size: 0.65rem;
   font-family: inherit; letter-spacing: -0.2px; line-height: 1; padding-top: 1px;
+}
+/* ไฮไลต์เฉพาะหมุดของจังหวัดที่กำลังเลือกอยู่ — วงกลมใหญ่ขึ้นเล็กน้อย + ขอบสีฟ้า (accent) หนาขึ้นแทนขอบขาวเดิม
+   ให้สะดุดตากว่าหมุดอื่นชัดเจน ไม่ใช่แค่มีป้ายชื่อโผล่มาเฉยๆ */
+:deep(.map-marker-badge-selected) {
+  width: 34px; height: 34px; border: 3px solid #2563eb; box-shadow: 0 2px 8px rgba(37, 99, 235, 0.5);
+  font-size: 0.7rem;
+}
+/* ชื่อจังหวัดแสดงถาวรใต้หมุดที่เลือกอยู่เท่านั้น (จังหวัดอื่นยังดูชื่อผ่าน hover tooltip/popup เหมือนเดิม —
+   โชว์ทุกจังหวัดพร้อมกันรกเกินไปเพราะบางจังหวัดอยู่ใกล้กันมาก) ใช้สีคงที่แทน var(--ink)/var(--accent) เพราะ
+   พื้นหลังคือตัวแผนที่จริง ไม่ใช่พื้นหลังของแอป เหมือนกับ .map-marker-badge ที่ใช้สีคงที่อยู่แล้วด้วยเหตุผลเดียวกัน */
+:deep(.map-marker-name) {
+  position: absolute; top: 38px; left: 50%; transform: translateX(-50%);
+  white-space: nowrap; background: #2563eb; color: #ffffff; font-weight: 700;
+  font-size: 0.72rem; padding: 3px 9px; border-radius: 7px; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }
 :deep(.map-hover-tooltip) { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); opacity: 1; }
 :deep(.map-hover-tooltip)::before { border-top-color: var(--card); }

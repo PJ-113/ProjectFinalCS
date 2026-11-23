@@ -23,6 +23,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
+from pywebpush import WebPushException, webpush
 from sklearn.metrics import r2_score
 
 
@@ -84,6 +85,10 @@ OPENAQ_KEY = _ENV["OPENAQ_KEY"]
 OPENAQ_HEADERS = {"X-API-Key": OPENAQ_KEY}
 
 FIRMS_KEY = _ENV.get("FIRMS_KEY")
+
+VAPID_PRIVATE_KEY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), _ENV["VAPID_PRIVATE_KEY_PATH"])
+VAPID_PUBLIC_KEY = _ENV["VAPID_PUBLIC_KEY"]
+VAPID_CLAIMS_SUB = _ENV["VAPID_CLAIMS_SUB"]
 
 
 # PostgreSQL (ย้ายจาก sqlite แล้ว) — get_db_connection() เปิด connection ใหม่ทุกครั้งที่เรียก
@@ -184,6 +189,11 @@ def is_horizon_at_risk(predicted_pm25, risk_group):
 def is_current_at_risk(latest_pm25, risk_group):
 
     return bool(latest_pm25 > effective_threshold_for(risk_group))
+
+
+# ฟีเจอร์แจ้งเตือนเพิ่มเติม (ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว") — แยกจาก risk_horizons เดิมที่บอกแค่ "มีช่วงเสี่ยง
+# บางจุดใน 24 ชม." กว้างเกินไป อันนี้เจาะจงว่าช่วงเสี่ยงที่ใกล้ที่สุด "ใกล้แค่ไหน"
+IMMINENT_HORIZON_H = 2
 
 
 ACTIVE_HOURS_START_TH = 6
@@ -395,6 +405,23 @@ def init_db():
             risk_group TEXT NOT NULL DEFAULT 'ทั่วไป',
             age INTEGER,
             created_at TEXT NOT NULL
+        )
+    """)
+
+    # Web Push subscription — endpoint คือ identity ตาม Web Push spec (unique) user_id เป็น null ได้
+    # (guest, สอดคล้องกับ /api/notifications ที่ไม่บังคับ login) province ถูก pin ตอน subscribe ไม่ sync
+    # ตาม home_province อัตโนมัติ (guest ไม่มี home_province ให้ sync ตั้งแต่แรก) push_dedup_state เก็บ
+    # ค่าล่าสุดที่ push ไปแล้วต่อเงื่อนไข (threshold/transition/imminent/trend/silence) กันแจ้งซ้ำทุกรอบ scheduler
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id SERIAL PRIMARY KEY,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            province TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            push_dedup_state JSONB NOT NULL DEFAULT '{}'::jsonb
         )
     """)
     conn.commit()
@@ -1326,6 +1353,21 @@ def migrate_province_column():
 migrate_province_column()
 
 
+def migrate_notification_trend_columns():
+    # เก็บผล classify_daily_trend() ของแต่ละ snapshot ไว้ด้วย (ข้อ 3 ของฟีเจอร์แจ้งเตือนเพิ่มเติม) — nullable
+    # เพราะแถวเก่าก่อน migration นี้ไม่มีค่าย้อนหลังให้คำนวณใหม่ (forecast list ตอนนั้นไม่ได้ถูกเก็บไว้)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS trend_direction TEXT")
+    cur.execute("ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS trend_period TEXT")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+migrate_notification_trend_columns()
+
+
 def migrate_prediction_interval_columns():
 
     conn = get_db_connection()
@@ -1438,15 +1480,15 @@ def log_predictions(predicted_at, rows, province):
     conn.close()
 
 
-def log_notification_snapshot(recorded_at_utc, latest_pm25, province):
+def log_notification_snapshot(recorded_at_utc, latest_pm25, province, trend_direction=None, trend_period=None):
 
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO notification_log (recorded_at_utc, latest_pm25, province)
-           VALUES (%s, %s, %s)
+        """INSERT INTO notification_log (recorded_at_utc, latest_pm25, province, trend_direction, trend_period)
+           VALUES (%s, %s, %s, %s, %s)
            ON CONFLICT (recorded_at_utc, province) DO NOTHING""",
-        (recorded_at_utc, latest_pm25, province),
+        (recorded_at_utc, latest_pm25, province, trend_direction, trend_period),
     )
     conn.commit()
     cur.close()
@@ -1524,6 +1566,27 @@ _HEALTH_MESSAGE_TEMPLATES = {
 
 def _level_index(level_name):
     return next(i for i, (_, name, _) in enumerate(PM25_LEVELS) if name == level_name)
+
+
+def level_transition(current_pm25, previous_pm25):
+    """ข้อ 1 ของฟีเจอร์แจ้งเตือนเพิ่มเติม "ระดับเปลี่ยนสถานะ" — คืน None ถ้าอยู่ระดับเดียวกัน (หรือไม่มีค่า
+    ก่อนหน้าให้เทียบ) ไม่งั้นคืน dict บอกทิศทาง/จำนวนขั้นที่เปลี่ยน ใช้ _level_index() เทียบอันดับ ไม่ใช่เทียบ
+    ชื่อ string ตรงๆ เพราะต้องรู้ทิศทาง (แย่ลง/ดีขึ้น) ด้วย"""
+    if previous_pm25 is None:
+        return None
+    from_level = pm25_status(previous_pm25)
+    to_level = pm25_status(current_pm25)
+    if from_level == to_level:
+        return None
+    from_idx, to_idx = _level_index(from_level), _level_index(to_level)
+    return {
+        "from_level": from_level,
+        "to_level": to_level,
+        "from_pm25": previous_pm25,
+        "to_pm25": current_pm25,
+        "direction": "worse" if to_idx > from_idx else "better",
+        "levels_moved": abs(to_idx - from_idx),
+    }
 
 
 def _find_keyword_occurrences(message_text, keyword, max_gap=_MAX_FLEX_GAP):
@@ -2361,11 +2424,19 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         if is_horizon_at_risk(pred, risk_group):
             risk_horizons.append(h)
 
+    # เรียก classify_daily_trend() แยกต่างหากจากที่ generate_daily_nlg_explanation() เรียกอยู่แล้ว (คนละจุด คนละ
+    # gating — อันนี้คำนวณทุกครั้งที่เรียก get_forecast() ไม่ใช่แค่วันละครั้งต่อ risk_group) ตั้งใจไม่รีแฟคเตอร์ให้
+    # ใช้ค่าร่วมกัน เพราะเป็น pure function รับ forecast เดียวกัน ผลจึงตรงกันเสมอ ไม่เสี่ยงขัดแย้งกัน — คำนวณตรงนี้
+    # (ไม่ใช่แค่ใน if loggable: ด้านล่าง) เพื่อให้ /api/forecast เองก็มีค่านี้ใช้แสดงผลสดได้ทันทีด้วย
+    trend_direction, trend_period = classify_daily_trend(forecast)
+
     loggable = not target_stale and not imputed and not input_degraded
     if loggable:
         log_predictions(latest_time, log_rows, province)
-        log_notification_snapshot(latest_time.isoformat(), float(latest_pm25), province)
-    backfill_actuals(df_observed, province)  
+        log_notification_snapshot(
+            latest_time.isoformat(), float(latest_pm25), province, trend_direction, trend_period
+        )
+    backfill_actuals(df_observed, province)
     if loggable:
         rep_model_used = forecast[REP_HORIZON_FOR_SHAP - 1]["model_used"]
         maybe_generate_daily_nlg(forecast, X_now, risk_group, province, rep_model_used)
@@ -2373,6 +2444,14 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     best_time = find_best_time(forecast)
 
     high_pollution_risk = is_current_at_risk(latest_pm25, risk_group) or len(risk_horizons) > 0
+
+    # ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" — forecast ถูกสร้างตามลำดับ h=1..24 ต่อเนื่อง ดัชนี h-1 จึงตรงกับ horizon h เสมอ
+    min_risk_horizon = min(risk_horizons) if risk_horizons else None
+    risk_imminent = min_risk_horizon is not None and min_risk_horizon <= IMMINENT_HORIZON_H
+    min_risk_horizon_pm25 = forecast[min_risk_horizon - 1]["pm25"] if min_risk_horizon is not None else None
+    # forecast[].display_time คำนวณไว้แล้ว (บวก OPENAQ_DISPLAY_LABEL_SHIFT_H) ใช้ตรงๆ ให้ตรงกับเวลาที่กราฟ
+    # พยากรณ์หลักโชว์เป๊ะ ไม่ต้องคำนวณซ้ำ
+    min_risk_horizon_display_time = forecast[min_risk_horizon - 1]["display_time"] if min_risk_horizon is not None else None
 
     # Air4Thai สดกว่า OpenAQ มาก (~28 นาที vs ~2.5 ชม. วัดจริง) — ใช้แสดงผล "ตอนนี้" (การ์ด PM2.5 ตอนนี้ +
     # จุด "ตอนนี้" บนกราฟพยากรณ์รายชั่วโมง) เท่านั้น latest_pm25 ด้านบน (ฐานพยากรณ์ของโมเดล, บวกเข้ากับ
@@ -2416,6 +2495,12 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         "best_time": best_time,
         "high_pollution_risk": high_pollution_risk,
         "risk_horizons": risk_horizons,
+        "risk_imminent": risk_imminent,
+        "min_risk_horizon": min_risk_horizon,
+        "min_risk_horizon_pm25": min_risk_horizon_pm25,
+        "min_risk_horizon_display_time": min_risk_horizon_display_time,
+        "trend_direction": trend_direction,
+        "trend_period": trend_period,
         "fallback_triggered_horizons": fallback_triggered_horizons,
         "data_quality": {
             "target_age_hours": round(float(target_age_hours), 1),
@@ -2499,6 +2584,12 @@ def scheduled_forecast_job():
             result = get_forecast(province=p["province_en"])
             dq = result["data_quality"]
             log_target_latency(p["province_en"], dq)
+            try:
+                dispatch_push_for_province(p["province_en"])
+            except Exception as push_err:
+                # push dispatch ต้องไม่ทำให้รอบ dq-summary ของจังหวัดนี้นับเป็น "failed" ไปด้วย — แยก
+                # try/except ของตัวเองเพื่อกัน subscription/push ที่พังไม่ให้กระทบการ log/backfill หลัก
+                print(f"[push] dispatch ล้มเหลว ({p['province_en']}): {push_err}")
             if dq.get("series_source") == "stale_cache" or dq.get("weather_source") == "climatology":
                 summary["input_fallback"] += 1
                 print(f"[scheduler] {p['province_en']}: ใช้ข้อมูลสำรอง (pm25={dq.get('series_source')}, weather={dq.get('weather_source')}) — ไม่บันทึก log")
@@ -2531,6 +2622,22 @@ def index_html_redirect():
 @app.route("/compare.html")
 def compare_html_redirect():
     return redirect("/compare")
+
+
+@app.route("/dev-cert.pem")
+def dev_cert_download():
+    """ดาวน์โหลด public cert (dev_cert.pem จาก scripts/generate_dev_cert.py) เพื่อติดตั้งเป็น trusted บนมือถือ
+    ตอนทดสอบ HTTPS — เสิร์ฟแค่ cert สาธารณะ (ไม่ใช่ private key) ไม่มีความลับ แต่กันไว้เฉพาะ DEBUG เพราะเป็น
+    ไฟล์สำหรับ dev เท่านั้น ไม่ควรมีใน production จริง"""
+    if not DEBUG:
+        return jsonify({"error": "not available"}), 404
+    cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_cert.pem")
+    if not os.path.exists(cert_path):
+        return jsonify({"error": "ยังไม่ได้สร้าง dev_cert.pem — รัน scripts/generate_dev_cert.py ก่อน"}), 404
+    return send_from_directory(
+        os.path.dirname(cert_path), "dev_cert.pem",
+        mimetype="application/x-x509-ca-cert", as_attachment=False,
+    )
 
 
 @app.route("/", defaults={"path": ""})
@@ -2863,6 +2970,311 @@ def api_current_pm25():
 
 NOTIF_SCAN_WINDOW = 500
 
+# ข้อ 1 "ระดับเปลี่ยนสถานะ" — กันไม่ให้ค่าที่แกว่งไปมาระหว่าง 2 ระดับติดกันพอดี (เช่นเด้งข้ามเพดานทุกชั่วโมง)
+# ยิงแจ้งเตือนซ้ำทุกครั้ง — scheduler รันทุก 1 ชม. จึงนับ "แถว" แทน "ชั่วโมง" ได้ตรงๆ
+LEVEL_TRANSITION_DEBOUNCE_ROWS = 3
+
+
+def _recent_levels(snapshots, start_idx, count):
+    """ระดับ PM2.5 (ชื่อสถานะ) ของ snapshots[start_idx : start_idx+count] — ใช้เช็ค debounce"""
+    return {pm25_status(snapshots[j][1]) for j in range(start_idx, min(start_idx + count, len(snapshots)))}
+
+
+def _level_transition_for(snapshots, idx):
+    """transition ของ snapshots[idx] เทียบกับแถวก่อนหน้า (idx+1 เพราะ snapshots เรียง DESC) พร้อม debounce —
+    คืน None ถ้าไม่มีแถวก่อนหน้า, ไม่มีการเปลี่ยนระดับ, หรือเปลี่ยนไปหาระดับที่เพิ่งเจอเมื่อไม่กี่แถวที่แล้ว"""
+    if idx + 1 >= len(snapshots):
+        return None
+    transition = level_transition(snapshots[idx][1], snapshots[idx + 1][1])
+    if transition is None:
+        return None
+    recent = _recent_levels(snapshots, idx + 1, LEVEL_TRANSITION_DEBOUNCE_ROWS)
+    if transition["to_level"] in recent:
+        return None
+    return transition
+
+
+def _station_silence_for(recorded_at_utc, now_utc=None):
+    """ข้อ 4 'สถานีเงียบนานผิดปกติ' — คืน (stale_hours, data_stale) เทียบ TARGET_STALE_HOURS เดิม
+    now_utc รับ override ได้ (สำหรับเทส) ปกติใช้เวลาจริง ณ ตอนเรียก"""
+    if now_utc is None:
+        now_utc = pd.Timestamp.now(tz="UTC")
+    stale_hours = (now_utc - pd.Timestamp(recorded_at_utc)).total_seconds() / 3600
+    return stale_hours, stale_hours > TARGET_STALE_HOURS
+
+
+def _horizon_display_time(recorded_at_utc, horizon):
+    """เวลาที่ควรโชว์ผู้ใช้สำหรับ horizon นี้ นับจาก recorded_at_utc (= latest_time ตอน log_notification_snapshot
+    เขียนแถวนี้) บวก OPENAQ_DISPLAY_LABEL_SHIFT_H เหมือนที่ forecast[].display_time ใน get_forecast() ใช้ —
+    ให้ตรงกับเวลาที่กราฟพยากรณ์หลักโชว์เป๊ะ ไม่ใช่คนละ convention กัน"""
+    t = pd.Timestamp(recorded_at_utc) + pd.Timedelta(hours=horizon + OPENAQ_DISPLAY_LABEL_SHIFT_H)
+    return t.tz_convert("Asia/Bangkok").strftime("%H:%M")
+
+
+def _imminent_risk_for(horizon_rows, risk_group, recorded_at_utc):
+    """ข้อ 2 'ใกล้ถึงช่วงเสี่ยงแล้ว' — คืน (risk_horizons, fallback_horizons, risk_imminent,
+    min_risk_horizon, min_risk_horizon_pm25, min_risk_horizon_display_time) จาก horizon_rows ที่ query มาแล้ว
+    (ไม่ query ซ้ำ)"""
+    risk_horizons = sorted(h for h, pred, model_used in horizon_rows if is_horizon_at_risk(pred, risk_group))
+    fallback_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == MODEL_NAIVE)
+    pm25_by_horizon = {h: pred for h, pred, _ in horizon_rows}
+    min_risk_horizon = min(risk_horizons) if risk_horizons else None
+    risk_imminent = min_risk_horizon is not None and min_risk_horizon <= IMMINENT_HORIZON_H
+    min_risk_horizon_pm25 = pm25_by_horizon.get(min_risk_horizon) if min_risk_horizon is not None else None
+    min_risk_horizon_display_time = (
+        _horizon_display_time(recorded_at_utc, min_risk_horizon) if min_risk_horizon is not None else None
+    )
+    return (risk_horizons, fallback_horizons, risk_imminent, min_risk_horizon, min_risk_horizon_pm25,
+            min_risk_horizon_display_time)
+
+
+# ===== Web Push notifications =====
+# ส่ง push ผ่าน VAPID มาตรฐาน Web Push — subscription เก็บใน push_subscriptions (endpoint คือ identity ตาม
+# Web Push spec) payload ที่ส่งไปเป็น JSON {title, body, tag, url} รับที่ frontend/src/sw.js push handler
+
+def send_push(endpoint, p256dh, auth, title, body, tag, url="/notifications"):
+    """ส่ง push 1 ครั้ง คืน True ถ้าสำเร็จ — ถ้า subscription หมดอายุ (404/410) ลบแถวทิ้งแล้วคืน False เงียบๆ
+    ไม่ throw ออกไปให้ caller ต้อง try/except เอง (ผู้โทรเป็น scheduler loop วนหลาย subscription ต่อรอบ)"""
+    try:
+        webpush(
+            subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}},
+            data=json.dumps({"title": title, "body": body, "tag": tag, "url": url}),
+            vapid_private_key=VAPID_PRIVATE_KEY_PATH,
+            vapid_claims={"sub": VAPID_CLAIMS_SUB},
+            # ttl=0 (default ของ pywebpush) ชนกับ WNS (endpoint notify.windows.com — Chrome/Edge บน
+            # Windows desktop ใช้): WNS ตอบ 400 "Ttl value conflicts with X-WNS-Cache-Policy." เสมอถ้า
+            # ttl=0 — endpoint อื่น (FCM/APNs) รับ ttl=0 ได้ปกติ แต่ตั้งเป็นค่าบวกไว้เลยให้ใช้ได้ทุก endpoint
+            ttl=60,
+        )
+        return True
+    except WebPushException as e:
+        if e.response is not None and e.response.status_code in (404, 410):
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM push_subscriptions WHERE endpoint = %s", (endpoint,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        else:
+            print(f"[push] ส่งไม่สำเร็จ ({endpoint[:40]}...): {e}")
+        return False
+
+
+_PUSH_WARNING_ADVICE_BY_RISK_GROUP = {
+    "ทั่วไป": "โปรดระมัดระวังเพิ่มเติม",
+    "เด็ก-ผู้สูงอายุ": "กลุ่มเด็ก/ผู้สูงอายุควรหลีกเลี่ยงกิจกรรมกลางแจ้งเป็นเวลานานและระมัดระวังเป็นพิเศษ",
+    "มีโรคประจำตัว": "ผู้มีโรคประจำตัวทางเดินหายใจควรหลีกเลี่ยงกิจกรรมกลางแจ้งและเตรียมอุปกรณ์ป้องกัน",
+}
+
+
+def _push_payload_for(condition, risk_group, transition, min_risk_horizon, min_risk_horizon_pm25,
+                       min_risk_horizon_display_time, latest_pm25, trend_period, stale_hours):
+    """title/body ของ push ต่อเงื่อนไข — เลียนข้อความจาก frontend/src/notifications.js builder เป๊ะ
+    (duplicate เป็น Python ด้วยมือเพราะไม่มี module ร่วมระหว่าง JS/Python ในโปรเจกต์นี้)"""
+    if condition == "threshold":
+        advice = _PUSH_WARNING_ADVICE_BY_RISK_GROUP.get(risk_group, _PUSH_WARNING_ADVICE_BY_RISK_GROUP["ทั่วไป"])
+        return "แจ้งเตือนคุณภาพอากาศ", (
+            f"ช่วงนี้ PM2.5 อยู่ในระดับสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อยในช่วงมลพิษสูง {advice}"
+        )
+    if condition == "transition":
+        direction_word = "แย่ลง" if transition["direction"] == "worse" else "ดีขึ้น"
+        magnitude = "มาก" if transition["levels_moved"] >= 2 else "เล็กน้อย"
+        return "ระดับคุณภาพอากาศเปลี่ยน", (
+            f'อากาศ{direction_word}{magnitude} จาก "{transition["from_level"]}" เป็น "{transition["to_level"]}" '
+            f'({transition["to_pm25"]} µg/m³)'
+        )
+    if condition == "imminent":
+        return "ใกล้ถึงช่วงเสี่ยงแล้ว", (
+            f"ฝุ่นจะเกินเกณฑ์ {min_risk_horizon_display_time} น. (อีก {min_risk_horizon} ชม.) "
+            f"คาดการณ์ {min_risk_horizon_pm25} µg/m³"
+        )
+    if condition == "trend":
+        return "แนวโน้มฝุ่นดีขึ้น", f"แนวโน้มช่วง{trend_period}ฝุ่นจะลดลง"
+    if condition == "silence":
+        return "ไม่มีข้อมูลสถานีใหม่", f"ไม่มีข้อมูลสถานีใหม่มา {round(stale_hours)} ชั่วโมงแล้ว"
+    return "แจ้งเตือนคุณภาพอากาศ", ""
+
+
+def dispatch_push_for_province(province, now_utc=None):
+    """เรียกจาก scheduled_forecast_job() ทุกจังหวัดทุกชั่วโมง (ไม่ใช่จาก get_forecast()/live request — ดู
+    เหตุผลในแผน) self-contained อ่าน notification_log/prediction_log ตรงๆ (query เดียวกับ
+    api_notifications_status()) ไม่ต้องแก้ signature ของ get_forecast() เลย
+
+    now_utc: รับ override ได้ (ส่งต่อให้ _station_silence_for()) สำหรับเทสเท่านั้น ปกติใช้เวลาจริง ณ ตอนเรียก
+
+    Dedup: threshold/silence ใช้ sentinel คงที่ "active" (ไม่ใช่ค่าที่แกว่งได้ เช่น pm25/stale_hours ดิบ)
+    เพราะเงื่อนไขพวกนี้ "ค้าง" ได้หลายชั่วโมงติดกัน ถ้าใช้ค่าดิบจะ push ซ้ำทุกชั่วโมงที่ค่าขยับนิดเดียว —
+    transition เคลียร์ตัวเองเป็น None อัตโนมัติอยู่แล้วหลังผ่านไป 1 ชม. (ดู _level_transition_for) ส่วน
+    imminent/trend ใช้ค่าจริง (horizon/period) ได้เพราะเปลี่ยนแค่ไม่กี่ครั้งต่อเหตุการณ์ ไม่ใช่ทุกชั่วโมง"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, endpoint, p256dh, auth, user_id, push_dedup_state FROM push_subscriptions WHERE province = %s",
+        (province,),
+    )
+    subscriptions = cur.fetchall()
+    if not subscriptions:
+        cur.close()
+        conn.close()
+        return
+
+    cur.execute(
+        "SELECT recorded_at_utc, latest_pm25, trend_direction, trend_period FROM notification_log "
+        "WHERE province = %s ORDER BY recorded_at_utc DESC LIMIT %s",
+        (province, 1 + LEVEL_TRANSITION_DEBOUNCE_ROWS),
+    )
+    snapshots = cur.fetchall()
+    if not snapshots:
+        cur.close()
+        conn.close()
+        return
+
+    recorded_at_utc, latest_pm25, trend_direction, trend_period = snapshots[0]
+    transition = _level_transition_for(snapshots, 0)
+    stale_hours, data_stale = _station_silence_for(recorded_at_utc, now_utc=now_utc)
+    transition_value = f'{transition["from_level"]}->{transition["to_level"]}' if transition else None
+    trend_value = trend_period if trend_direction == "down" else None
+    silence_value = "active" if data_stale else None
+
+    cur.execute(
+        "SELECT horizon, predicted_pm25, model_used FROM prediction_log "
+        "WHERE predicted_at_utc = %s AND province = %s",
+        (recorded_at_utc, province),
+    )
+    horizon_rows = cur.fetchall()
+
+    for sub_id, endpoint, p256dh, auth, user_id, dedup_state in subscriptions:
+        risk_group = "ทั่วไป"
+        if user_id is not None:
+            user = get_user_by_id(user_id)
+            if user is not None:
+                risk_group = user["risk_group"]
+
+        (risk_horizons, _fallback_horizons, risk_imminent, min_risk_horizon, min_risk_horizon_pm25,
+         min_risk_horizon_display_time) = _imminent_risk_for(horizon_rows, risk_group, recorded_at_utc)
+        current_at_risk = is_current_at_risk(latest_pm25, risk_group)
+        threshold_value = "active" if (current_at_risk or bool(risk_horizons)) else None
+        imminent_value = min_risk_horizon if risk_imminent else None
+
+        events = {
+            "threshold": threshold_value,
+            "transition": transition_value,
+            "imminent": imminent_value,
+            "trend": trend_value,
+            "silence": silence_value,
+        }
+
+        new_state = dict(dedup_state or {})
+        changed = False
+        for key, value in events.items():
+            if new_state.get(key) == value:
+                continue
+            if value is None:
+                new_state[key] = value  # เงื่อนไขหายไปแล้ว — แค่เคลียร์ state ไม่ต้องส่ง push
+                changed = True
+                continue
+            title, body = _push_payload_for(
+                key, risk_group, transition, min_risk_horizon, min_risk_horizon_pm25,
+                min_risk_horizon_display_time, latest_pm25, trend_period, stale_hours,
+            )
+            # อัปเดต state เฉพาะตอนส่งสำเร็จเท่านั้น — ถ้าพลาด (เครือข่าย/push service ขัดข้องชั่วคราว) ปล่อย
+            # ให้ลองใหม่รอบ scheduler ถัดไปแทนที่จะเงียบหายไปเฉยๆ
+            if send_push(endpoint, p256dh, auth, title, body, key):
+                new_state[key] = value
+                changed = True
+
+        if changed:
+            cur2 = conn.cursor()
+            cur2.execute(
+                "UPDATE push_subscriptions SET push_dedup_state = %s::jsonb WHERE id = %s",
+                (json.dumps(new_state), sub_id),
+            )
+            conn.commit()
+            cur2.close()
+
+    cur.close()
+    conn.close()
+
+
+@app.route("/api/push/vapid-public-key", methods=["GET"])
+def api_push_vapid_public_key():
+    return jsonify({"public_key": VAPID_PUBLIC_KEY})
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def api_push_subscribe():
+    try:
+        data = request.get_json(silent=True) or {}
+        endpoint = str(data.get("endpoint", "")).strip()
+        keys = data.get("keys") or {}
+        p256dh = str(keys.get("p256dh", "")).strip()
+        auth = str(keys.get("auth", "")).strip()
+        province = str(data.get("province", "")).strip()
+
+        if not endpoint or not p256dh or not auth:
+            return jsonify({"error": "ข้อมูล subscription ไม่ครบ"}), 400
+        if province not in PROVINCES_BY_SLUG:
+            return jsonify({"error": "ไม่พบจังหวัดนี้"}), 400
+
+        user_id = session.get("user_id")  # None = guest (ไม่บังคับ login เหมือน /api/notifications)
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_id, province, created_at, push_dedup_state)
+               VALUES (%s, %s, %s, %s, %s, %s, '{}'::jsonb)
+               ON CONFLICT (endpoint) DO UPDATE SET
+                 p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_id = EXCLUDED.user_id,
+                 province = EXCLUDED.province, push_dedup_state = '{}'::jsonb""",
+            (endpoint, p256dh, auth, user_id, province, pd.Timestamp.now(tz="UTC").isoformat()),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"ok": True}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+def api_push_unsubscribe():
+    try:
+        data = request.get_json(silent=True) or {}
+        endpoint = str(data.get("endpoint", "")).strip()
+        if endpoint:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM push_subscriptions WHERE endpoint = %s", (endpoint,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        return jsonify({"ok": True}), 200  # idempotent เสมอ แม้ไม่มีแถวตรงให้ลบ
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/push/test", methods=["POST"])
+def api_push_test():
+    """ทดสอบส่ง push ตรงๆ ไม่ต้องรอ scheduler รอบถัดไป — ใช้ตอน dev เท่านั้น"""
+    if not DEBUG:
+        return jsonify({"error": "not available"}), 404
+    try:
+        data = request.get_json(silent=True) or {}
+        endpoint = str(data.get("endpoint", "")).strip()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT p256dh, auth FROM push_subscriptions WHERE endpoint = %s", (endpoint,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row is None:
+            return jsonify({"error": "ไม่พบ subscription นี้"}), 404
+        p256dh, auth = row
+        ok = send_push(endpoint, p256dh, auth, "ทดสอบการแจ้งเตือน",
+                        "นี่คือข้อความทดสอบจากระบบพยากรณ์ PM2.5", "test")
+        return jsonify({"ok": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/notifications", methods=["GET"])
 def api_notifications():
@@ -2874,16 +3286,18 @@ def api_notifications():
 
         conn = get_db_connection()
         cur = conn.cursor()
-     
+
         cur.execute(
-            "SELECT recorded_at_utc, latest_pm25 FROM notification_log WHERE province = %s "
-            "ORDER BY recorded_at_utc DESC LIMIT %s",
+            "SELECT recorded_at_utc, latest_pm25, trend_direction, trend_period FROM notification_log "
+            "WHERE province = %s ORDER BY recorded_at_utc DESC LIMIT %s",
             (province, NOTIF_SCAN_WINDOW),
         )
         snapshots = cur.fetchall()
+        # _level_transition_for()/_recent_levels() อ่านแค่ (recorded_at_utc, latest_pm25) สองคอลัมน์แรกของแต่ละ
+        # แถว ใช้ snapshots ตัวเต็มนี้ตรงๆ ได้เลยไม่ต้อง slice
 
         results = []
-        for recorded_at_utc, latest_pm25 in snapshots:
+        for i, (recorded_at_utc, latest_pm25, trend_direction, trend_period) in enumerate(snapshots):
             cur.execute(
                 "SELECT horizon, predicted_pm25, model_used FROM prediction_log "
                 "WHERE predicted_at_utc = %s AND province = %s",
@@ -2891,21 +3305,32 @@ def api_notifications():
             )
             horizon_rows = cur.fetchall()
 
-            risk_horizons = sorted(
-                h for h, pred, model_used in horizon_rows
-                if is_horizon_at_risk(pred, risk_group)
-            )
-            fallback_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == MODEL_NAIVE)
+            (risk_horizons, fallback_horizons, risk_imminent, min_risk_horizon, min_risk_horizon_pm25,
+             min_risk_horizon_display_time) = _imminent_risk_for(horizon_rows, risk_group, recorded_at_utc)
+            transition = _level_transition_for(snapshots, i)
+            improving = trend_direction == "down"
 
-            if not (is_current_at_risk(latest_pm25, risk_group) or risk_horizons):
+            # เดิมโชว์แค่แถวที่ "เสี่ยง" เท่านั้น — ตอนนี้โชว์แถวที่มีเหตุการณ์น่าสนใจแบบใดแบบหนึ่งใน 4 แบบด้วย
+            # (ระดับเปลี่ยน/เสี่ยงจริง/แนวโน้มดีขึ้น) ข้อ 4 "สถานีเงียบ" ไม่เกี่ยวกับ endpoint นี้ (ดูคอมเมนต์ที่
+            # api_notifications_status())
+            current_at_risk = is_current_at_risk(latest_pm25, risk_group)
+            if not (current_at_risk or risk_horizons or transition or improving):
                 continue
 
             recorded_at_th = pd.Timestamp(recorded_at_utc).tz_convert("Asia/Bangkok")
             results.append({
                 "recorded_at_th": recorded_at_th.strftime("%Y-%m-%d %H:%M"),
                 "latest_pm25": round(float(latest_pm25), 1),
+                "current_at_risk": current_at_risk,
                 "risk_horizons": risk_horizons,
                 "fallback_horizons": fallback_horizons,
+                "risk_imminent": risk_imminent,
+                "min_risk_horizon": min_risk_horizon,
+                "min_risk_horizon_pm25": min_risk_horizon_pm25,
+                "min_risk_horizon_display_time": min_risk_horizon_display_time,
+                "transition": transition,
+                "trend_direction": trend_direction,
+                "trend_period": trend_period,
             })
             if len(results) >= limit:
                 break
@@ -2927,23 +3352,29 @@ def api_notifications_status():
 
         conn = get_db_connection()
         cur = conn.cursor()
+        # LIMIT 1 ของจริง + LEVEL_TRANSITION_DEBOUNCE_ROWS แถวย้อนหลังเพิ่ม เพื่อให้ _level_transition_for()
+        # เช็ค debounce กับแถวปัจจุบัน (index 0) ได้ครบเหมือนที่ api_notifications() ทำ
         cur.execute(
-            "SELECT recorded_at_utc, latest_pm25 FROM notification_log WHERE province = %s "
-            "ORDER BY recorded_at_utc DESC LIMIT 1",
-            (province,),
+            "SELECT recorded_at_utc, latest_pm25, trend_direction, trend_period FROM notification_log "
+            "WHERE province = %s ORDER BY recorded_at_utc DESC LIMIT %s",
+            (province, 1 + LEVEL_TRANSITION_DEBOUNCE_ROWS),
         )
-        snapshot = cur.fetchone()
+        snapshots = cur.fetchall()
 
-        if snapshot is None:
+        if not snapshots:
             cur.close()
             conn.close()
             return jsonify({
                 "high_pollution_risk": False, "risk_horizons": [], "fallback_horizons": [],
+                "risk_imminent": False, "min_risk_horizon": None, "min_risk_horizon_pm25": None,
+                "min_risk_horizon_display_time": None,
+                "transition": None, "trend_direction": None, "trend_period": None,
+                "data_stale": None, "stale_hours": None,
                 "current_pm25": None, "current_status": None, "recorded_at_th": None,
                 "risk_group": risk_group,
             })
 
-        recorded_at_utc, latest_pm25 = snapshot
+        recorded_at_utc, latest_pm25, trend_direction, trend_period = snapshots[0]
         cur.execute(
             "SELECT horizon, predicted_pm25, model_used FROM prediction_log "
             "WHERE predicted_at_utc = %s AND province = %s",
@@ -2953,15 +3384,29 @@ def api_notifications_status():
         cur.close()
         conn.close()
 
-        risk_horizons = sorted(h for h, pred, model_used in horizon_rows if is_horizon_at_risk(pred, risk_group))
-        fallback_horizons = sorted(h for h, _, model_used in horizon_rows if model_used == MODEL_NAIVE)
+        (risk_horizons, fallback_horizons, risk_imminent, min_risk_horizon, min_risk_horizon_pm25,
+         min_risk_horizon_display_time) = _imminent_risk_for(horizon_rows, risk_group, recorded_at_utc)
+        transition = _level_transition_for(snapshots, 0)
         high_pollution_risk = is_current_at_risk(latest_pm25, risk_group) or bool(risk_horizons)
         recorded_at_th = pd.Timestamp(recorded_at_utc).tz_convert("Asia/Bangkok")
+
+        # ข้อ 4 "สถานีเงียบนานผิดปกติ" — อนุมานจากช่องว่างของเวลา ไม่ใช่ field ใหม่ที่ต้องเขียนตอน log เพราะ
+        # ช่วงที่ไม่ loggable (target_stale/imputed/fallback) ก็คือช่วงที่ไม่มีแถวใหม่เข้ามาอยู่แล้วโดยธรรมชาติ
+        stale_hours, data_stale = _station_silence_for(recorded_at_utc)
 
         return jsonify({
             "high_pollution_risk": high_pollution_risk,
             "risk_horizons": risk_horizons,
             "fallback_horizons": fallback_horizons,
+            "risk_imminent": risk_imminent,
+            "min_risk_horizon": min_risk_horizon,
+            "min_risk_horizon_pm25": min_risk_horizon_pm25,
+            "min_risk_horizon_display_time": min_risk_horizon_display_time,
+            "transition": transition,
+            "trend_direction": trend_direction,
+            "trend_period": trend_period,
+            "data_stale": data_stale,
+            "stale_hours": round(stale_hours, 1),
             "current_pm25": round(float(latest_pm25), 1),
             "current_status": pm25_status(latest_pm25),
             "recorded_at_th": recorded_at_th.strftime("%Y-%m-%d %H:%M"),
@@ -3199,4 +3644,24 @@ if __name__ == "__main__":
         scheduler.start()
         print("[scheduler] started - auto forecast every 1 hour")
 
-    app.run(port=5000, debug=DEBUG)
+    # PORT ปรับได้ผ่าน env var — ใช้ตอน debug ปัญหา cache ของ service worker บนมือถือ (origin ใหม่ = cache ใหม่
+    # เสมอ โดยไม่ต้องง้อการล้าง cache ฝั่งอุปกรณ์ที่บางทีไม่เวิร์กจริงบน iOS Web Clip) ปกติไม่ตั้งค่า = 5000 เหมือนเดิม
+    port = int(os.environ.get("PORT", 5000))
+    # HTTPS=1 เปิด self-signed cert สำหรับทดสอบ — Notification/PushManager/serviceWorker ต้องการ "secure
+    # context" เสมอ (HTTPS หรือ localhost เท่านั้น) ทดสอบผ่าน LAN IP ด้วย http:// ธรรมดาจะไม่มีทาง trigger
+    # permission prompt จริงได้เลยไม่ว่าจะแก้โค้ดยังไงก็ตาม
+    # ใช้ไฟล์ถาวรจาก scripts/generate_dev_cert.py ถ้ามี (ไม่ต้องกดผ่านคำเตือน cert ซ้ำทุกครั้งที่ restart
+    # เหมือน adhoc ที่ Werkzeug สุ่ม cert ใหม่ทุกรอบ) ไม่มีไฟล์ค่อย fallback ไปใช้ adhoc
+    _dev_cert = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_cert.pem")
+    _dev_key = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_key.pem")
+    if os.environ.get("HTTPS") != "1":
+        ssl_context = None
+    elif os.path.exists(_dev_cert) and os.path.exists(_dev_key):
+        ssl_context = (_dev_cert, _dev_key)
+    else:
+        ssl_context = "adhoc"
+    # LAN=1 เปิดให้อุปกรณ์อื่นในวงแลนเดียวกันเข้าถึงได้ (ทดสอบมือถือ) — ปกติไม่ตั้งค่า = "127.0.0.1" เหมือนเดิม
+    # ก่อนเพิ่มงาน Web Push (ปลอดภัยกว่าเป็นค่าเริ่มต้น เพราะ DEBUG=True เปิด Werkzeug interactive debugger
+    # อยู่ด้วย เปิดให้ทั้งวงแลนเข้าถึงได้ตลอดเวลาโดยไม่ตั้งใจจะเพิ่มพื้นที่เสี่ยงโดยไม่จำเป็น)
+    host = "0.0.0.0" if os.environ.get("LAN") == "1" else "127.0.0.1"
+    app.run(host=host, port=port, debug=DEBUG, ssl_context=ssl_context)

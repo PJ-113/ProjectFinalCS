@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Bell, BellDot, TriangleAlert, Info, Sun, Moon } from '@lucide/vue'
+import { Bell, BellDot, TriangleAlert, Info, Sparkles, Sun, Moon } from '@lucide/vue'
 import { themeState, toggleTheme } from '../theme'
 import { authState, fetchCurrentUser, isAdmin } from '../auth'
 import {
@@ -8,6 +8,9 @@ import {
   fetchForecast,
   fetchHomeProvinceStatus,
   buildWarningMessage,
+  buildImminentRiskMessage,
+  buildImprovingTrendMessage,
+  buildStationSilenceMessage,
   notificationHistory,
   fetchNotificationHistory,
   summarizeHistoryItem,
@@ -112,6 +115,11 @@ const historyItems = computed(() =>
           <div class="notif-dropdown-title">การแจ้งเตือน</div>
           <div v-if="notificationState.status === 'loading'" class="notif-empty">กำลังโหลด...</div>
           <template v-else>
+            <!-- ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" แสดงก่อน buildWarningMessage เดิม เพราะเจาะจง/actionable กว่า -->
+            <div v-if="notificationState.riskImminent" class="notif-item notif-item-alert">
+              <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
+              <span>{{ buildImminentRiskMessage(notificationState) }}</span>
+            </div>
             <div v-if="notificationState.highPollutionRisk" class="notif-item notif-item-alert">
               <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
               <span>{{ buildWarningMessage(notificationState.riskGroup) }}</span>
@@ -120,8 +128,20 @@ const historyItems = computed(() =>
               <Info :size="22" :stroke-width="2" aria-hidden="true" />
               <span>ข้อมูลบางช่วงไม่ครบ ใช้ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)</span>
             </div>
+            <!-- ข้อ 4 "สถานีเงียบนานผิดปกติ" — ตั้งเฉพาะตอนเฝ้า home_province ผ่าน fetchHomeProvinceStatus() -->
+            <div v-if="notificationState.dataStale" class="notif-item notif-item-info">
+              <Info :size="22" :stroke-width="2" aria-hidden="true" />
+              <span>{{ buildStationSilenceMessage(notificationState.staleHours) }}</span>
+            </div>
+            <!-- ข้อ 3 "แนวโน้มฝุ่นจะดีขึ้น" (ข่าวดี) วางหลังสุด เพราะการแจ้งเตือนด้านความเสี่ยง/คุณภาพข้อมูลสำคัญกว่า -->
+            <div v-if="notificationState.trendDirection === 'down'" class="notif-item notif-item-good">
+              <Sparkles :size="22" :stroke-width="2" aria-hidden="true" />
+              <span>{{ buildImprovingTrendMessage(notificationState.trendPeriod) }}</span>
+            </div>
             <div
-              v-if="!notificationState.highPollutionRisk && notificationState.fallbackHorizons.length === 0"
+              v-if="!notificationState.highPollutionRisk && !notificationState.riskImminent
+                && !notificationState.dataStale && notificationState.trendDirection !== 'down'
+                && notificationState.fallbackHorizons.length === 0"
               class="notif-empty"
             >
               ไม่มีการแจ้งเตือนในขณะนี้ คุณภาพอากาศอยู่ในเกณฑ์ปกติ
@@ -139,6 +159,8 @@ const historyItems = computed(() =>
                 <span v-for="(r, i) in item.summary.ranges" :key="i" class="notif-history-chip">{{ r }}</span>
               </span>
               <span v-if="item.summary.note" class="notif-history-note">{{ item.summary.note }}</span>
+              <span v-if="item.summary.transitionNote" class="notif-history-note">{{ item.summary.transitionNote }}</span>
+              <span v-if="item.summary.goodNews" class="notif-history-note notif-history-note-good">{{ item.summary.goodNews }}</span>
             </li>
           </ul>
 
@@ -381,6 +403,12 @@ const historyItems = computed(() =>
   color: var(--info-ink);
 }
 
+.notif-item-good {
+  background: var(--success-bg);
+  border-color: color-mix(in srgb, var(--success-ink) 35%, transparent);
+  color: var(--success-ink);
+}
+
 .notif-history-title {
   margin-top: 6px;
   padding-top: 14px;
@@ -437,7 +465,12 @@ const historyItems = computed(() =>
   color: var(--muted);
 }
 
+.notif-history-note-good {
+  color: var(--success-ink);
+}
+
 .notif-dropdown-link {
+  align-self: flex-end;
   color: var(--accent);
   text-decoration: none;
   font-weight: 600;

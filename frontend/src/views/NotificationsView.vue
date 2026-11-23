@@ -4,6 +4,7 @@ import { BellOff } from '@lucide/vue'
 import { authState } from '../auth'
 import { provinceState } from '../provinces'
 import { notificationHistory, fetchNotificationHistory, summarizeHistoryItem, formatCardTime } from '../notifications'
+import PushPrompt from '../components/PushPrompt.vue'
 
 
 const watchedProvince = computed(() => authState.user?.home_province || provinceState.selected)
@@ -32,6 +33,8 @@ const items = computed(() =>
         ช่วงเวลาที่ PM2.5 อยู่ในระดับที่ควรระวัง<template v-if="provinceName"> · จังหวัด{{ provinceName }}</template>
       </p>
 
+      <PushPrompt :province="watchedProvince" />
+
       <div v-if="notificationHistory.status === 'loading'" class="stack">
         <div v-for="n in 3" :key="n" class="history-card skeleton-card">
           <div class="skeleton skeleton-line" style="width: 40%"></div>
@@ -50,13 +53,14 @@ const items = computed(() =>
         <li v-for="item in items" :key="item.recorded_at_th" class="history-card">
           <div class="history-top">
             <span class="history-time">{{ item.timeLabel }}</span>
-            <span class="history-pm25">PM2.5 ตอนนั้น {{ item.latest_pm25 }} µg/m³</span>
           </div>
           <div class="history-headline">{{ item.summary.headline }}</div>
           <div v-if="item.summary.ranges.length" class="history-ranges">
             <span v-for="(r, i) in item.summary.ranges" :key="i" class="history-range-chip">{{ r }}</span>
           </div>
           <div v-if="item.summary.note" class="history-note">{{ item.summary.note }}</div>
+          <div v-if="item.summary.transitionNote" class="history-note">{{ item.summary.transitionNote }}</div>
+          <div v-if="item.summary.goodNews" class="history-note history-note-good">{{ item.summary.goodNews }}</div>
         </li>
       </ul>
     </div>
@@ -88,7 +92,6 @@ h1 { font-size: 1.6rem; font-weight: 700; line-height: 1.3; margin: 0 0 4px; }
 
 .history-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .history-time { font-size: 0.85rem; font-weight: 700; color: var(--accent); }
-.history-pm25 { font-size: 0.8rem; color: var(--muted); text-align: right; }
 
 .history-headline { font-size: 1rem; font-weight: 600; line-height: 1.5; margin-top: 6px; }
 
@@ -104,6 +107,7 @@ h1 { font-size: 1.6rem; font-weight: 700; line-height: 1.3; margin: 0 0 4px; }
 }
 
 .history-note { font-size: 0.8rem; color: var(--muted); line-height: 1.5; margin-top: 8px; }
+.history-note-good { color: var(--success-ink); }
 
 .state-box {
   background: var(--card);
