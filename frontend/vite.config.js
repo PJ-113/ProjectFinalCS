@@ -9,6 +9,17 @@ export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
+      // injectManifest (ไม่ใช่ generateSW เดิม) เพราะต้องมี service worker ของเราเอง (src/sw.js) ที่รับ
+      // push/notificationclick event ได้ — generateSW ไม่เปิดช่องให้เขียน event listener เองแบบนี้
+      // (dry-run ยืนยันแล้วว่า precache manifest ออกมาเหมือนเดิมทุกไฟล์ ดู CHANGELOG ตอน Web Push)
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
+      injectManifest: {
+        // ไฟล์ขนาดใหญ่ (เช่น model-adjacent bundle, isaan boundary/mask JSON) เกิน default 2MB ของ
+        // injectManifest ถ้าไม่ขยายจะ build fail แบบเงียบๆตอนรายการไฟล์ใหญ่กว่า limit
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+      },
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico'],
       manifest: {
@@ -26,27 +37,11 @@ export default defineConfig({
           { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
-      workbox: {
-        // ไม่ cache /api/* แบบ offline-first เพราะข้อมูลพยากรณ์ต้องเป็นข้อมูลสดเสมอ
-        // ปล่อยให้ fetch ตรงไป network ทุกครั้ง ตัว service worker ดูแลแค่ static assets (JS/CSS/HTML shell)
-        navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [
-          {
-            // แผนที่ (/map) โหลด tile จาก OpenStreetMap — เป็นภาพนิ่งไม่เปลี่ยนบ่อย cache ยาวได้ปลอดภัย
-            // ต่างจาก /api/* ด้านบนที่ต้องสดเสมอ, ลด request ซ้ำและช่วยให้ใช้ offline ได้บางส่วน
-            urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "osm-tiles-cache",
-              expiration: {
-                maxEntries: 200,
-                maxAgeSeconds: 30 * 24 * 60 * 60,
-              },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
-      },
+      // หมายเหตุ: ไม่มี key `workbox` อีกแล้ว (เป็น option เฉพาะ generateSW) — OSM tile caching +
+      // /api navigateFallback denylist ที่เคยอยู่ตรงนี้ ย้ายไปเขียนเองใน src/sw.js แทน
+      // (เคยเปิด devOptions.enabled ไว้เผื่อทดสอบ sw.js ผ่าน `npm run dev` แต่ไม่เคยได้ใช้จริง — ตอนทดสอบ
+      // Web Push ทั้งหมดทำผ่าน `npm run build` + Flask serve ตรงๆ เท่านั้น พอเปิดจริงกลับทำให้ ServiceWorker
+      // registration พังใน dev mode ปกติ เอาออกเพราะไม่คุ้มและไม่จำเป็น)
     }),
   ],
   resolve: {

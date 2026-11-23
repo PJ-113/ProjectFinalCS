@@ -1,5 +1,9 @@
 # ===== ความลับ — ห้าม commit เด็ดขาด =====
 .env
+private_key.pem
+public_key.pem
+dev_cert.pem
+dev_key.pem
 
 # ===== Python =====
 __pycache__/

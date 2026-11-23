@@ -10,6 +10,17 @@ export const notificationState = reactive({
   fallbackHorizons: [],
   currentPm25: null,
   currentStatus: '',
+  // ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว"
+  riskImminent: false,
+  minRiskHorizon: null,
+  minRiskHorizonPm25: null,
+  minRiskHorizonDisplayTime: null,
+  // ข้อ 3 "แนวโน้มฝุ่นจะดีขึ้น"
+  trendDirection: null,
+  trendPeriod: null,
+  // ข้อ 4 "สถานีเงียบนานผิดปกติ" — ตั้งเฉพาะใน fetchHomeProvinceStatus() เท่านั้น (ดูคอมเมนต์ที่นั่น)
+  dataStale: null,
+  staleHours: null,
 })
 
 const WARNING_ADVICE_BY_RISK_GROUP = {
@@ -22,6 +33,36 @@ const WARNING_ADVICE_BY_RISK_GROUP = {
 export function buildWarningMessage(riskGroup) {
   const advice = WARNING_ADVICE_BY_RISK_GROUP[riskGroup] || WARNING_ADVICE_BY_RISK_GROUP['ทั่วไป']
   return `ช่วงนี้ PM2.5 อยู่ในระดับสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อยในช่วงมลพิษสูง ${advice}`
+}
+
+// ข้อ 1 "ระดับเปลี่ยนสถานะ" — transition: { from_level, to_level, from_pm25, to_pm25, direction, levels_moved }
+// จาก backend (risk_group-independent จึงไม่ต้องมี dict ต่อ risk_group แบบ buildWarningMessage)
+// โทน "สรุปนำหน้า" — ขึ้นต้นด้วยทิศทาง/ขนาดการเปลี่ยนเป็นภาษาพูดก่อน (แย่ลง/ดีขึ้น, เล็กน้อย/มาก ตาม
+// levels_moved) ตามด้วย "จาก X เป็น Y" แบบสั้น — เก็บค่า PM2.5 แค่ตัวล่าสุด (to_pm25) ไม่ใส่ from_pm25 ด้วย
+// เพราะข้อความยาวเกินไปจนตัดบรรทัดดูไม่สวย (ผู้ใช้เลือกตัดค่าก่อนหน้าออกแทนการเปลี่ยนวิธีตัดบรรทัด)
+export function buildLevelTransitionMessage(transition) {
+  const directionWord = transition.direction === 'worse' ? 'แย่ลง' : 'ดีขึ้น'
+  const magnitude = transition.levels_moved >= 2 ? 'มาก' : 'เล็กน้อย'
+  return `อากาศ${directionWord}${magnitude} จาก "${transition.from_level}" เป็น "${transition.to_level}" (${transition.to_pm25} µg/m³)`
+}
+
+// ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" — โทนกระชับ ตรงประเด็น ไม่มีคำแนะนำ/อีโมจิ (ตัดสินใจแล้ว ต่างจาก 3 แบบอื่น)
+// item: ต้องมี min_risk_horizon, min_risk_horizon_pm25, min_risk_horizon_display_time (backend คำนวณเวลาให้
+// ตรงกับที่กราฟพยากรณ์หลักโชว์ไว้แล้ว ไม่ต้องคำนวณ horizon->เวลาซ้ำฝั่ง frontend) ใช้ได้ทั้งจาก notificationState
+// (fetchForecast()/fetchHomeProvinceStatus()) และจาก item หนึ่งใน notificationHistory.items เพราะมี field ชุดนี้
+// เหมือนกันทุกแหล่ง
+export function buildImminentRiskMessage(item) {
+  return `ฝุ่นจะเกินเกณฑ์ ${item.min_risk_horizon_display_time} น. (อีก ${item.min_risk_horizon} ชม.) คาดการณ์ ${item.min_risk_horizon_pm25} µg/m³`
+}
+
+// ข้อ 3 "แนวโน้มฝุ่นจะดีขึ้น" (ข่าวดี) — เรียกเฉพาะตอน trend_direction === "down" เท่านั้น
+export function buildImprovingTrendMessage(trendPeriod) {
+  return `แนวโน้มช่วง${trendPeriod}ฝุ่นจะลดลง`
+}
+
+// ข้อ 4 "สถานีเงียบนานผิดปกติ"
+export function buildStationSilenceMessage(staleHours) {
+  return `ไม่มีข้อมูลสถานีใหม่มา ${Math.round(staleHours)} ชั่วโมงแล้ว`
 }
 
 let _fetchPromise = null
@@ -46,6 +87,12 @@ export async function fetchForecast() {
     notificationState.fallbackHorizons = data.fallback_triggered_horizons || []
     notificationState.currentPm25 = data.current?.pm25 ?? null
     notificationState.currentStatus = data.current?.status ?? ''
+    notificationState.riskImminent = data.risk_imminent || false
+    notificationState.minRiskHorizon = data.min_risk_horizon ?? null
+    notificationState.minRiskHorizonPm25 = data.min_risk_horizon_pm25 ?? null
+    notificationState.minRiskHorizonDisplayTime = data.min_risk_horizon_display_time ?? null
+    notificationState.trendDirection = data.trend_direction ?? null
+    notificationState.trendPeriod = data.trend_period ?? null
     notificationState.status = 'ready'
     return data
   })()
@@ -90,6 +137,16 @@ export async function fetchHomeProvinceStatus(province) {
     notificationState.fallbackHorizons = data.fallback_horizons || []
     notificationState.currentPm25 = data.current_pm25
     notificationState.currentStatus = data.current_status || ''
+    notificationState.riskImminent = data.risk_imminent || false
+    notificationState.minRiskHorizon = data.min_risk_horizon ?? null
+    notificationState.minRiskHorizonPm25 = data.min_risk_horizon_pm25 ?? null
+    notificationState.minRiskHorizonDisplayTime = data.min_risk_horizon_display_time ?? null
+    notificationState.trendDirection = data.trend_direction ?? null
+    notificationState.trendPeriod = data.trend_period ?? null
+    // ข้อ 4 "สถานีเงียบนานผิดปกติ" — ตั้งเฉพาะที่นี่เท่านั้น ไม่ใช่ใน fetchForecast() เพราะ /api/forecast เป็น
+    // live call ที่ไม่คืนค่าเงียบแบบนี้อยู่แล้ว (มี data_quality.target_stale ของตัวเองแยกต่างหากใน DashboardMap.vue)
+    notificationState.dataStale = data.data_stale ?? null
+    notificationState.staleHours = data.stale_hours ?? null
     notificationState.status = 'ready'
     return data
   } catch (err) {
@@ -153,13 +210,19 @@ function groupConsecutive(horizons) {
   return groups
 }
 
+// horizon (1-24) -> เวลานาฬิกาจริง เทียบจาก base (เวลาที่บันทึก snapshot) — แยกออกมาจาก formatRange() เดิม
+// เพื่อใช้ร่วมกับ buildImminentRiskMessage() ที่ต้องการแค่เวลาจุดเดียว ไม่ใช่ช่วง "start – end"
+function horizonToClockTime(base, h) {
+  return new Date(base.getTime() + h * 3600000)
+}
+
 // ติดป้าย "พรุ่งนี้" แค่ตอนวันเปลี่ยนจริง แค่จุดเดียวต่อช่วง
 // horizon สูงสุด 24 ข้ามได้แค่ 1 วัน ไม่ต้องรองรับ "มะรืนนี้"
 function formatRange(base, start, end) {
-  const startDate = new Date(base.getTime() + start * 3600000)
+  const startDate = horizonToClockTime(base, start)
   const startLabel = startDate.toDateString() === base.toDateString() ? '' : 'พรุ่งนี้ '
   if (start === end) return `${startLabel}${formatHM(startDate)}`
-  const endDate = new Date(base.getTime() + end * 3600000)
+  const endDate = horizonToClockTime(base, end)
   const endLabel = endDate.toDateString() === startDate.toDateString() ? '' : 'พรุ่งนี้ '
   return `${startLabel}${formatHM(startDate)} – ${endLabel}${formatHM(endDate)}`
 }
@@ -169,17 +232,32 @@ function formatRange(base, start, end) {
 export function summarizeHistoryItem(item) {
   let headline = ''
   let ranges = []
+  // เดิมแถวที่เข้ามาถึงนี่ได้มีแค่ 2 เหตุผล (เสี่ยงตอนนี้/เสี่ยงบางช่วง) เดาได้จาก risk_horizons อย่างเดียว —
+  // ตอนนี้ api_notifications() ส่งแถวที่ "ระดับเปลี่ยน" หรือ "แนวโน้มดีขึ้น" มาด้วยแม้ไม่เสี่ยงเลยก็ตาม ต้องเช็ค
+  // current_at_risk ตรงๆ แทนการเดาจาก risk_horizons ว่างหรือไม่ว่าง
   if (item.risk_horizons.length === 24) {
     headline = 'คาดว่า PM2.5 จะอยู่ในระดับสูงตลอด 24 ชั่วโมงข้างหน้า'
   } else if (item.risk_horizons.length > 0) {
-    headline = `มี ${item.risk_horizons.length} ช่วงเวลาที่ควรระวังในอีก 24 ชม. ข้างหน้า`
+    headline = `ควรระวัง ${item.risk_horizons.length} ช่วงเวลาในอีก 24 ชม. ข้างหน้า`
     const base = parseThaiDateTime(item.recorded_at_th)
     ranges = groupConsecutive(item.risk_horizons).map(([start, end]) => formatRange(base, start, end))
-  } else {
+  } else if (item.current_at_risk) {
     headline = `PM2.5 ปัจจุบันสูง (${item.latest_pm25} µg/m³)`
+  } else if (item.transition) {
+    headline = buildLevelTransitionMessage(item.transition)
+  } else if (item.trend_direction === 'down') {
+    headline = buildImprovingTrendMessage(item.trend_period)
+  } else {
+    headline = `PM2.5 ${item.latest_pm25} µg/m³ ` // เผื่อไว้ ปกติไม่ควรมาถึงบรรทัดนี้เพราะ backend กรองมาแล้ว
   }
   const note = item.fallback_horizons.length > 0 ? 'บางช่วงข้อมูลไม่ครบ ใช้ค่าพยากรณ์ชั่วคราวแทน' : null
-  return { headline, ranges, note }
+  // ข้อ 1/3 อาจเกิดร่วมกับเหตุผลหลักอื่นได้พร้อมกันในแถวเดียว (เช่น เสี่ยงจริง + ระดับเปลี่ยนพร้อมกัน) — ถ้า
+  // headline หลักไม่ได้ใช้ข้อความนี้ไปแล้ว ให้โชว์เป็น field เสริมแยกต่างหาก ไม่ทับ/ไม่ซ้ำ headline
+  const transitionNote = item.transition && headline !== buildLevelTransitionMessage(item.transition)
+    ? buildLevelTransitionMessage(item.transition) : null
+  const goodNews = item.trend_direction === 'down' && headline !== buildImprovingTrendMessage(item.trend_period)
+    ? buildImprovingTrendMessage(item.trend_period) : null
+  return { headline, ranges, note, transitionNote, goodNews }
 }
 
 // true = ใช้ข้อมูลตัวอย่างแทนประวัติจริงจาก /api/notifications
@@ -234,4 +312,77 @@ export async function fetchNotificationHistory(limit = 5, province = provinceSta
     notificationHistory.status = 'error'
     throw err
   }
+}
+
+// ===== Web Push =====
+
+// VAPID public key เป็น base64url — PushManager.subscribe() ต้องการ Uint8Array ไม่ใช่ string ตรงๆ
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)))
+}
+
+// รอ service worker active แบบมี timeout — `serviceWorker.ready` เฉยๆค้างตลอดกาลถ้าไม่มี service worker
+// ถูก register เลย (เช่น `npm run dev` ที่ไม่เปิด devOptions) ไม่งั้นปุ่ม "เปิด/ปิดการแจ้งเตือน" จะหมุนค้างไม่จบ
+function waitForServiceWorker(timeoutMs = 5000) {
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('service worker ยังไม่พร้อม')), timeoutMs)),
+  ])
+}
+
+// สมัครรับ push ของ province นี้ — คืน subscription ที่สมัครสำเร็จ หรือ throw ถ้าพลาด (ให้ caller
+// จัดการ error ของตัวเอง เช่น โชว์ข้อความใน PushPrompt.vue)
+export async function subscribeToPush(province) {
+  const registration = await waitForServiceWorker()
+  let subscription = await registration.pushManager.getSubscription()
+  if (!subscription) {
+    const res = await fetch('/api/push/vapid-public-key')
+    const { public_key } = await res.json()
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(public_key),
+    })
+  }
+  const res = await fetch('/api/push/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...subscription.toJSON(), province }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || `Server error (${res.status})`)
+  }
+  return subscription
+}
+
+// ยกเลิกรับ push — ยกเลิกทั้งฝั่ง browser (pushManager.unsubscribe) และฝั่ง backend (ลบแถว DB)
+export async function unsubscribeFromPush() {
+  const registration = await waitForServiceWorker()
+  const subscription = await registration.pushManager.getSubscription()
+  if (!subscription) return
+  const endpoint = subscription.endpoint
+  await subscription.unsubscribe()
+  await fetch('/api/push/unsubscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint }),
+  })
+}
+
+// เช็คว่ามี subscription อยู่แล้วหรือยัง — ใช้ตอน mount ของ PushPrompt.vue เพื่อตัดสินใจว่าจะโชว์ปุ่ม
+// "เปิดการแจ้งเตือน" หรือ "ปิดการแจ้งเตือน"
+//
+// ใช้ getRegistration() ไม่ใช่ `serviceWorker.ready` — `.ready` resolve ก็ต่อเมื่อมี service worker
+// active อยู่จริงเท่านั้น ถ้าไม่เคย register เลย (เช่นตอนรันด้วย `npm run dev` ซึ่งไม่เปิด devOptions ของ
+// vite-plugin-pwa — ดู CHANGELOG ตอนเอา devOptions ออก) promise จะค้างไปตลอดกาล ไม่ reject ด้วย ทำให้
+// PushPrompt.vue ค้างที่ status 'checking' และการ์ดทั้งใบไม่โผล่ขึ้นมาเลย getRegistration() resolve ทันที
+// (คืน undefined ถ้ายังไม่มี) จึงไม่ค้างแบบนั้น
+export async function getExistingPushSubscription() {
+  if (!('serviceWorker' in navigator)) return null
+  const registration = await navigator.serviceWorker.getRegistration()
+  if (!registration) return null
+  return registration.pushManager.getSubscription()
 }
