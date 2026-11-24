@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import { provinceState } from './provinces'
-import { t, isEn } from './i18n'
+import { t, isEn, clock } from './i18n'
 
 // สถานะแจ้งเตือนที่ใช้ร่วมกันระหว่าง AppHeader (กระดิ่ง) และ ForecastView (การ์ด/แบนเนอร์เตือน)
 export const notificationState = reactive({
@@ -16,6 +16,8 @@ export const notificationState = reactive({
   minRiskHorizon: null,
   minRiskHorizonPm25: null,
   minRiskHorizonDisplayTime: null,
+  // คำเตือนฝุ่นสูงแบบรวม (risk_alert_for() ใน app.py, CHANGELOG 272) — null = ไม่เสี่ยง
+  riskAlert: null,
   // ข้อ 3 "แนวโน้มฝุ่นจะดีขึ้น"
   trendDirection: null,
   trendPeriod: null,
@@ -30,7 +32,34 @@ const WARNING_ADVICE_BY_RISK_GROUP = {
   มีโรคประจำตัว: 'ผู้มีโรคประจำตัวทางเดินหายใจควรหลีกเลี่ยงกิจกรรมกลางแจ้งและเตรียมอุปกรณ์ป้องกัน',
 }
 
-// ใช้ทั้งใน .warning-box ของ ForecastView และกระดิ่งแจ้งเตือนของ AppHeader
+// คำเรียกกลุ่มเสี่ยงที่ขึ้นต้นคำเตือน ("{who} ควรระวังฝุ่นตอนนี้") — ตรงกับ _RISK_WHO_TH ใน app.py
+const RISK_WHO = { ทั่วไป: 'ทุกคน', 'เด็ก-ผู้สูงอายุ': 'เด็กและผู้สูงอายุ', มีโรคประจำตัว: 'ผู้มีโรคประจำตัว' }
+
+// หมายเหตุข้อจำกัดของโมเดล — โชว์ใต้คำเตือนฝุ่นสูงเท่านั้น (แบนเนอร์หน้าแรก + กระดิ่ง, ไม่ใส่ใน push)
+export const RISK_ALERT_NOTE = 'ช่วงฝุ่นสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อย'
+
+// คำเตือนฝุ่นสูงแบบรวม (CHANGELOG 272) แทน buildWarningMessage + buildImminentRiskMessage ที่เคยขึ้นคู่กัน
+// — บอกว่า "ใครควรระวัง" และ "ถึงเมื่อไหร่" ไม่ใช้คำว่า "เกณฑ์" (ชวนสับสนกับป้ายระดับมาตรฐาน)
+// หัวข้อ "{กลุ่ม} ควรระวังฝุ่นตอนนี้" ผู้ใช้เลือก (CHANGELOG 273) แทน "ฝุ่นตอนนี้สูงเกินไปสำหรับ…" ที่อ่านแล้วเป็นสำนวนแปล
+// alert = risk_alert จาก /api/forecast หรือ /api/notifications/status; คืน { title, sub }
+// ต้องตรงกับ risk_alert_text_th() ใน app.py (ข้อความ Web Push)
+export function buildRiskAlert(alert, riskGroup) {
+  const who = t(RISK_WHO[riskGroup] || RISK_WHO['ทั่วไป'])
+  const title = alert.now
+    ? t('{who} ควรระวังฝุ่นตอนนี้', { who })
+    : t('{who} ควรระวังฝุ่นตั้งแต่ {time} (อีก {h} ชม.)', {
+        h: alert.start_horizon,
+        time: clock(alert.start_display_time),
+        who,
+      })
+  let sub
+  if (alert.through_window_end) sub = t('คาดว่าจะสูงแบบนี้ตลอด 24 ชม. ข้างหน้า')
+  else if (alert.until_display_time) sub = t('คาดว่าจะสูงแบบนี้ไปจนถึงประมาณ {time}', { time: clock(alert.until_display_time) })
+  else sub = t('คาดว่าจะลดลงภายในชั่วโมงหน้า')
+  return { title, sub }
+}
+
+// ใช้ใน ForecastView (หน้าเก่า ไม่อยู่ใน nav แล้ว) — หน้าแรก/กระดิ่งเปลี่ยนไปใช้ buildRiskAlert แล้ว
 export function buildWarningMessage(riskGroup) {
   const advice = WARNING_ADVICE_BY_RISK_GROUP[riskGroup] || WARNING_ADVICE_BY_RISK_GROUP['ทั่วไป']
   return t('ช่วงนี้ PM2.5 อยู่ในระดับสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อยในช่วงมลพิษสูง {advice}', { advice: t(advice) })
@@ -99,6 +128,7 @@ export async function fetchForecast() {
     notificationState.currentPm25 = data.current?.pm25 ?? null
     notificationState.currentStatus = data.current?.status ?? ''
     notificationState.riskImminent = data.risk_imminent || false
+    notificationState.riskAlert = data.risk_alert ?? null
     notificationState.minRiskHorizon = data.min_risk_horizon ?? null
     notificationState.minRiskHorizonPm25 = data.min_risk_horizon_pm25 ?? null
     notificationState.minRiskHorizonDisplayTime = data.min_risk_horizon_display_time ?? null
@@ -149,6 +179,7 @@ export async function fetchHomeProvinceStatus(province) {
     notificationState.currentPm25 = data.current_pm25
     notificationState.currentStatus = data.current_status || ''
     notificationState.riskImminent = data.risk_imminent || false
+    notificationState.riskAlert = data.risk_alert ?? null
     notificationState.minRiskHorizon = data.min_risk_horizon ?? null
     notificationState.minRiskHorizonPm25 = data.min_risk_horizon_pm25 ?? null
     notificationState.minRiskHorizonDisplayTime = data.min_risk_horizon_display_time ?? null
@@ -251,9 +282,11 @@ export function summarizeHistoryItem(item) {
   if (item.risk_horizons.length === 24) {
     headline = t('คาดว่า PM2.5 จะอยู่ในระดับสูงตลอด 24 ชั่วโมงข้างหน้า')
   } else if (item.risk_horizons.length > 0) {
-    headline = t('ควรระวัง {n} ช่วงเวลาในอีก 24 ชม. ข้างหน้า', { n: item.risk_horizons.length })
     const base = parseThaiDateTime(item.recorded_at_th)
     ranges = groupConsecutive(item.risk_horizons).map(([start, end]) => formatRange(base, start, end))
+    // {n} = จำนวนป้ายช่วงเวลา (ชั่วโมงที่ติดกันรวมเป็น 1 ช่วง) ไม่ใช่จำนวนชั่วโมง — เดิมนับชั่วโมงทำให้หัวข้อ
+    // บอก "12 ช่วงเวลา" แต่มีป้ายแค่ 3 ใบ (CHANGELOG 276)
+    headline = t('ควรระวังฝุ่น {n} ช่วงเวลาในอีก 24 ชม. ข้างหน้า', { n: ranges.length })
   } else if (item.current_at_risk) {
     headline = t('PM2.5 ปัจจุบันสูง ({pm} µg/m³)', { pm: item.latest_pm25 })
   } else if (item.transition) {

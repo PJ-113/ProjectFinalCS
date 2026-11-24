@@ -199,13 +199,11 @@ def test_silence_with_now_utc_override(app):
         app.dispatch_push_for_province(_TEST_PROVINCE, now_utc=fresh_now)
         all_ok &= check("เพิ่งมีข้อมูล 1 ชม.ก่อน: ไม่ push silence", len(fake_send.calls) == 0)
 
+        # CHANGELOG 277: สถานีเงียบเตือนแค่ในแอป ไม่ส่ง Web Push แล้ว
         stale_now = pd.Timestamp(f"{_TEST_MARKER}05-01T09:00:00+00:00")  # ห่าง 9 ชม. > TARGET_STALE_HOURS
         app.dispatch_push_for_province(_TEST_PROVINCE, now_utc=stale_now)
-        all_ok &= check("ห่าง 9 ชม. (เกิน TARGET_STALE_HOURS): push silence 1 ครั้ง", len(fake_send.calls) == 1)
-        all_ok &= check("tag เป็น 'silence'", fake_send.calls[-1]["tag"] == "silence" if fake_send.calls else False)
-
-        app.dispatch_push_for_province(_TEST_PROVINCE, now_utc=stale_now + pd.Timedelta(hours=1))
-        all_ok &= check("เงียบต่อเนื่อง: ไม่ push ซ้ำ", len(fake_send.calls) == 1)
+        all_ok &= check("ห่าง 9 ชม. (เกิน TARGET_STALE_HOURS): ไม่ push silence (เตือนแค่ในแอป)",
+                        len(fake_send.calls) == 0)
     finally:
         clear_test_rows(app)
     return all_ok

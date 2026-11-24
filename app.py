@@ -1866,6 +1866,39 @@ _RISK_GROUP_ACTION_HINTS = {
 def _action_hint_th(risk_group, status):
     return _RISK_GROUP_ACTION_HINTS.get((risk_group, status), "")
 
+
+# การ์ด "คำแนะนำวันนี้" ในหน้าแรก (CHANGELOG 270) — ข้อป้องกันตัวเป็นไอคอน 0-4 ข้อต่อ (กลุ่มเสี่ยง, ระดับฝุ่น)
+# ตั้งใจไม่มีเรื่องออกแรง/เวลาที่เหมาะ (อยู่ในการ์ด "ความเสี่ยงจากฝุ่นตามกิจกรรม" ที่เดียว กันคำแนะนำซ้ำ)
+# ส่งแค่ id ให้ frontend — ข้อความ/ไอคอน/คำแปลอยู่ฝั่ง frontend (DailyAdviceCard.vue) เพราะต้องสลับภาษาได้
+# แยกจาก _RISK_GROUP_ACTION_HINTS ด้านบน (อันนั้นเป็นประโยคเดียวสำหรับ NLG รายวัน ไม่แตะ)
+# ข้อความร่างเอง ยังไม่ได้เทียบเอกสารกรมควบคุมโรค — ควรเทียบก่อนอ้างอิงในเล่ม
+PROTECTIVE_ADVICE_ITEMS = ("mask", "n95", "window", "purifier", "symptom", "medicine")
+PROTECTIVE_ADVICE_RULES = {  # risk_group -> ระดับ PM2.5 -> item ids (ลำดับ = ลำดับไอคอน, สูงสุด 4)
+    "ทั่วไป": {
+        "ดีมาก": [], "ดี": [], "ปานกลาง": ["symptom"],
+        "เริ่มมีผลกระทบต่อสุขภาพ": ["mask", "window", "symptom"],
+        "มีผลกระทบต่อสุขภาพ": ["n95", "window", "purifier", "symptom"],
+    },
+    "เด็ก-ผู้สูงอายุ": {
+        "ดีมาก": [], "ดี": [], "ปานกลาง": ["mask", "symptom"],
+        "เริ่มมีผลกระทบต่อสุขภาพ": ["mask", "window", "purifier", "symptom"],
+        "มีผลกระทบต่อสุขภาพ": ["n95", "window", "purifier", "symptom"],
+    },
+    "มีโรคประจำตัว": {
+        "ดีมาก": [], "ดี": ["medicine"], "ปานกลาง": ["medicine", "mask", "symptom"],
+        "เริ่มมีผลกระทบต่อสุขภาพ": ["n95", "medicine", "window", "purifier"],
+        "มีผลกระทบต่อสุขภาพ": ["n95", "medicine", "window", "purifier"],
+    },
+}
+
+
+def protective_advice_config(risk_group):
+    """ตารางกฎทั้ง 5 ระดับของกลุ่มเสี่ยงนี้ (ไม่ใช่แค่ระดับตอนนี้) — frontend เลือกแถวเองจาก current.status สดๆ
+    เพราะค่า "ตอนนี้" ถูกรีเฟรชฝั่ง client ทุก 2 นาทีผ่าน /api/current_pm25 โดยไม่โหลด /api/forecast ใหม่
+    (pattern เดียวกับ risk_score_config) — risk_group ไม่รู้จัก -> ใช้กลุ่ม "ทั่วไป\""""
+    rules = PROTECTIVE_ADVICE_RULES.get(risk_group, PROTECTIVE_ADVICE_RULES["ทั่วไป"])
+    return {level: list(ids) for level, ids in rules.items()}
+
 _NLG_SYSTEM_PROMPT = (
     "คุณเป็นผู้ช่วยอธิบายค่าพยากรณ์คุณภาพอากาศ PM2.5 ให้ประชาชนทั่วไปฟัง ตอบเป็นภาษาไทยเท่านั้น "
     "ความยาวไม่เกิน 2-3 ประโยค กระชับ เข้าใจง่าย ห้ามใช้ศัพท์เทคนิคหรือชื่อโมเดล/ฟีเจอร์ตรงๆ "
@@ -2452,6 +2485,8 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
     # forecast[].display_time คำนวณไว้แล้ว (บวก OPENAQ_DISPLAY_LABEL_SHIFT_H) ใช้ตรงๆ ให้ตรงกับเวลาที่กราฟ
     # พยากรณ์หลักโชว์เป๊ะ ไม่ต้องคำนวณซ้ำ
     min_risk_horizon_display_time = forecast[min_risk_horizon - 1]["display_time"] if min_risk_horizon is not None else None
+    risk_alert = risk_alert_for(is_current_at_risk(latest_pm25, risk_group), risk_horizons,
+                                lambda h: forecast[h - 1]["display_time"])
 
     # Air4Thai สดกว่า OpenAQ มาก (~28 นาที vs ~2.5 ชม. วัดจริง) — ใช้แสดงผล "ตอนนี้" (การ์ด PM2.5 ตอนนี้ +
     # จุด "ตอนนี้" บนกราฟพยากรณ์รายชั่วโมง) เท่านั้น latest_pm25 ด้านบน (ฐานพยากรณ์ของโมเดล, บวกเข้ากับ
@@ -2499,6 +2534,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
         "min_risk_horizon": min_risk_horizon,
         "min_risk_horizon_pm25": min_risk_horizon_pm25,
         "min_risk_horizon_display_time": min_risk_horizon_display_time,
+        "risk_alert": risk_alert,
         "trend_direction": trend_direction,
         "trend_period": trend_period,
         "fallback_triggered_horizons": fallback_triggered_horizons,
@@ -2531,6 +2567,7 @@ def get_forecast(province=DEFAULT_PROVINCE, risk_group="ทั่วไป"):
             "activity_offsets": ACTIVITY_INTENSITY_OFFSET,
             "breakpoints": RISK_SCORE_BREAKPOINTS,
         },
+        "advice_config": protective_advice_config(risk_group),
     }
 
 
@@ -3014,6 +3051,58 @@ def _horizon_display_time(recorded_at_utc, horizon):
     return t.tz_convert("Asia/Bangkok").strftime("%H:%M")
 
 
+def risk_alert_for(current_at_risk, risk_horizons, display_time_for):
+    """คำเตือนฝุ่นสูงแบบรวมเป็นก้อนเดียว (CHANGELOG 272) — แทนแบนเนอร์ 2 อันเดิม ("ฝุ่นจะเกินเกณฑ์ HH:MM" +
+    "ช่วงนี้ฝุ่นอยู่ในระดับสูง") ที่ซ้ำกันและไม่บอกว่าเกินสำหรับใคร/ถึงเมื่อไหร่ ใช้ร่วมกันทั้ง /api/forecast,
+    /api/notifications/status และ Web Push ให้ข้อความตรงกันทุกที่
+    display_time_for(h) -> "HH:MM" ของ horizon h (แต่ละ endpoint คำนวณเวลาต่างวิธีกัน จึงรับเป็นฟังก์ชัน)
+    คืน None ถ้าไม่เสี่ยงทั้งตอนนี้และใน 24 ชม. ไม่งั้น dict:
+      now: เกินระดับปลอดภัยของกลุ่มอยู่แล้วตอนนี้
+      start_horizon/start_display_time: ชั่วโมงแรกที่จะเกิน (None ถ้า now)
+      until_horizon/until_display_time: ชั่วโมงสุดท้ายของช่วงที่เกิน "ติดกัน" นับจากตอนเริ่ม (None ถ้าเกินแค่
+        ตอนนี้แต่ชั่วโมงหน้าไม่เกินแล้ว)
+      through_window_end: ช่วงที่เกินยาวถึง horizon 24 (= "ตลอด 24 ชม. ข้างหน้า")"""
+    hs = set(risk_horizons)
+    if not current_at_risk and not hs:
+        return None
+    start = 0 if current_at_risk else min(hs)
+    end = start
+    nxt = start + 1
+    while nxt in hs:
+        end = nxt
+        nxt += 1
+    return {
+        "now": bool(current_at_risk),
+        "start_horizon": start or None,
+        "start_display_time": display_time_for(start) if start else None,
+        "until_horizon": end or None,
+        "until_display_time": display_time_for(end) if end else None,
+        "through_window_end": end == 24,
+    }
+
+
+# คำเรียกกลุ่มเสี่ยงที่ขึ้นต้นข้อความเตือน ("{who} ควรระวังฝุ่นตอนนี้") — ฝั่ง frontend มีตารางเดียวกันใน
+# notifications.js; กลุ่มทั่วไปใช้ "ทุกคน" (ผู้ใช้เลือกถ้อยคำ 2026-11-24, CHANGELOG 273)
+_RISK_WHO_TH = {"ทั่วไป": "ทุกคน", "เด็ก-ผู้สูงอายุ": "เด็กและผู้สูงอายุ", "มีโรคประจำตัว": "ผู้มีโรคประจำตัว"}
+
+
+def risk_alert_text_th(alert, risk_group):
+    """(หัวข้อ, บรรทัดรอง) ภาษาไทยของ risk_alert — ใช้กับ Web Push; ต้องตรงกับ buildRiskAlert() ใน
+    frontend/src/notifications.js (duplicate ด้วยมือ ไม่มี module ร่วมระหว่าง JS/Python)"""
+    who = _RISK_WHO_TH.get(risk_group, _RISK_WHO_TH["ทั่วไป"])
+    if alert["now"]:
+        title = f"{who} ควรระวังฝุ่นตอนนี้"
+    else:
+        title = f"{who} ควรระวังฝุ่นตั้งแต่ {alert['start_display_time']} น. (อีก {alert['start_horizon']} ชม.)"
+    if alert["through_window_end"]:
+        sub = "คาดว่าจะสูงแบบนี้ตลอด 24 ชม. ข้างหน้า"
+    elif alert["until_display_time"]:
+        sub = f"คาดว่าจะสูงแบบนี้ไปจนถึงประมาณ {alert['until_display_time']} น."
+    else:
+        sub = "คาดว่าจะลดลงภายในชั่วโมงหน้า"
+    return title, sub
+
+
 def _imminent_risk_for(horizon_rows, risk_group, recorded_at_utc):
     """ข้อ 2 'ใกล้ถึงช่วงเสี่ยงแล้ว' — คืน (risk_horizons, fallback_horizons, risk_imminent,
     min_risk_horizon, min_risk_horizon_pm25, min_risk_horizon_display_time) จาก horizon_rows ที่ query มาแล้ว
@@ -3063,22 +3152,20 @@ def send_push(endpoint, p256dh, auth, title, body, tag, url="/notifications"):
         return False
 
 
-_PUSH_WARNING_ADVICE_BY_RISK_GROUP = {
-    "ทั่วไป": "โปรดระมัดระวังเพิ่มเติม",
-    "เด็ก-ผู้สูงอายุ": "กลุ่มเด็ก/ผู้สูงอายุควรหลีกเลี่ยงกิจกรรมกลางแจ้งเป็นเวลานานและระมัดระวังเป็นพิเศษ",
-    "มีโรคประจำตัว": "ผู้มีโรคประจำตัวทางเดินหายใจควรหลีกเลี่ยงกิจกรรมกลางแจ้งและเตรียมอุปกรณ์ป้องกัน",
-}
 
 
 def _push_payload_for(condition, risk_group, transition, min_risk_horizon, min_risk_horizon_pm25,
-                       min_risk_horizon_display_time, latest_pm25, trend_period, stale_hours):
+                       min_risk_horizon_display_time, latest_pm25, trend_period, stale_hours, risk_alert=None):
     """title/body ของ push ต่อเงื่อนไข — เลียนข้อความจาก frontend/src/notifications.js builder เป๊ะ
     (duplicate เป็น Python ด้วยมือเพราะไม่มี module ร่วมระหว่าง JS/Python ในโปรเจกต์นี้)"""
     if condition == "threshold":
-        advice = _PUSH_WARNING_ADVICE_BY_RISK_GROUP.get(risk_group, _PUSH_WARNING_ADVICE_BY_RISK_GROUP["ทั่วไป"])
-        return "แจ้งเตือนคุณภาพอากาศ", (
-            f"ช่วงนี้ PM2.5 อยู่ในระดับสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อยในช่วงมลพิษสูง {advice}"
-        )
+        # ข้อความเดียวกับแบนเนอร์หน้าแรก/กระดิ่ง (risk_alert_text_th, CHANGELOG 272) — ไม่มีบรรทัดหมายเหตุ
+        # "ค่าพยากรณ์อาจต่ำกว่าความจริง" เพราะพื้นที่ใน push จำกัด (หมายเหตุนั้นอยู่ในแอป)
+        if risk_alert is None:  # ผู้เรียกเก่าที่ไม่ส่ง risk_alert มา (เช่นสคริปต์ทดสอบ) — ข้อความทั่วไป
+            who = _RISK_WHO_TH.get(risk_group, _RISK_WHO_TH["ทั่วไป"])
+            return "แจ้งเตือนคุณภาพอากาศ", f"{who} ควรระวังฝุ่น"
+        title, sub = risk_alert_text_th(risk_alert, risk_group)
+        return "แจ้งเตือนคุณภาพอากาศ", f"{title} — {sub}"
     if condition == "transition":
         direction_word = "แย่ลง" if transition["direction"] == "worse" else "ดีขึ้น"
         magnitude = "มาก" if transition["levels_moved"] >= 2 else "เล็กน้อย"
@@ -3087,8 +3174,9 @@ def _push_payload_for(condition, risk_group, transition, min_risk_horizon, min_r
             f'({transition["to_pm25"]} µg/m³)'
         )
     if condition == "imminent":
+        who = _RISK_WHO_TH.get(risk_group, _RISK_WHO_TH["ทั่วไป"])
         return "ใกล้ถึงช่วงเสี่ยงแล้ว", (
-            f"ฝุ่นจะเกินเกณฑ์ {min_risk_horizon_display_time} น. (อีก {min_risk_horizon} ชม.) "
+            f"{who} ควรระวังฝุ่นตั้งแต่ {min_risk_horizon_display_time} น. (อีก {min_risk_horizon} ชม.) "
             f"คาดการณ์ {min_risk_horizon_pm25} µg/m³"
         )
     if condition == "trend":
@@ -3096,6 +3184,15 @@ def _push_payload_for(condition, risk_group, transition, min_risk_horizon, min_r
     if condition == "silence":
         return "ไม่มีข้อมูลสถานีใหม่", f"ไม่มีข้อมูลสถานีใหม่มา {round(stale_hours)} ชั่วโมงแล้ว"
     return "แจ้งเตือนคุณภาพอากาศ", ""
+
+
+def _push_imminent_value(current_at_risk, risk_imminent):
+    """ค่า dedup ของ push "ใกล้ถึงช่วงเสี่ยงแล้ว" (CHANGELOG 275)
+    - ใช้ sentinel "active" ไม่ใช่เลข horizon: เดิม 'อีก 2 ชม.' -> 'อีก 1 ชม.' นับเป็นค่าใหม่ จึง push ซ้ำ 2 ครั้ง
+      ต่อช่วงฝุ่นสูงเดียวกัน ตอนนี้ส่งครั้งเดียว แล้วเคลียร์เมื่อพยากรณ์ไม่มีช่วงเสี่ยงใน 2 ชม. แล้ว
+    - ไม่ส่งถ้าฝุ่นเกินอยู่แล้วตอนนี้: push "threshold" ("ควรระวังฝุ่นตอนนี้") ครอบคลุมแล้ว การส่ง
+      "ตั้งแต่ … (อีก 1 ชม.)" ตามมาในรอบเดียวกันซ้ำและขัดกัน"""
+    return "active" if (risk_imminent and not current_at_risk) else None
 
 
 def dispatch_push_for_province(province, now_utc=None):
@@ -3108,7 +3205,8 @@ def dispatch_push_for_province(province, now_utc=None):
     Dedup: threshold/silence ใช้ sentinel คงที่ "active" (ไม่ใช่ค่าที่แกว่งได้ เช่น pm25/stale_hours ดิบ)
     เพราะเงื่อนไขพวกนี้ "ค้าง" ได้หลายชั่วโมงติดกัน ถ้าใช้ค่าดิบจะ push ซ้ำทุกชั่วโมงที่ค่าขยับนิดเดียว —
     transition เคลียร์ตัวเองเป็น None อัตโนมัติอยู่แล้วหลังผ่านไป 1 ชม. (ดู _level_transition_for) ส่วน
-    imminent/trend ใช้ค่าจริง (horizon/period) ได้เพราะเปลี่ยนแค่ไม่กี่ครั้งต่อเหตุการณ์ ไม่ใช่ทุกชั่วโมง"""
+    imminent ใช้ "active" เช่นกัน (CHANGELOG 275 — ดู _push_imminent_value) ส่วน trend ใช้ค่าจริง (period)
+    ได้เพราะเปลี่ยนแค่ไม่กี่ครั้งต่อวัน ไม่ใช่ทุกชั่วโมง"""
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -3134,10 +3232,9 @@ def dispatch_push_for_province(province, now_utc=None):
 
     recorded_at_utc, latest_pm25, trend_direction, trend_period = snapshots[0]
     transition = _level_transition_for(snapshots, 0)
-    stale_hours, data_stale = _station_silence_for(recorded_at_utc, now_utc=now_utc)
+    stale_hours, _data_stale = _station_silence_for(recorded_at_utc, now_utc=now_utc)
     transition_value = f'{transition["from_level"]}->{transition["to_level"]}' if transition else None
     trend_value = trend_period if trend_direction == "down" else None
-    silence_value = "active" if data_stale else None
 
     cur.execute(
         "SELECT horizon, predicted_pm25, model_used FROM prediction_log "
@@ -3157,14 +3254,16 @@ def dispatch_push_for_province(province, now_utc=None):
          min_risk_horizon_display_time) = _imminent_risk_for(horizon_rows, risk_group, recorded_at_utc)
         current_at_risk = is_current_at_risk(latest_pm25, risk_group)
         threshold_value = "active" if (current_at_risk or bool(risk_horizons)) else None
-        imminent_value = min_risk_horizon if risk_imminent else None
+        risk_alert = risk_alert_for(current_at_risk, risk_horizons,
+                                    lambda h: _horizon_display_time(recorded_at_utc, h))
+        imminent_value = _push_imminent_value(current_at_risk, risk_imminent)
 
         events = {
             "threshold": threshold_value,
             "transition": transition_value,
             "imminent": imminent_value,
             "trend": trend_value,
-            "silence": silence_value,
+            # "silence" (สถานีเงียบ > TARGET_STALE_HOURS) ไม่ส่ง push แล้ว — เตือนแค่ในแอป (CHANGELOG 277)
         }
 
         new_state = dict(dedup_state or {})
@@ -3178,7 +3277,7 @@ def dispatch_push_for_province(province, now_utc=None):
                 continue
             title, body = _push_payload_for(
                 key, risk_group, transition, min_risk_horizon, min_risk_horizon_pm25,
-                min_risk_horizon_display_time, latest_pm25, trend_period, stale_hours,
+                min_risk_horizon_display_time, latest_pm25, trend_period, stale_hours, risk_alert,
             )
             # อัปเดต state เฉพาะตอนส่งสำเร็จเท่านั้น — ถ้าพลาด (เครือข่าย/push service ขัดข้องชั่วคราว) ปล่อย
             # ให้ลองใหม่รอบ scheduler ถัดไปแทนที่จะเงียบหายไปเฉยๆ
@@ -3437,6 +3536,8 @@ def api_notifications_status():
          min_risk_horizon_display_time) = _imminent_risk_for(horizon_rows, risk_group, recorded_at_utc)
         transition = _level_transition_for(snapshots, 0)
         high_pollution_risk = is_current_at_risk(latest_pm25, risk_group) or bool(risk_horizons)
+        risk_alert = risk_alert_for(is_current_at_risk(latest_pm25, risk_group), risk_horizons,
+                                    lambda h: _horizon_display_time(recorded_at_utc, h))
         recorded_at_th = pd.Timestamp(recorded_at_utc).tz_convert("Asia/Bangkok")
 
         # ข้อ 4 "สถานีเงียบนานผิดปกติ" — อนุมานจากช่องว่างของเวลา ไม่ใช่ field ใหม่ที่ต้องเขียนตอน log เพราะ
@@ -3451,6 +3552,7 @@ def api_notifications_status():
             "min_risk_horizon": min_risk_horizon,
             "min_risk_horizon_pm25": min_risk_horizon_pm25,
             "min_risk_horizon_display_time": min_risk_horizon_display_time,
+            "risk_alert": risk_alert,
             "transition": transition,
             "trend_direction": trend_direction,
             "trend_period": trend_period,
