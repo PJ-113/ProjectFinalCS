@@ -7,13 +7,14 @@ import {
   TrendingUp, TrendingDown, Footprints, Bike, Flame,
 } from "@lucide/vue";
 import {
-  fetchForecast, fetchCurrentPm25, buildWarningMessage, formatCardTime,
-  buildImminentRiskMessage, buildImprovingTrendMessage,
+  fetchForecast, fetchCurrentPm25, formatCardTime,
+  buildRiskAlert, RISK_ALERT_NOTE, buildImprovingTrendMessage,
 } from "../notifications";
 import { riskScoreState, setActivity, ACTIVITY_LEVELS, ACTIVITY_EXAMPLES, computeRiskScore, riskScoreAdvice } from "../riskScore";
 import { provinceState, selectProvince } from "../provinces";
-import { statusClass, severityVar, severityHex, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
+import { statusClass, severityVar, severityHex, PM25_LEVELS, scaleMarkerPct } from "../pm25Levels";
 import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
+import DailyAdviceCard from "../components/DailyAdviceCard.vue";
 import { t, clock, isEn, localeState, provinceName } from "../i18n";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -69,28 +70,6 @@ function markerIcon(value, color, name, isSelected) {
   });
 }
 
-function tooltipHtmlFor(p) {
-  const pm = overviewHorizon.value > 0 ? p.forecast_pm25 : p.current_pm25;
-  return `<div class="map-hover-title">${provinceName(p)}</div><div class="map-hover-row">PM2.5: ${pm != null ? pm + " µg/m³" : "-"}</div>`;
-}
-
-function popupHtmlFor(p) {
-  const isForecast = overviewHorizon.value > 0;
-  const valueText = isForecast
-    ? (p.forecast_pm25 != null ? `${p.forecast_pm25} µg/m³` : t("ไม่มีข้อมูล"))
-    : (p.current_pm25 != null ? `${p.current_pm25} µg/m³` : t("ไม่มีข้อมูล"));
-  const statusText = t(isForecast ? (p.forecast_status || "-") : (p.current_status || "-"));
-  // ไม่มีปุ่ม "ดูจังหวัดนี้" แยกแล้ว — การแตะหมุด (marker click) ทำการซูม+ไฮไลต์+สลับจังหวัดให้ทันทีอยู่แล้ว
-  // (ดู focusProvince()) ป๊อปอัปนี้เหลือไว้แค่โชว์ค่า PM2.5/สถานะประกอบเฉยๆ
-  return `
-    <div class="map-popup">
-      <div class="map-popup-title">${provinceName(p)}${p.is_zero_shot ? " (zero-shot)" : ""}</div>
-      <div class="map-popup-pm25">${valueText}</div>
-      <div class="map-popup-status">${statusText}</div>
-    </div>
-  `;
-}
-
 // ไฮไลต์เส้นขอบ + ซูมเข้าเฉพาะขอบเขตจังหวัดที่ระบุ + อัปเดตป้ายชื่อบนหมุด — แยกออกมาจาก focusProvince() เดิม
 // เพื่อให้เรียกได้จาก "ทุกทาง" ที่ provinceState.selected เปลี่ยนได้ ไม่ใช่แค่ตอนแตะแผนที่เอง (ดู watch
 // ด้านล่าง) เดิมถ้าเปลี่ยนจังหวัดผ่าน ProvincePickerSheet/header เส้นขอบที่ไฮไลต์ไว้จะค้างอยู่ที่จังหวัด
@@ -133,15 +112,11 @@ function createOrUpdateMarkers(provinces) {
     let marker = markerByProvince.get(p.province_en);
     if (!marker) {
       marker = L.marker([p.lat, p.lon], { icon: markerIcon(valueForColor, color, provinceName(p), isSelected) }).addTo(mapInstance);
-      marker.bindPopup(popupHtmlFor(p));
-      marker.bindTooltip(tooltipHtmlFor(p), { direction: "top", offset: [0, -16], className: "map-hover-tooltip" });
       marker.on("click", () => focusProvince(p.province_en));
       markerByProvince.set(p.province_en, marker);
       return;
     }
     marker.setIcon(markerIcon(valueForColor, color, provinceName(p), isSelected));
-    marker.setPopupContent(popupHtmlFor(p));
-    marker.setTooltipContent(tooltipHtmlFor(p));
   });
 }
 
@@ -321,12 +296,16 @@ const riskImminent = ref(false);
 const minRiskHorizon = ref(null);
 const minRiskHorizonPm25 = ref(null);
 const minRiskHorizonDisplayTime = ref(null);
+// คำเตือนฝุ่นสูงแบบรวม (CHANGELOG 272) — แทนแบนเนอร์ riskImminent + highPollutionRisk ที่เคยขึ้นคู่กัน
+const riskAlert = ref(null);
 const trendDirection = ref(null);
 const trendPeriod = ref(null);
 // สถานะข้อมูลที่ใช้ทำพยากรณ์ (data_quality จาก /api/forecast): target_stale = reading ล่าสุดของจังหวัดนี้เก่ากว่า 6 ชม.
 const dataQuality = ref({ target_stale: false, target_age_hours: 0 });
 const provinceInfo = ref({ th: "", en: "", is_zero_shot: false });
 const riskScoreConfig = ref(null);
+// ตารางกฎการ์ด "คำแนะนำวันนี้" ของกลุ่มเสี่ยงผู้ใช้ (ระดับฝุ่น -> item ids) จาก /api/forecast — ดู adviceIds
+const adviceConfig = ref(null);
 
 const pickerOpen = ref(false);
 // index ของแท่งที่แตะในกราฟ (null = ยังไม่เลือก)
@@ -579,20 +558,14 @@ const fallbackTimesText = computed(() =>
   fallbackHorizons.value.map((h) => forecast.value[h - 1]?.display_time).filter(Boolean).join(", ")
 );
 
-// ข้อความเตือนช่วงมลพิษสูง (ปรับตาม risk_group) อยู่ใน notifications.js (ใช้ร่วมกับ AppHeader.vue)
-const warningMessage = computed(() => buildWarningMessage(riskGroup.value));
-// ข้อ 2/3 — ใช้ builder เดียวกับที่กระดิ่งใน AppHeader.vue ใช้ (notifications.js) ข้อความจะตรงกันทุกจุดในแอป
-const imminentRiskMessage = computed(() =>
-  buildImminentRiskMessage({
-    min_risk_horizon: minRiskHorizon.value,
-    min_risk_horizon_pm25: minRiskHorizonPm25.value,
-    min_risk_horizon_display_time: minRiskHorizonDisplayTime.value,
-  })
-);
+// คำเตือนฝุ่นสูง — builder เดียวกับกระดิ่งใน AppHeader.vue (notifications.js) ข้อความจึงตรงกันทุกจุด
+const riskAlertText = computed(() => (riskAlert.value ? buildRiskAlert(riskAlert.value, riskGroup.value) : null));
 const improvingTrendMessage = computed(() => buildImprovingTrendMessage(trendPeriod.value));
 
 const markerPct = computed(() => scaleMarkerPct(current.value.pm25));
-const currentAdvice = computed(() => adviceForStatus(current.value.status));
+// เลือกแถวด้วย current.status "สด" (ถูกรีเฟรชทุก 2 นาทีผ่าน refreshCurrentPm25 โดยไม่โหลด /api/forecast ใหม่)
+// จึงรับตารางทั้งชุดมาแทนรายการที่คำนวณไว้แล้ว; null = backend เก่าไม่มี advice_config -> ไม่แสดงการ์ด
+const adviceIds = computed(() => adviceConfig.value?.[current.value.status] ?? null);
 const updatedLabel = computed(() =>
   current.value.datetime_th && current.value.datetime_th !== "-" ? formatCardTime(current.value.datetime_th) : ""
 );
@@ -714,11 +687,13 @@ async function loadForecast() {
     minRiskHorizon.value = data.min_risk_horizon ?? null;
     minRiskHorizonPm25.value = data.min_risk_horizon_pm25 ?? null;
     minRiskHorizonDisplayTime.value = data.min_risk_horizon_display_time ?? null;
+    riskAlert.value = data.risk_alert ?? null;
     trendDirection.value = data.trend_direction ?? null;
     trendPeriod.value = data.trend_period ?? null;
     dataQuality.value = data.data_quality || { target_stale: false, target_age_hours: 0 };
     provinceInfo.value = data.province || { th: "", en: "", is_zero_shot: false };
     riskScoreConfig.value = data.risk_score_config || null;
+    adviceConfig.value = data.advice_config || null;
     state.value = "content";
   } catch (err) {
     errorMessage.value = err.dataUnavailable ? err.message : "";
@@ -859,17 +834,14 @@ defineExpose({ loadForecast });
       <!-- Content -->
       <div v-else key="content" class="layout">
         <div class="col-primary">
-          <!-- ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" แสดงก่อนแบนเนอร์เตือนทั่วไปเดิม เพราะเจาะจง/actionable กว่า -->
-          <div v-if="riskImminent" class="banner banner-warn" role="alert">
-            <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
-            <div class="banner-text">{{ imminentRiskMessage }}</div>
-          </div>
-
-          <div v-if="highPollutionRisk" class="banner banner-warn" role="alert">
+          <!-- คำเตือนฝุ่นสูงแบนเนอร์เดียว (CHANGELOG 272): สูงเกินไปสำหรับใคร + ถึงเมื่อไหร่ + หมายเหตุข้อจำกัดโมเดล
+               — สิ่งที่ควรทำอยู่ในการ์ด "คำแนะนำวันนี้" ไม่ซ้ำที่นี่ -->
+          <div v-if="riskAlertText" class="banner banner-warn" role="alert">
             <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
             <div>
-              <div class="banner-title">{{ t('ช่วงนี้ฝุ่นอยู่ในระดับสูง') }}</div>
-              <div class="banner-text">{{ warningMessage }}</div>
+              <div class="banner-title">{{ riskAlertText.title }}</div>
+              <div class="banner-text">{{ riskAlertText.sub }}</div>
+              <div class="banner-note">{{ t(RISK_ALERT_NOTE) }}</div>
             </div>
           </div>
 
@@ -944,7 +916,6 @@ defineExpose({ loadForecast });
               </div>
               <div class="scale-ends"><span>{{ t('ดีมาก') }}</span><span>{{ t('มีผลกระทบ') }}</span></div>
             </div>
-            <p class="hero-advice">{{ currentAdvice }}</p>
             <p class="hero-note">{{ t('ค่ารายชั่วโมงล่าสุด ไม่ใช่ค่าเฉลี่ย 24 ชม. แบบ AQI ทางการ') }}</p>
 
             <div v-if="currentWeather.temp_c != null" class="stat-tiles">
@@ -965,6 +936,9 @@ defineExpose({ loadForecast });
               </div>
             </div>
           </section>
+
+          <!-- คำแนะนำวันนี้ (CHANGELOG 270) — แทนประโยค hero-advice เดิมใต้ค่า PM2.5 -->
+          <DailyAdviceCard v-if="adviceIds" :ids="adviceIds" :risk-group="riskGroup" />
 
           <!-- ช่วงเวลาที่ฝุ่นต่ำที่สุด -->
           <section v-if="SHOW_EXTRA_CARDS" class="card">
@@ -1283,6 +1257,7 @@ defineExpose({ loadForecast });
 .banner-good { background: var(--success-bg); border-color: color-mix(in srgb, var(--success-ink) 35%, transparent); color: var(--success-ink); }
 .banner-title { font-weight: 600; font-size: 0.95rem; line-height: 1.4; }
 .banner-text { font-size: 0.9rem; }
+.banner-note { margin-top: 4px; font-size: 0.78rem; opacity: 0.8; }
 
 /* hero */
 .hero {
@@ -1348,7 +1323,6 @@ defineExpose({ loadForecast });
 }
 .scale-ends { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
 
-.hero-advice { margin: 0; font-size: 0.95rem; line-height: 1.55; color: var(--ink); }
 .hero-note { margin: -6px 0 0; font-size: 0.75rem; color: var(--muted); }
 
 .stat-tiles { display: flex; gap: 8px; padding-top: 4px; }
@@ -1726,18 +1700,6 @@ defineExpose({ loadForecast });
   font-size: 0.72rem; padding: 3px 9px; border-radius: 7px; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
-:deep(.map-hover-tooltip) { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); opacity: 1; }
-:deep(.map-hover-tooltip)::before { border-top-color: var(--card); }
-:deep(.map-hover-title) { font-weight: 700; font-size: 0.8rem; margin-bottom: 2px; }
-:deep(.map-hover-row) { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
-:deep(.leaflet-popup-content-wrapper) { background: var(--card); color: var(--ink); border-radius: 18px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); }
-:deep(.leaflet-popup-tip) { background: var(--card); }
-:deep(.leaflet-popup-content) { margin: 14px 16px; }
-:deep(.leaflet-popup-close-button) { color: var(--muted) !important; width: 32px !important; height: 32px !important; font-size: 22px !important; }
-:deep(.map-popup) { font-size: 0.9rem; line-height: 1.5; min-width: 190px; }
-:deep(.map-popup-title) { font-weight: 700; font-size: 1rem; margin-bottom: 6px; padding-right: 16px; }
-:deep(.map-popup-pm25) { font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; line-height: 1.2; }
-:deep(.map-popup-status) { color: var(--ink); font-weight: 500; }
 
 @media (max-width: 600px) {
   .leaflet-container-el { height: 240px; }

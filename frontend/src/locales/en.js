@@ -92,9 +92,20 @@ export default {
   'เมื่อวาน {time}': 'Yesterday {time}',
   'พรุ่งนี้': 'Tomorrow',
   'คาดว่า PM2.5 จะอยู่ในระดับสูงตลอด 24 ชั่วโมงข้างหน้า': 'PM2.5 is expected to stay high for the next 24 hours',
-  'ควรระวัง {n} ช่วงเวลาในอีก 24 ชม. ข้างหน้า': 'Watch out for {n} time periods in the next 24 h',
+  'ควรระวังฝุ่น {n} ช่วงเวลาในอีก 24 ชม. ข้างหน้า': 'Watch out for PM2.5 in {n} time periods over the next 24 h',
   'PM2.5 ปัจจุบันสูง ({pm} µg/m³)': 'Current PM2.5 is high ({pm} µg/m³)',
   'บางช่วงข้อมูลไม่ครบ ใช้ค่าพยากรณ์ชั่วคราวแทน': 'Some hours had incomplete data; a temporary forecast was used',
+
+  // ===== คำเตือนฝุ่นสูงแบบรวม (buildRiskAlert, CHANGELOG 272) =====
+  'ทุกคน': 'Everyone',
+  'เด็กและผู้สูงอายุ': 'Children and older adults',
+  'ผู้มีโรคประจำตัว': 'People with chronic illness',
+  '{who} ควรระวังฝุ่นตอนนี้': '{who} should take care with PM2.5 now',
+  '{who} ควรระวังฝุ่นตั้งแต่ {time} (อีก {h} ชม.)': '{who} should take care with PM2.5 from {time} (in {h} h)',
+  'คาดว่าจะสูงแบบนี้ตลอด 24 ชม. ข้างหน้า': 'Expected to stay this high for the next 24 hours',
+  'คาดว่าจะสูงแบบนี้ไปจนถึงประมาณ {time}': 'Expected to stay this high until about {time}',
+  'คาดว่าจะลดลงภายในชั่วโมงหน้า': 'Expected to drop within the next hour',
+  'ช่วงฝุ่นสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อย': 'When PM2.5 is high, forecasts may run slightly low',
 
   // ===== Web Push =====
   'เปิดการแจ้งเตือนคุณภาพอากาศ': 'Turn on air quality alerts',
@@ -178,6 +189,26 @@ export default {
   'ปลอดภัย': 'Safe',
   'เสี่ยงสูง': 'High risk',
   'ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด': 'Best times for this activity',
+
+  // ===== การ์ดคำแนะนำวันนี้ (DailyAdviceCard.vue) =====
+  'คำแนะนำวันนี้': "Today's advice",
+  'สำหรับกลุ่ม{group}': 'For: {group}',
+  'ปกติ — ไม่มีข้อควรระวังพิเศษ': 'All clear — no special precautions',
+  'คำแนะนำ แตะเพื่อดูรายละเอียด': 'Advice — tap for details',
+  'สวมหน้ากาก': 'Wear a mask',
+  'หน้ากาก N95': 'N95 mask',
+  'ปิดหน้าต่าง': 'Close windows',
+  'เครื่องฟอกอากาศ': 'Air purifier',
+  'สังเกตอาการ': 'Watch symptoms',
+  'พกยาประจำตัว': 'Carry medication',
+  'สวมหน้ากากป้องกันฝุ่นเมื่อออกนอกอาคาร': 'Wear a dust mask when you go outside.',
+  'สวมหน้ากาก N95 เมื่อจำเป็นต้องออกนอกอาคาร': 'Wear an N95 mask if you have to go outside.',
+  'ปิดประตูหน้าต่าง ลดฝุ่นที่เข้ามาในบ้าน': 'Keep doors and windows closed to keep dust out of your home.',
+  'เปิดเครื่องฟอกอากาศในห้องที่อยู่ประจำ (ถ้ามี)': 'Run an air purifier in the room you use most (if you have one).',
+  'สังเกตอาการระคายเคืองตา จมูก หรือไอ': 'Watch for eye or nose irritation, or coughing.',
+  'คอยสังเกตอาการไอ หายใจลำบาก หรือระคายเคืองตาของเด็กและผู้สูงอายุ': 'Watch children and older adults for coughing, difficulty breathing or eye irritation.',
+  'สังเกตอาการแน่นหน้าอก หายใจลำบาก ถ้าผิดปกติให้พบแพทย์': 'Watch for chest tightness or difficulty breathing, and see a doctor if anything feels wrong.',
+  'พกยาประจำตัว เช่น ยาพ่นขยายหลอดลม ติดตัวไว้เสมอ': 'Always carry your medication, such as a reliever inhaler.',
 
   // ===== เข้าสู่ระบบ / สมัครสมาชิก =====
   'รับการแจ้งเตือนฝุ่นของจังหวัดหลัก และปรับคำแนะนำให้ตรงกับกลุ่มเสี่ยงของคุณ': 'Get PM2.5 alerts for your home province and advice tailored to your risk group',

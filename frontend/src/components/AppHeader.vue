@@ -6,8 +6,8 @@ import {
   notificationState,
   fetchForecast,
   fetchHomeProvinceStatus,
-  buildWarningMessage,
-  buildImminentRiskMessage,
+  buildRiskAlert,
+  RISK_ALERT_NOTE,
   buildImprovingTrendMessage,
   buildStationSilenceMessage,
   notificationHistory,
@@ -72,6 +72,10 @@ watch(() => authState.user?.home_province, () => {
 })
 
 // คำนวณ summary/timeLabel ครั้งเดียวต่อ item แทนที่จะเรียกฟังก์ชันซ้ำหลายครั้งในเทมเพลต
+const riskAlertText = computed(() =>
+  notificationState.riskAlert ? buildRiskAlert(notificationState.riskAlert, notificationState.riskGroup) : null,
+)
+
 const avatarLetter = computed(() => (authState.user?.email || '?').charAt(0).toUpperCase())
 
 const historyItems = computed(() =>
@@ -115,14 +119,16 @@ const historyItems = computed(() =>
           <div class="notif-dropdown-title">{{ t('การแจ้งเตือน') }}</div>
           <div v-if="notificationState.status === 'loading'" class="notif-empty">{{ t('กำลังโหลด...') }}</div>
           <template v-else>
-            <!-- ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" แสดงก่อน buildWarningMessage เดิม เพราะเจาะจง/actionable กว่า -->
-            <div v-if="notificationState.riskImminent" class="notif-item notif-item-alert">
+            <!-- คำเตือนฝุ่นสูงข้อความเดียว (CHANGELOG 272) แทน 2 กล่องเดิม (ใกล้ถึงช่วงเสี่ยง + ช่วงนี้ฝุ่นสูง) —
+                 builder เดียวกับแบนเนอร์หน้าแรก; เดิมกล่อง "ใกล้ถึงช่วงเสี่ยง" ส่ง notificationState (camelCase)
+                 เข้า builder ที่อ่าน snake_case จึงขึ้น undefined/{time} — แก้ไปในตัวด้วย -->
+            <div v-if="riskAlertText" class="notif-item notif-item-alert">
               <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
-              <span>{{ buildImminentRiskMessage(notificationState) }}</span>
-            </div>
-            <div v-if="notificationState.highPollutionRisk" class="notif-item notif-item-alert">
-              <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
-              <span>{{ buildWarningMessage(notificationState.riskGroup) }}</span>
+              <span class="notif-alert-body">
+                <strong>{{ riskAlertText.title }}</strong>
+                <span>{{ riskAlertText.sub }}</span>
+                <span class="notif-alert-note">{{ t(RISK_ALERT_NOTE) }}</span>
+              </span>
             </div>
             <div v-if="notificationState.fallbackHorizons.length > 0" class="notif-item notif-item-info">
               <Info :size="22" :stroke-width="2" aria-hidden="true" />
@@ -139,7 +145,7 @@ const historyItems = computed(() =>
               <span>{{ buildImprovingTrendMessage(notificationState.trendPeriod) }}</span>
             </div>
             <div
-              v-if="!notificationState.highPollutionRisk && !notificationState.riskImminent
+              v-if="!riskAlertText
                 && !notificationState.dataStale && notificationState.trendDirection !== 'down'
                 && notificationState.fallbackHorizons.length === 0"
               class="notif-empty"
@@ -412,6 +418,8 @@ const historyItems = computed(() =>
   font-size: 0.9rem;
 }
 .notif-item > svg { flex-shrink: 0; margin-top: 1px; }
+.notif-alert-body { display: flex; flex-direction: column; gap: 2px; }
+.notif-alert-note { font-size: 0.78rem; opacity: 0.8; margin-top: 2px; }
 
 .notif-item-alert {
   background: var(--warn-bg);

@@ -34,6 +34,10 @@ _EXAMPLE_MIN_RISK_HORIZON_DISPLAY_TIME = "15:00"
 _EXAMPLE_LATEST_PM25 = 45.0
 _EXAMPLE_TREND_PERIOD = "บ่าย"
 _EXAMPLE_STALE_HOURS = 8.0
+_EXAMPLE_RISK_ALERT = {  # ตัวอย่าง risk_alert_for(): เกินอยู่แล้วตอนนี้ ไปถึง 22:00 น. (CHANGELOG 272)
+    "now": True, "start_horizon": None, "start_display_time": None,
+    "until_horizon": 7, "until_display_time": "22:00", "through_window_end": False,
+}
 
 
 def load_app():
@@ -47,7 +51,7 @@ def build_example_payload(app, condition, risk_group):
     return app._push_payload_for(
         condition, risk_group, _EXAMPLE_TRANSITION,
         _EXAMPLE_MIN_RISK_HORIZON, _EXAMPLE_MIN_RISK_HORIZON_PM25, _EXAMPLE_MIN_RISK_HORIZON_DISPLAY_TIME,
-        _EXAMPLE_LATEST_PM25, _EXAMPLE_TREND_PERIOD, _EXAMPLE_STALE_HOURS,
+        _EXAMPLE_LATEST_PM25, _EXAMPLE_TREND_PERIOD, _EXAMPLE_STALE_HOURS, _EXAMPLE_RISK_ALERT,
     )
 
 
