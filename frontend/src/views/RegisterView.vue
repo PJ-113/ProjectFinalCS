@@ -5,6 +5,7 @@ import { ChevronDown, TriangleAlert } from '@lucide/vue'
 import { register } from '../auth'
 import { provinceState } from '../provinces'
 import ProvincePickerSheet from '../components/ProvincePickerSheet.vue'
+import { t, provinceName } from '../i18n'
 
 const RISK_GROUPS = ['ทั่วไป', 'เด็ก-ผู้สูงอายุ', 'มีโรคประจำตัว']
 const RISK_GROUP_LABEL = { 'มีโรคประจำตัว': 'โรคประจำตัว' }
@@ -25,13 +26,13 @@ const passwordMismatch = computed(
   () => confirmPassword.value.length > 0 && password.value !== confirmPassword.value,
 )
 const homeProvinceName = computed(
-  () => provinceState.list.find((p) => p.province_en === homeProvince.value)?.province_th || '',
+  () => provinceName(provinceState.list.find((p) => p.province_en === homeProvince.value)),
 )
 
 async function handleSubmit() {
   errorMessage.value = ''
   if (passwordMismatch.value) {
-    errorMessage.value = 'รหัสผ่านไม่ตรงกัน'
+    errorMessage.value = t('รหัสผ่านไม่ตรงกัน')
     return
   }
   submitting.value = true
@@ -56,24 +57,24 @@ async function handleSubmit() {
   <div class="auth-page">
     <div class="wrap">
       <div class="intro">
-        <h1>สมัครสมาชิก</h1>
-        <p class="lead">ใช้เวลาไม่ถึงนาที ข้อมูลที่ไม่บังคับตั้งทีหลังได้ในหน้าโปรไฟล์</p>
+        <h1>{{ t('สมัครสมาชิก') }}</h1>
+        <p class="lead">{{ t('ใช้เวลาไม่ถึงนาที ข้อมูลที่ไม่บังคับตั้งทีหลังได้ในหน้าตั้งค่า') }}</p>
       </div>
 
       <form class="card form" @submit.prevent="handleSubmit">
         <label class="field">
-          <span class="field-label">อีเมล</span>
+          <span class="field-label">{{ t('อีเมล') }}</span>
           <input v-model="email" type="email" required autocomplete="email" placeholder="name@example.com" />
         </label>
 
         <label class="field">
-          <span class="field-label">รหัสผ่าน</span>
+          <span class="field-label">{{ t('รหัสผ่าน') }}</span>
           <input v-model="password" type="password" required minlength="8" autocomplete="new-password" />
-          <span class="hint">อย่างน้อย 8 ตัวอักษร</span>
+          <span class="hint">{{ t('อย่างน้อย 8 ตัวอักษร') }}</span>
         </label>
 
         <label class="field">
-          <span class="field-label">ยืนยันรหัสผ่าน</span>
+          <span class="field-label">{{ t('ยืนยันรหัสผ่าน') }}</span>
           <input
             v-model="confirmPassword"
             type="password"
@@ -82,11 +83,11 @@ async function handleSubmit() {
             :class="{ invalid: passwordMismatch }"
             :aria-invalid="passwordMismatch"
           />
-          <span v-if="passwordMismatch" class="hint hint-error" role="alert">รหัสผ่านไม่ตรงกัน</span>
+          <span v-if="passwordMismatch" class="hint hint-error" role="alert">{{ t('รหัสผ่านไม่ตรงกัน') }}</span>
         </label>
 
-        <div class="field" role="radiogroup" aria-label="กลุ่มความเสี่ยง">
-          <span class="field-label">กลุ่มความเสี่ยง <span class="optional">(ไม่บังคับ)</span></span>
+        <div class="field" role="radiogroup" :aria-label="t('กลุ่มความเสี่ยง')">
+          <span class="field-label">{{ t('กลุ่มความเสี่ยง') }} <span class="optional">{{ t('(ไม่บังคับ)') }}</span></span>
           <div class="segmented">
             <button
               v-for="g in RISK_GROUPS"
@@ -97,18 +98,18 @@ async function handleSubmit() {
               :class="{ active: riskGroup === g }"
               :aria-checked="riskGroup === g"
               @click="riskGroup = g"
-            >{{ RISK_GROUP_LABEL[g] || g }}</button>
+            >{{ t(RISK_GROUP_LABEL[g] || g) }}</button>
           </div>
         </div>
 
         <label class="field">
-          <span class="field-label">อายุ <span class="optional">(ไม่บังคับ)</span></span>
-          <input v-model="age" type="number" min="1" max="120" inputmode="numeric" placeholder="เช่น 35" />
+          <span class="field-label">{{ t('อายุ') }} <span class="optional">{{ t('(ไม่บังคับ)') }}</span></span>
+          <input v-model="age" type="number" min="1" max="120" inputmode="numeric" :placeholder="t('เช่น 35')" />
         </label>
 
         <div class="field">
           <span class="field-label" id="reg-home-province-label">
-            จังหวัดหลัก <span class="optional">(ไม่บังคับ)</span>
+            {{ t('จังหวัดหลัก') }} <span class="optional">{{ t('(ไม่บังคับ)') }}</span>
           </span>
           <button
             type="button"
@@ -117,7 +118,7 @@ async function handleSubmit() {
             aria-labelledby="reg-home-province-label"
             @click="pickerOpen = true"
           >
-            <span :class="{ placeholder: !homeProvinceName }">{{ homeProvinceName || 'เลือกจังหวัด' }}</span>
+            <span :class="{ placeholder: !homeProvinceName }">{{ homeProvinceName || t('เลือกจังหวัด') }}</span>
             <ChevronDown :size="20" :stroke-width="2" aria-hidden="true" />
           </button>
           <!--<span class="hint">ใช้ให้กระดิ่งแจ้งเตือนเฝ้าจังหวัดนี้ ตั้งทีหลังได้</span>-->
@@ -128,12 +129,12 @@ async function handleSubmit() {
         </p>
 
         <button type="submit" class="btn btn-primary" :disabled="submitting">
-          {{ submitting ? 'กำลังสมัคร...' : 'สมัครสมาชิก' }}
+          {{ submitting ? t('กำลังสมัคร...') : t('สมัครสมาชิก') }}
         </button>
       </form>
 
       <p class="switch-link">
-        มีบัญชีอยู่แล้ว? <router-link to="/login">เข้าสู่ระบบ</router-link>
+        {{ t('มีบัญชีอยู่แล้ว?') }} <router-link to="/login">{{ t('เข้าสู่ระบบ') }}</router-link>
       </p>
     </div>
 

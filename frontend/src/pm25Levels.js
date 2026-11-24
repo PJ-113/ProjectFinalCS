@@ -29,6 +29,8 @@ export function scaleMarkerPct(pm25) {
   return ((i + frac) / PM25_LEVELS.length) * 100;
 }
 
+import { t } from "./i18n";
+
 // คำแนะนำสั้นๆ ใต้ค่า PM2.5 ปัจจุบัน ตามระดับ status ที่ backend ส่งมา
 const ADVICE_BY_STATUS = {
   ดีมาก: "อากาศดีมาก ทำกิจกรรมกลางแจ้งได้ตามปกติ",
@@ -38,7 +40,7 @@ const ADVICE_BY_STATUS = {
   มีผลกระทบต่อสุขภาพ: "หลีกเลี่ยงกิจกรรมกลางแจ้ง และสวมหน้ากาก N95 หากจำเป็นต้องออกนอกอาคาร",
 };
 export function adviceForStatus(status) {
-  return ADVICE_BY_STATUS[status] || "";
+  return t(ADVICE_BY_STATUS[status] || "");
 }
 
 // numeric pm25 -> ชื่อ CSS custom property (--excellent/--good/--moderate/--unhealthy/--bad)

@@ -2,7 +2,11 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { X, Download, Share } from "@lucide/vue";
-import logoIcon from "../assets/logo-icon.svg";
+import { t } from "../i18n";
+
+// ใช้ path ตรงไปที่ public/pwa-192x192.png (ไฟล์เดียวกับไอคอน PWA/favicon/push notification)
+// แทนที่จะ import จาก src/assets/logo-icon.svg (โลโก้เก่า คนละไฟล์กัน ไม่ sync กันอัตโนมัติ)
+const logoIcon = "/pwa-192x192.png";
 
 // ไม่โชว์ในหน้า login/register — ผู้ใช้กำลังโฟกัสกรอกฟอร์ม ไม่ควรมีแบนเนอร์มาบังหรือแย่งความสนใจ
 const HIDDEN_ROUTES = ["login", "register"];
@@ -79,21 +83,20 @@ onUnmounted(() => {
 
 <template>
   <Transition name="install-slide">
-    <div v-if="show && !hiddenByRoute" class="install-banner" role="dialog" aria-label="ติดตั้งแอป">
+    <div v-if="show && !hiddenByRoute" class="install-banner" role="dialog" :aria-label="t('ติดตั้งแอป')">
       <img :src="logoIcon" alt="" class="install-logo" aria-hidden="true" />
       <div class="install-text">
-        <p class="install-title">ติดตั้งแอปพยากรณ์ PM2.5</p>
-        <p v-if="mode === 'android'" class="install-sub">เข้าใช้งานได้เร็วขึ้นจากหน้าจอหลัก เหมือนแอปทั่วไป</p>
+        <p class="install-title">{{ t('ติดตั้งแอปพยากรณ์ PM2.5') }}</p>
+        <p v-if="mode === 'android'" class="install-sub">{{ t('เข้าใช้งานได้เร็วขึ้นจากหน้าจอหลัก เหมือนแอปทั่วไป') }}</p>
         <p v-else class="install-sub">
-          แตะ <Share :size="14" :stroke-width="2" class="inline-icon" aria-hidden="true" /> แล้วเลือก
-          "เพิ่มไปยังหน้าจอโฮม"
+          {{ t('แตะ') }} <Share :size="14" :stroke-width="2" class="inline-icon" aria-hidden="true" /> {{ t('แล้วเลือก "เพิ่มไปยังหน้าจอโฮม"') }}
         </p>
       </div>
       <button v-if="mode === 'android'" type="button" class="install-btn" @click="install">
         <Download :size="16" :stroke-width="2" aria-hidden="true" />
-        ติดตั้ง
+        {{ t('ติดตั้ง') }}
       </button>
-      <button type="button" class="install-close" aria-label="ปิด" @click="dismiss">
+      <button type="button" class="install-close" :aria-label="t('ปิด')" @click="dismiss">
         <X :size="18" :stroke-width="2" />
       </button>
     </div>

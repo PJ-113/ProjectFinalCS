@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TriangleAlert } from '@lucide/vue'
 import { login } from '../auth'
+import { t } from '../i18n'
 
 const route = useRoute()
 const router = useRouter()
@@ -30,18 +31,18 @@ async function handleSubmit() {
   <div class="auth-page">
     <div class="wrap">
       <div class="intro">
-        <h1>เข้าสู่ระบบ</h1>
-        <p class="lead">รับการแจ้งเตือนฝุ่นของจังหวัดหลัก และปรับคำแนะนำให้ตรงกับกลุ่มเสี่ยงของคุณ</p>
+        <h1>{{ t('เข้าสู่ระบบ') }}</h1>
+        <p class="lead">{{ t('รับการแจ้งเตือนฝุ่นของจังหวัดหลัก และปรับคำแนะนำให้ตรงกับกลุ่มเสี่ยงของคุณ') }}</p>
       </div>
 
       <form class="card form" @submit.prevent="handleSubmit">
         <label class="field">
-          <span class="field-label">อีเมล</span>
+          <span class="field-label">{{ t('อีเมล') }}</span>
           <input v-model="email" type="email" required autocomplete="email" placeholder="name@example.com" />
         </label>
 
         <label class="field">
-          <span class="field-label">รหัสผ่าน</span>
+          <span class="field-label">{{ t('รหัสผ่าน') }}</span>
           <input v-model="password" type="password" required autocomplete="current-password" />
         </label>
 
@@ -50,12 +51,12 @@ async function handleSubmit() {
         </p>
 
         <button type="submit" class="btn btn-primary" :disabled="submitting">
-          {{ submitting ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ' }}
+          {{ submitting ? t('กำลังเข้าสู่ระบบ...') : t('เข้าสู่ระบบ') }}
         </button>
       </form>
 
       <p class="switch-link">
-        ยังไม่มีบัญชี? <router-link to="/register">สมัครสมาชิก</router-link>
+        {{ t('ยังไม่มีบัญชี?') }} <router-link to="/register">{{ t('สมัครสมาชิก') }}</router-link>
       </p>
     </div>
   </div>

@@ -1,17 +1,15 @@
 <script setup>
 import { computed, ref, watchEffect } from 'vue'
-import { useRouter } from 'vue-router'
-import { LocateFixed, LogOut, Check, ChevronDown, TriangleAlert } from '@lucide/vue'
-import { authState, changePassword, logout, updateProfile } from '../auth'
+import { LocateFixed, Check, ChevronDown, ChevronLeft, TriangleAlert } from '@lucide/vue'
+import { authState, updateProfile } from '../auth'
 import { provinceState } from '../provinces'
 import ProvincePickerSheet from '../components/ProvincePickerSheet.vue'
+import { t, provinceName } from '../i18n'
 
 const RISK_GROUPS = ['ทั่วไป', 'เด็ก-ผู้สูงอายุ', 'มีโรคประจำตัว']
 
 const RISK_GROUP_LABEL = { 'มีโรคประจำตัว': 'โรคประจำตัว' }
 const FAR_THRESHOLD_KM = 200 
-
-const router = useRouter()
 
 const email = ref('')
 const riskGroup = ref('ทั่วไป')
@@ -34,19 +32,8 @@ watchEffect(() => {
 })
 
 const homeProvinceName = computed(
-  () => provinceState.list.find((p) => p.province_en === homeProvince.value)?.province_th || '',
+  () => provinceName(provinceState.list.find((p) => p.province_en === homeProvince.value)),
 )
-
-const savedProvinceName = computed(
-  () => provinceState.list.find((p) => p.province_en === authState.user?.home_province)?.province_th || '',
-)
-const avatarLetter = computed(() => (authState.user?.email || '?').charAt(0).toUpperCase())
-const headerSubtitle = computed(() => {
-  const parts = []
-  parts.push(savedProvinceName.value ? `จังหวัดหลัก: ${savedProvinceName.value}` : 'ยังไม่ได้ตั้งจังหวัดหลัก')
-  if (authState.user?.risk_group) parts.push(`กลุ่ม${authState.user.risk_group}`)
-  return parts.join(' · ')
-})
 
 async function handleSaveProfile() {
   profileMessage.value = ''
@@ -59,7 +46,7 @@ async function handleSaveProfile() {
       age: age.value ? Number(age.value) : null,
       home_province: homeProvince.value || null,
     })
-    profileMessage.value = 'บันทึกโปรไฟล์เรียบร้อยแล้ว'
+    profileMessage.value = t('บันทึกข้อมูลเรียบร้อยแล้ว')
   } catch (e) {
     profileError.value = e.message
   } finally {
@@ -79,7 +66,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 function handleUseLocation() {
   geoMessage.value = ''
   if (!navigator.geolocation) {
-    geoMessage.value = 'เบราว์เซอร์นี้ไม่รองรับการระบุตำแหน่ง — เลือกจังหวัดเองจากรายการได้เลย'
+    geoMessage.value = t('เบราว์เซอร์นี้ไม่รองรับการระบุตำแหน่ง — เลือกจังหวัดเองจากรายการได้เลย')
     return
   }
   geoLocating.value = true
@@ -93,84 +80,43 @@ function handleUseLocation() {
         if (!nearest || d < nearest.d) nearest = { p, d }
       }
       if (!nearest) {
-        geoMessage.value = 'ยังโหลดรายชื่อจังหวัดไม่เสร็จ ลองใหม่อีกครั้ง'
+        geoMessage.value = t('ยังโหลดรายชื่อจังหวัดไม่เสร็จ ลองใหม่อีกครั้ง')
         return
       }
       homeProvince.value = nearest.p.province_en
       geoMessage.value = nearest.d > FAR_THRESHOLD_KM
-        ? `ตรวจพบตำแหน่งห่างจาก${nearest.p.province_th}ประมาณ ${Math.round(nearest.d)} กม. (อาจอยู่นอกภาคอีสาน) ตรวจสอบให้แน่ใจก่อนกดบันทึก`
-        : `เลือก${nearest.p.province_th}ให้แล้ว (ใกล้ตำแหน่งปัจจุบันที่สุด) กด "บันทึกโปรไฟล์" เพื่อยืนยัน`
+        ? t('ตรวจพบตำแหน่งห่างจาก{name}ประมาณ {km} กม. (อาจอยู่นอกภาคอีสาน) ตรวจสอบให้แน่ใจก่อนกดบันทึก', { name: provinceName(nearest.p), km: Math.round(nearest.d) })
+        : t('เลือก{name}ให้แล้ว (ใกล้ตำแหน่งปัจจุบันที่สุด) กด "บันทึก" เพื่อยืนยัน', { name: provinceName(nearest.p) })
     },
     (err) => {
       geoLocating.value = false
       geoMessage.value = err.code === err.PERMISSION_DENIED
-        ? 'ไม่ได้รับอนุญาตให้เข้าถึงตำแหน่ง — เลือกจังหวัดเองจากรายการได้เลย'
-        : 'ไม่สามารถระบุตำแหน่งได้ตอนนี้ ลองใหม่อีกครั้งหรือเลือกจังหวัดเอง'
+        ? t('ไม่ได้รับอนุญาตให้เข้าถึงตำแหน่ง — เลือกจังหวัดเองจากรายการได้เลย')
+        : t('ไม่สามารถระบุตำแหน่งได้ตอนนี้ ลองใหม่อีกครั้งหรือเลือกจังหวัดเอง')
     },
     { timeout: 10000 },
   )
 }
 
-const currentPassword = ref('')
-const newPassword = ref('')
-const confirmNewPassword = ref('')
-const passwordMessage = ref('')
-const passwordError = ref('')
-const savingPassword = ref(false)
-
-async function handleChangePassword() {
-  passwordMessage.value = ''
-  passwordError.value = ''
-  if (newPassword.value !== confirmNewPassword.value) {
-    passwordError.value = 'รหัสผ่านใหม่ไม่ตรงกัน'
-    return
-  }
-  savingPassword.value = true
-  try {
-    await changePassword({
-      current_password: currentPassword.value,
-      new_password: newPassword.value,
-    })
-    passwordMessage.value = 'เปลี่ยนรหัสผ่านเรียบร้อยแล้ว'
-    currentPassword.value = ''
-    newPassword.value = ''
-    confirmNewPassword.value = ''
-  } catch (e) {
-    passwordError.value = e.message
-  } finally {
-    savingPassword.value = false
-  }
-}
-
-async function handleLogout() {
-  await logout()
-  router.push('/')
-}
 </script>
 
 <template>
-  <div class="profile-page">
+  <div class="settings-sub-page">
     <div class="wrap">
-      <h1>โปรไฟล์ของฉัน</h1>
-
-      <section class="card user-card">
-        <div class="avatar" aria-hidden="true">{{ avatarLetter }}</div>
-        <div class="user-text">
-          <div class="user-email">{{ authState.user?.email }}</div>
-          <div class="user-sub">{{ headerSubtitle }}</div>
-        </div>
-      </section>
+      <router-link to="/settings" class="back-link">
+        <ChevronLeft :size="22" :stroke-width="2" aria-hidden="true" />
+        {{ t('ตั้งค่า') }}
+      </router-link>
+      <h1>{{ t('ข้อมูลส่วนตัว') }}</h1>
 
       <form class="card form" @submit.prevent="handleSaveProfile">
-        <h2>ข้อมูลของคุณ</h2>
-
         <label class="field">
-          <span class="field-label">อีเมล</span>
+          <span class="field-label">{{ t('อีเมล') }}</span>
           <input v-model="email" type="email" required autocomplete="email" />
         </label>
 
-        <div class="field" role="radiogroup" aria-label="กลุ่มความเสี่ยง">
-          <span class="field-label">กลุ่มความเสี่ยง</span>
+        <div class="field" role="radiogroup" :aria-label="t('กลุ่มความเสี่ยง')">
+          <span class="field-label">{{ t('กลุ่มความเสี่ยง') }}</span>
           <div class="segmented">
             <button
               v-for="g in RISK_GROUPS"
@@ -181,17 +127,17 @@ async function handleLogout() {
               :class="{ active: riskGroup === g }"
               :aria-checked="riskGroup === g"
               @click="riskGroup = g"
-            >{{ RISK_GROUP_LABEL[g] || g }}</button>
+            >{{ t(RISK_GROUP_LABEL[g] || g) }}</button>
           </div>
         </div>
 
         <label class="field">
-          <span class="field-label">อายุ</span>
+          <span class="field-label">{{ t('อายุ') }}</span>
           <input v-model="age" type="number" min="1" max="120" inputmode="numeric" />
         </label>
 
         <div class="field">
-          <span class="field-label" id="home-province-label">จังหวัดหลัก</span>
+          <span class="field-label" id="home-province-label">{{ t('จังหวัดหลัก') }}</span>
           <button
             type="button"
             class="field-btn"
@@ -199,13 +145,13 @@ async function handleLogout() {
             aria-labelledby="home-province-label"
             @click="pickerOpen = true"
           >
-            <span :class="{ placeholder: !homeProvinceName }">{{ homeProvinceName || 'ไม่ระบุ' }}</span>
+            <span :class="{ placeholder: !homeProvinceName }">{{ homeProvinceName || t('ไม่ระบุ') }}</span>
             <ChevronDown :size="20" :stroke-width="2" aria-hidden="true" />
           </button>
-          <span class="hint">กระดิ่งแจ้งเตือนจะเฝ้าจังหวัดนี้ แยกจากจังหวัดที่กำลังดูพยากรณ์</span>
+          <span class="hint">{{ t('กระดิ่งแจ้งเตือนจะเฝ้าจังหวัดนี้ แยกจากจังหวัดที่กำลังดูพยากรณ์') }}</span>
           <button type="button" class="pill-btn" :disabled="geoLocating" @click="handleUseLocation">
             <LocateFixed :size="18" :stroke-width="2" aria-hidden="true" />
-            {{ geoLocating ? 'กำลังค้นหา...' : 'ใช้ตำแหน่งปัจจุบัน' }}
+            {{ geoLocating ? t('กำลังค้นหา...') : t('ใช้ตำแหน่งปัจจุบัน') }}
           </button>
           <span v-if="geoMessage" class="hint">{{ geoMessage }}</span>
         </div>
@@ -214,39 +160,10 @@ async function handleLogout() {
         <p v-if="profileError" class="msg msg-error" role="alert"><TriangleAlert :size="18" :stroke-width="2" aria-hidden="true" />{{ profileError }}</p>
 
         <button type="submit" class="btn btn-primary" :disabled="savingProfile">
-          {{ savingProfile ? 'กำลังบันทึก...' : 'บันทึกโปรไฟล์' }}
+          {{ savingProfile ? t('กำลังบันทึก...') : t('บันทึก') }}
         </button>
       </form>
 
-      <form class="card form" @submit.prevent="handleChangePassword">
-        <h2>เปลี่ยนรหัสผ่าน</h2>
-
-        <label class="field">
-          <span class="field-label">รหัสผ่านปัจจุบัน</span>
-          <input v-model="currentPassword" type="password" required autocomplete="current-password" />
-        </label>
-        <label class="field">
-          <span class="field-label">รหัสผ่านใหม่</span>
-          <input v-model="newPassword" type="password" required minlength="8" autocomplete="new-password" />
-          <span class="hint">อย่างน้อย 8 ตัวอักษร</span>
-        </label>
-        <label class="field">
-          <span class="field-label">ยืนยันรหัสผ่านใหม่</span>
-          <input v-model="confirmNewPassword" type="password" required autocomplete="new-password" />
-        </label>
-
-        <p v-if="passwordMessage" class="msg msg-success" role="status"><Check :size="18" :stroke-width="2.2" aria-hidden="true" />{{ passwordMessage }}</p>
-        <p v-if="passwordError" class="msg msg-error" role="alert"><TriangleAlert :size="18" :stroke-width="2" aria-hidden="true" />{{ passwordError }}</p>
-
-        <button type="submit" class="btn btn-outline" :disabled="savingPassword">
-          {{ savingPassword ? 'กำลังเปลี่ยน...' : 'เปลี่ยนรหัสผ่าน' }}
-        </button>
-      </form>
-
-      <button type="button" class="btn btn-danger" @click="handleLogout">
-        <LogOut :size="20" :stroke-width="2" aria-hidden="true" />
-        ออกจากระบบ
-      </button>
     </div>
 
     <ProvincePickerSheet
@@ -261,7 +178,7 @@ async function handleLogout() {
 
 <style scoped>
 /* โทเคนสีมาจาก :root ใน main.css (ใช้ชุดเดียวกับหน้าพยากรณ์/แผนที่) */
-.profile-page {
+.settings-sub-page {
   min-height: 100vh;
   padding: var(--app-top-offset) 16px calc(var(--app-bottom-offset) + 24px);
   background: var(--ground);
@@ -277,7 +194,6 @@ async function handleLogout() {
 }
 
 h1 { font-size: 1.6rem; font-weight: 700; line-height: 1.3; margin: 0; }
-h2 { font-size: 1.05rem; font-weight: 600; margin: 0; }
 
 .card {
   background: var(--card);
@@ -286,24 +202,20 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0; }
   padding: 20px;
 }
 
-.user-card { display: flex; align-items: center; gap: 14px; }
-.avatar {
-  width: 52px;
-  height: 52px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--ink);
-  color: var(--card);
-  display: flex;
+.back-link {
+  align-self: flex-start;
+  min-height: 44px;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-family: var(--font-display);
+  gap: 2px;
+  margin: -8px 0 -8px -6px;
+  padding-right: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.95rem;
   font-weight: 600;
-  font-size: 1.35rem;
 }
-.user-text { min-width: 0; }
-.user-email { font-size: 1.05rem; font-weight: 600; overflow-wrap: anywhere; }
-.user-sub { font-size: 0.8rem; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+.back-link:hover { color: var(--ink); }
 
 .form { display: flex; flex-direction: column; gap: 16px; }
 
@@ -325,7 +237,8 @@ input:focus-visible,
 .field-btn:focus-visible,
 .segmented-btn:focus-visible,
 .pill-btn:focus-visible,
-.btn:focus-visible {
+.btn:focus-visible,
+.back-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -418,6 +331,4 @@ input:focus-visible,
 }
 .btn:disabled { opacity: 0.6; cursor: default; }
 .btn-primary { background: var(--ink); color: var(--card); border-color: var(--ink); }
-.btn-outline { background: transparent; color: var(--ink); border-color: var(--line); }
-.btn-danger { background: transparent; color: var(--danger); border-color: var(--danger-line); }
 </style>

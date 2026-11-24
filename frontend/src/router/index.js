@@ -48,10 +48,27 @@ const router = createRouter({
       meta: { guestOnly: true },
     },
     {
-      path: '/profile',
-      name: 'profile',
-      component: () => import('../views/ProfileView.vue'),
+      // หน้าตั้งค่า (แทนหน้าโปรไฟล์เดิม) — ไม่ต้อง login (คนที่ไม่ได้ login ก็เปลี่ยนธีมได้)
+      path: '/settings',
+      name: 'settings',
+      component: () => import('../views/SettingsView.vue'),
+    },
+    {
+      path: '/settings/profile',
+      name: 'settings-profile',
+      component: () => import('../views/SettingsProfileView.vue'),
       meta: { requiresAuth: true },
+    },
+    {
+      path: '/settings/password',
+      name: 'settings-password',
+      component: () => import('../views/SettingsPasswordView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      // ลิงก์/bookmark เก่าของหน้าโปรไฟล์
+      path: '/profile',
+      redirect: '/settings/profile',
     },
   ],
 })
@@ -66,7 +83,7 @@ router.beforeEach(async (to) => {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
   if (to.meta.guestOnly && isLoggedIn()) {
-    return { path: '/profile' }
+    return { path: '/settings' }
   }
   // requiresAdmin ที่ไม่ใช่ admin เด้งกลับหน้าแรกเงียบๆ ไม่ redirect ไป /login
   if (to.meta.requiresAdmin && !isAdmin()) {

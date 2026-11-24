@@ -23,8 +23,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico'],
       manifest: {
-        name: 'พยากรณ์ PM2.5 - ภาคอีสาน',
-        short_name: 'PM2.5 ภาคอีสาน',
+        name: 'DustCast24 - พยากรณ์ PM2.5 ภาคอีสาน',
+        short_name: 'DustCast24',
         description: 'พยากรณ์ PM2.5 ล่วงหน้า 24 ชั่วโมง 20 จังหวัดภาคอีสาน ด้วย Dynamic Routing (LightGBM/XGBoost)',
         lang: 'th',
         start_url: '/',
