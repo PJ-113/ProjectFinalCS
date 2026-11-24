@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { provinceState } from './provinces'
+import { t, isEn } from './i18n'
 
 // สถานะแจ้งเตือนที่ใช้ร่วมกันระหว่าง AppHeader (กระดิ่ง) และ ForecastView (การ์ด/แบนเนอร์เตือน)
 export const notificationState = reactive({
@@ -32,7 +33,7 @@ const WARNING_ADVICE_BY_RISK_GROUP = {
 // ใช้ทั้งใน .warning-box ของ ForecastView และกระดิ่งแจ้งเตือนของ AppHeader
 export function buildWarningMessage(riskGroup) {
   const advice = WARNING_ADVICE_BY_RISK_GROUP[riskGroup] || WARNING_ADVICE_BY_RISK_GROUP['ทั่วไป']
-  return `ช่วงนี้ PM2.5 อยู่ในระดับสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อยในช่วงมลพิษสูง ${advice}`
+  return t('ช่วงนี้ PM2.5 อยู่ในระดับสูง ค่าพยากรณ์อาจต่ำกว่าความจริงเล็กน้อยในช่วงมลพิษสูง {advice}', { advice: t(advice) })
 }
 
 // ข้อ 1 "ระดับเปลี่ยนสถานะ" — transition: { from_level, to_level, from_pm25, to_pm25, direction, levels_moved }
@@ -43,7 +44,13 @@ export function buildWarningMessage(riskGroup) {
 export function buildLevelTransitionMessage(transition) {
   const directionWord = transition.direction === 'worse' ? 'แย่ลง' : 'ดีขึ้น'
   const magnitude = transition.levels_moved >= 2 ? 'มาก' : 'เล็กน้อย'
-  return `อากาศ${directionWord}${magnitude} จาก "${transition.from_level}" เป็น "${transition.to_level}" (${transition.to_pm25} µg/m³)`
+  // แปลทั้งวลีหัว ("อากาศแย่ลงมาก" ฯลฯ 4 แบบ) แทนการแปลทีละคำ เพราะลำดับคำไทย/อังกฤษไม่เหมือนกัน
+  return t('{head} จาก "{from}" เป็น "{to}" ({pm} µg/m³)', {
+    head: t(`อากาศ${directionWord}${magnitude}`),
+    from: t(transition.from_level),
+    to: t(transition.to_level),
+    pm: transition.to_pm25,
+  })
 }
 
 // ข้อ 2 "ใกล้ถึงช่วงเสี่ยงแล้ว" — โทนกระชับ ตรงประเด็น ไม่มีคำแนะนำ/อีโมจิ (ตัดสินใจแล้ว ต่างจาก 3 แบบอื่น)
@@ -52,17 +59,21 @@ export function buildLevelTransitionMessage(transition) {
 // (fetchForecast()/fetchHomeProvinceStatus()) และจาก item หนึ่งใน notificationHistory.items เพราะมี field ชุดนี้
 // เหมือนกันทุกแหล่ง
 export function buildImminentRiskMessage(item) {
-  return `ฝุ่นจะเกินเกณฑ์ ${item.min_risk_horizon_display_time} น. (อีก ${item.min_risk_horizon} ชม.) คาดการณ์ ${item.min_risk_horizon_pm25} µg/m³`
+  return t('ฝุ่นจะเกินเกณฑ์ {time} น. (อีก {h} ชม.) คาดการณ์ {pm} µg/m³', {
+    time: item.min_risk_horizon_display_time,
+    h: item.min_risk_horizon,
+    pm: item.min_risk_horizon_pm25,
+  })
 }
 
 // ข้อ 3 "แนวโน้มฝุ่นจะดีขึ้น" (ข่าวดี) — เรียกเฉพาะตอน trend_direction === "down" เท่านั้น
 export function buildImprovingTrendMessage(trendPeriod) {
-  return `แนวโน้มช่วง${trendPeriod}ฝุ่นจะลดลง`
+  return t('แนวโน้มช่วง{period}ฝุ่นจะลดลง', { period: t(trendPeriod) })
 }
 
 // ข้อ 4 "สถานีเงียบนานผิดปกติ"
 export function buildStationSilenceMessage(staleHours) {
-  return `ไม่มีข้อมูลสถานีใหม่มา ${Math.round(staleHours)} ชั่วโมงแล้ว`
+  return t('ไม่มีข้อมูลสถานีใหม่มา {n} ชั่วโมงแล้ว', { n: Math.round(staleHours) })
 }
 
 let _fetchPromise = null
@@ -173,11 +184,12 @@ const THAI_MONTHS_ABBR = [
   'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
   'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
 ]
+const EN_MONTHS_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 function formatHM(date) {
   const hh = String(date.getHours()).padStart(2, '0')
   const mm = String(date.getMinutes()).padStart(2, '0')
-  return `${hh}:${mm} น.`
+  return isEn() ? `${hh}:${mm}` : `${hh}:${mm} น.`
 }
 
 // หัวการ์ดประวัติ: "2026-09-23 21:00" (ดิบจาก backend) -> "วันนี้ 21:00 น." / "เมื่อวาน ..." / "23 ก.ย. ..."
@@ -187,9 +199,10 @@ export function formatCardTime(str) {
   const now = new Date()
   const yesterday = new Date(now)
   yesterday.setDate(now.getDate() - 1)
-  if (d.toDateString() === now.toDateString()) return `วันนี้ ${formatHM(d)}`
-  if (d.toDateString() === yesterday.toDateString()) return `เมื่อวาน ${formatHM(d)}`
-  return `${d.getDate()} ${THAI_MONTHS_ABBR[d.getMonth()]} ${formatHM(d)}`
+  if (d.toDateString() === now.toDateString()) return t('วันนี้ {time}', { time: formatHM(d) })
+  if (d.toDateString() === yesterday.toDateString()) return t('เมื่อวาน {time}', { time: formatHM(d) })
+  const months = isEn() ? EN_MONTHS_ABBR : THAI_MONTHS_ABBR
+  return `${d.getDate()} ${months[d.getMonth()]} ${formatHM(d)}`
 }
 
 // จัดกลุ่ม horizon ที่ติดกันเป็นช่วงเดียว (เช่น [1,2,3,7,8] -> [[1,3],[7,8]])
@@ -220,10 +233,10 @@ function horizonToClockTime(base, h) {
 // horizon สูงสุด 24 ข้ามได้แค่ 1 วัน ไม่ต้องรองรับ "มะรืนนี้"
 function formatRange(base, start, end) {
   const startDate = horizonToClockTime(base, start)
-  const startLabel = startDate.toDateString() === base.toDateString() ? '' : 'พรุ่งนี้ '
+  const startLabel = startDate.toDateString() === base.toDateString() ? '' : t('พรุ่งนี้') + ' '
   if (start === end) return `${startLabel}${formatHM(startDate)}`
   const endDate = horizonToClockTime(base, end)
-  const endLabel = endDate.toDateString() === startDate.toDateString() ? '' : 'พรุ่งนี้ '
+  const endLabel = endDate.toDateString() === startDate.toDateString() ? '' : t('พรุ่งนี้') + ' '
   return `${startLabel}${formatHM(startDate)} – ${endLabel}${formatHM(endDate)}`
 }
 
@@ -236,13 +249,13 @@ export function summarizeHistoryItem(item) {
   // ตอนนี้ api_notifications() ส่งแถวที่ "ระดับเปลี่ยน" หรือ "แนวโน้มดีขึ้น" มาด้วยแม้ไม่เสี่ยงเลยก็ตาม ต้องเช็ค
   // current_at_risk ตรงๆ แทนการเดาจาก risk_horizons ว่างหรือไม่ว่าง
   if (item.risk_horizons.length === 24) {
-    headline = 'คาดว่า PM2.5 จะอยู่ในระดับสูงตลอด 24 ชั่วโมงข้างหน้า'
+    headline = t('คาดว่า PM2.5 จะอยู่ในระดับสูงตลอด 24 ชั่วโมงข้างหน้า')
   } else if (item.risk_horizons.length > 0) {
-    headline = `ควรระวัง ${item.risk_horizons.length} ช่วงเวลาในอีก 24 ชม. ข้างหน้า`
+    headline = t('ควรระวัง {n} ช่วงเวลาในอีก 24 ชม. ข้างหน้า', { n: item.risk_horizons.length })
     const base = parseThaiDateTime(item.recorded_at_th)
     ranges = groupConsecutive(item.risk_horizons).map(([start, end]) => formatRange(base, start, end))
   } else if (item.current_at_risk) {
-    headline = `PM2.5 ปัจจุบันสูง (${item.latest_pm25} µg/m³)`
+    headline = t('PM2.5 ปัจจุบันสูง ({pm} µg/m³)', { pm: item.latest_pm25 })
   } else if (item.transition) {
     headline = buildLevelTransitionMessage(item.transition)
   } else if (item.trend_direction === 'down') {
@@ -250,7 +263,7 @@ export function summarizeHistoryItem(item) {
   } else {
     headline = `PM2.5 ${item.latest_pm25} µg/m³ ` // เผื่อไว้ ปกติไม่ควรมาถึงบรรทัดนี้เพราะ backend กรองมาแล้ว
   }
-  const note = item.fallback_horizons.length > 0 ? 'บางช่วงข้อมูลไม่ครบ ใช้ค่าพยากรณ์ชั่วคราวแทน' : null
+  const note = item.fallback_horizons.length > 0 ? t('บางช่วงข้อมูลไม่ครบ ใช้ค่าพยากรณ์ชั่วคราวแทน') : null
   // ข้อ 1/3 อาจเกิดร่วมกับเหตุผลหลักอื่นได้พร้อมกันในแถวเดียว (เช่น เสี่ยงจริง + ระดับเปลี่ยนพร้อมกัน) — ถ้า
   // headline หลักไม่ได้ใช้ข้อความนี้ไปแล้ว ให้โชว์เป็น field เสริมแยกต่างหาก ไม่ทับ/ไม่ซ้ำ headline
   const transitionNote = item.transition && headline !== buildLevelTransitionMessage(item.transition)

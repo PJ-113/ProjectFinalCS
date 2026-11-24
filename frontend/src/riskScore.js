@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { t } from './i18n'
 
 // Personalized Risk Score — เก็บ activity ที่ผู้ใช้เลือกไว้ล่าสุดผ่าน localStorage
 // offset/breakpoint ของสูตรคำนวณมาจาก risk_score_config ที่ /api/forecast ส่งมา
@@ -84,5 +85,5 @@ const RISK_SCORE_ADVICE = {
 }
 
 export function riskScoreAdvice(level) {
-  return RISK_SCORE_ADVICE[level] || ''
+  return t(RISK_SCORE_ADVICE[level] || '')
 }

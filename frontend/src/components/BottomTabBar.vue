@@ -1,28 +1,47 @@
 <script setup>
 import { computed } from 'vue'
-import { House, ChartColumn, User, LogIn } from '@lucide/vue'
-import { authState, isAdmin } from '../auth'
+import { useRoute } from 'vue-router'
+import { House, ChartColumn, Settings } from '@lucide/vue'
+import { isAdmin } from '../auth'
+import { t } from '../i18n'
 
 // แถบนำทางล่างสำหรับมือถือ (≤720px) แสดงผลเฉพาะจอแคบด้วย CSS เดสก์ท็อปใช้ top nav ใน AppHeader
 // "เปรียบเทียบ" เป็น admin-only (route guard อยู่ที่ router/index.js)
 // แท็บ "แผนที่" ถูกเอาออก — รวมเข้าเป็นส่วนหนึ่งของหน้า "/" แล้ว (DashboardMap.vue)
+// แท็บ "ตั้งค่า" แทน "โปรไฟล์/เข้าสู่ระบบ" เดิม — แสดงตลอดไม่ว่าจะ login หรือไม่ (เข้าสู่ระบบอยู่ในหน้าตั้งค่า)
+const route = useRoute()
+
 const tabs = computed(() => {
   const list = [
-    { to: '/', label: 'พยากรณ์', icon: House },
+    { to: '/', label: t('พยากรณ์'), icon: House },
   ]
-  if (isAdmin()) list.push({ to: '/compare', label: 'เปรียบเทียบ', icon: ChartColumn })
-  list.push(
-    authState.user
-      ? { to: '/profile', label: 'โปรไฟล์', icon: User }
-      : { to: '/login', label: 'เข้าสู่ระบบ', icon: LogIn },
-  )
+  if (isAdmin()) list.push({ to: '/compare', label: t('เปรียบเทียบ'), icon: ChartColumn })
+  list.push({ to: '/settings', label: t('ตั้งค่า'), icon: Settings })
   return list
 })
+
+// ไฮไลต์แท็บตาม prefix ของ path (เช่น /settings/profile ยังนับเป็นแท็บตั้งค่า) — exact-active-class เดิม
+// ไม่ครอบคลุมหน้าย่อย เพราะ route ของหน้าย่อยไม่ได้เป็น nested route ของ /settings; หน้า login/register
+// นับเป็นแท็บตั้งค่าด้วย เพราะเข้ามาจากการ์ดในหน้าตั้งค่า
+function isActive(to) {
+  if (to === '/') return route.path === '/'
+  if (to === '/settings') {
+    return route.path.startsWith('/settings') || route.name === 'login' || route.name === 'register'
+  }
+  return route.path.startsWith(to)
+}
 </script>
 
 <template>
-  <nav class="tab-bar" aria-label="เมนูหลัก">
-    <router-link v-for="t in tabs" :key="t.to" :to="t.to" class="tab" exact-active-class="tab-active">
+  <nav class="tab-bar" :aria-label="t('เมนูหลัก')">
+    <router-link
+      v-for="t in tabs"
+      :key="t.to"
+      :to="t.to"
+      class="tab"
+      :class="{ 'tab-active': isActive(t.to) }"
+      :aria-current="isActive(t.to) ? 'page' : undefined"
+    >
       <component :is="t.icon" :size="24" :stroke-width="2" aria-hidden="true" />
       <span class="tab-label">{{ t.label }}</span>
     </router-link>

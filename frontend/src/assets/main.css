@@ -3,7 +3,10 @@
   --font-display: "Prompt", "Noto Sans Thai", system-ui, sans-serif;
   /* ระยะเผื่อ header ลอย (บน) และ bottom tab bar (ล่าง, เฉพาะมือถือ) — ทุกหน้าใช้ตัวแปรนี้แทนเลข px
      ตายตัว เพื่อให้เปลี่ยน breakpoint/ความสูงแถบนำทางที่เดียวได้ (ดู AppHeader.vue / BottomTabBar.vue) */
-  --app-top-offset: 100px;
+  /* header แบบ A (AppHeader.vue): แถบทึบสูง --app-header-h ติดขอบบน + ระยะห่างก่อนเนื้อหา
+     (+ safe-area บน iPhone แบบติดตั้ง) */
+  --app-header-h: 64px;
+  --app-top-offset: calc(var(--app-header-h) + 24px + env(safe-area-inset-top, 0px));
   --app-bottom-offset: 0px;
 
   /* โทเคนสีธีมใหม่ (พื้นเรียบ การ์ดทึบ) — ใช้ร่วมกันใน Profile/Notifications/AppHeader dropdown/
@@ -49,7 +52,8 @@
 
 @media (max-width: 720px) {
   :root {
-    --app-top-offset: 84px;
+    --app-header-h: 56px;
+    --app-top-offset: calc(var(--app-header-h) + 16px + env(safe-area-inset-top, 0px));
     --app-bottom-offset: calc(84px + env(safe-area-inset-bottom, 0px));
   }
 }

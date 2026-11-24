@@ -2758,6 +2758,9 @@ def api_auth_update_profile():
             return jsonify({"error": "อีเมลนี้ถูกใช้งานแล้ว"}), 409
 
         update_user_profile(session["user_id"], email, risk_group, age, home_province)
+        old_home = current["home_province"]
+        if old_home and home_province and home_province != old_home:
+            move_push_subscriptions_with_home(session["user_id"], old_home, home_province)
         return jsonify(get_user_by_id(session["user_id"])), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -3233,6 +3236,52 @@ def api_push_subscribe():
         return jsonify({"ok": True}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/push/status", methods=["POST"])
+def api_push_status():
+    """จังหวัดที่ subscription ของเครื่องนี้ล็อกไว้จริง (หน้าตั้งค่าโชว์ค่านี้ ไม่ใช่จังหวัดที่กำลังดูอยู่)
+    POST ไม่ใช่ GET เพื่อไม่ให้ endpoint URL ของ push service ไปโผล่ใน query string/access log
+    ไม่บังคับ login เหมือน /api/push/subscribe — endpoint เองเป็นตัวระบุเครื่อง"""
+    try:
+        data = request.get_json(silent=True) or {}
+        endpoint = str(data.get("endpoint", "")).strip()
+        if not endpoint:
+            return jsonify({"error": "ไม่มี endpoint"}), 400
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT province FROM push_subscriptions WHERE endpoint = %s", (endpoint,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row is None:
+            return jsonify({"subscribed": False, "province": None}), 200
+        return jsonify({"subscribed": True, "province": row[0]}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def move_push_subscriptions_with_home(user_id, old_home, new_home):
+    """ผู้ใช้เปลี่ยนจังหวัดหลัก -> ย้าย push ของทุกเครื่องในบัญชีนี้ไปจังหวัดใหม่ แต่เฉพาะ subscription ที่ยังล็อก
+    อยู่ที่จังหวัดหลักเดิม (province = old_home) — ถ้าผู้ใช้เลือกจังหวัดแจ้งเตือนเองเป็นจังหวัดอื่นไว้ในหน้าตั้งค่า
+    จะไม่ทับ; รีเซ็ต push_dedup_state เพราะเป็นจังหวัดใหม่ (เหมือนตอน subscribe ใหม่)
+    ห่อ try/except: ย้าย push ไม่สำเร็จต้องไม่ทำให้การบันทึกโปรไฟล์ล้ม"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE push_subscriptions SET province = %s, push_dedup_state = '{}'::jsonb
+               WHERE user_id = %s AND province = %s""",
+            (new_home, user_id, old_home),
+        )
+        moved = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        if moved:
+            print(f"[push] moved {moved} subscription(s) of user {user_id}: {old_home} -> {new_home}")
+    except Exception as e:
+        print(f"[push] move subscriptions failed for user {user_id}: {type(e).__name__}")
 
 
 @app.route("/api/push/unsubscribe", methods=["POST"])

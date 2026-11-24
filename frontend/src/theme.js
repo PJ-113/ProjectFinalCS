@@ -1,7 +1,8 @@
 import { reactive } from 'vue'
 
-// สลับธีมสว่าง/มืดด้วยปุ่ม — เก็บค่าที่เลือกไว้ใน localStorage ถ้ายังไม่เคยเลือกจะตามธีมของเครื่อง
-// (prefers-color-scheme) และตามต่อเมื่อเครื่องเปลี่ยน ธีมของทุกหน้าอ่านจาก attribute data-theme บน <html>
+// ธีมสว่าง/มืด — เลือกได้ 3 แบบในหน้าตั้งค่า: 'light' | 'dark' | 'system'
+// เลือกสว่าง/มืด = เก็บค่าไว้ใน localStorage, เลือก "ตามระบบ" = ลบค่าที่เก็บทิ้ง แล้วตามธีมของเครื่อง
+// (prefers-color-scheme) ต่อไป รวมถึงตอนเครื่องสลับโหมดกลางคัน ธีมของทุกหน้าอ่านจาก attribute data-theme บน <html>
 const STORAGE_KEY = 'pm25_theme'
 const THEME_COLOR = { light: '#f6f4ef', dark: '#0e1013' } // meta theme-color = สี --ground ของแต่ละธีม
 
@@ -22,7 +23,7 @@ const stored = readStored()
 
 export const themeState = reactive({
   mode: stored || systemTheme(), // 'light' | 'dark' (ค่าที่ใช้อยู่จริง)
-  explicit: stored !== null, // true = ผู้ใช้เลือกเอง ไม่ตามธีมเครื่องอีก
+  preference: stored || 'system', // 'light' | 'dark' | 'system' (ที่ผู้ใช้เลือกในหน้าตั้งค่า)
 })
 
 function apply(mode) {
@@ -34,21 +35,23 @@ function apply(mode) {
 
 export function initTheme() {
   apply(themeState.mode)
-  // ยังไม่เคยเลือกเอง -> ตามเครื่องต่อไปเวลาเครื่องสลับโหมดกลางคัน
+  // เลือก "ตามระบบ" อยู่ -> ตามเครื่องต่อไปเวลาเครื่องสลับโหมดกลางคัน
   window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
-    if (themeState.explicit) return
+    if (themeState.preference !== 'system') return
     themeState.mode = systemTheme()
     apply(themeState.mode)
   })
 }
 
-export function toggleTheme() {
-  themeState.mode = themeState.mode === 'dark' ? 'light' : 'dark'
-  themeState.explicit = true
+export function setTheme(preference) {
+  if (preference !== 'light' && preference !== 'dark' && preference !== 'system') return
+  themeState.preference = preference
+  themeState.mode = preference === 'system' ? systemTheme() : preference
   try {
-    localStorage.setItem(STORAGE_KEY, themeState.mode)
+    if (preference === 'system') localStorage.removeItem(STORAGE_KEY)
+    else localStorage.setItem(STORAGE_KEY, preference)
   } catch {
-    // เก็บไม่ได้ก็สลับได้เฉพาะเซสชันนี้
+    // เก็บไม่ได้ก็ใช้ได้เฉพาะเซสชันนี้
   }
   apply(themeState.mode)
 }

@@ -14,6 +14,7 @@ import { riskScoreState, setActivity, ACTIVITY_LEVELS, ACTIVITY_EXAMPLES, comput
 import { provinceState, selectProvince } from "../provinces";
 import { statusClass, severityVar, severityHex, PM25_LEVELS, scaleMarkerPct, adviceForStatus } from "../pm25Levels";
 import ProvincePickerSheet from "../components/ProvincePickerSheet.vue";
+import { t, clock, isEn, localeState, provinceName } from "../i18n";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import isaanMaskGeoJson from "../assets/isaan_provinces_mask.json";
@@ -22,7 +23,7 @@ import isaanBoundaryGeoJson from "../assets/isaan_provinces_boundary.json";
 // ===== การ์ด "ภาพรวมทั้งภาค" (ย้ายมาจาก MapView.vue /map ตามดีไซน์ "ฝังเป็นส่วนหนึ่งของหน้า ไม่ใช่แท็บ")
 // — หน้านี้คือ "/" ตัวจริงแล้ว (แทนที่ ForecastView.vue เดิม) ไม่ใช่พรีวิวอีกต่อไป
 const overviewState = ref("loading"); // "loading" | "error" | "content"
-const overviewError = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
+const overviewError = ref("");
 const mapEl = ref(null);
 let mapInstance = null;
 let boundaryLayer = null;
@@ -70,20 +71,20 @@ function markerIcon(value, color, name, isSelected) {
 
 function tooltipHtmlFor(p) {
   const pm = overviewHorizon.value > 0 ? p.forecast_pm25 : p.current_pm25;
-  return `<div class="map-hover-title">${p.province_th}</div><div class="map-hover-row">PM2.5: ${pm != null ? pm + " µg/m³" : "-"}</div>`;
+  return `<div class="map-hover-title">${provinceName(p)}</div><div class="map-hover-row">PM2.5: ${pm != null ? pm + " µg/m³" : "-"}</div>`;
 }
 
 function popupHtmlFor(p) {
   const isForecast = overviewHorizon.value > 0;
   const valueText = isForecast
-    ? (p.forecast_pm25 != null ? `${p.forecast_pm25} µg/m³` : "ไม่มีข้อมูล")
-    : (p.current_pm25 != null ? `${p.current_pm25} µg/m³` : "ไม่มีข้อมูล");
-  const statusText = isForecast ? (p.forecast_status || "-") : (p.current_status || "-");
+    ? (p.forecast_pm25 != null ? `${p.forecast_pm25} µg/m³` : t("ไม่มีข้อมูล"))
+    : (p.current_pm25 != null ? `${p.current_pm25} µg/m³` : t("ไม่มีข้อมูล"));
+  const statusText = t(isForecast ? (p.forecast_status || "-") : (p.current_status || "-"));
   // ไม่มีปุ่ม "ดูจังหวัดนี้" แยกแล้ว — การแตะหมุด (marker click) ทำการซูม+ไฮไลต์+สลับจังหวัดให้ทันทีอยู่แล้ว
   // (ดู focusProvince()) ป๊อปอัปนี้เหลือไว้แค่โชว์ค่า PM2.5/สถานะประกอบเฉยๆ
   return `
     <div class="map-popup">
-      <div class="map-popup-title">${p.province_th}${p.is_zero_shot ? " (zero-shot)" : ""}</div>
+      <div class="map-popup-title">${provinceName(p)}${p.is_zero_shot ? " (zero-shot)" : ""}</div>
       <div class="map-popup-pm25">${valueText}</div>
       <div class="map-popup-status">${statusText}</div>
     </div>
@@ -131,14 +132,14 @@ function createOrUpdateMarkers(provinces) {
     const isSelected = p.province_en === provinceState.selected;
     let marker = markerByProvince.get(p.province_en);
     if (!marker) {
-      marker = L.marker([p.lat, p.lon], { icon: markerIcon(valueForColor, color, p.province_th, isSelected) }).addTo(mapInstance);
+      marker = L.marker([p.lat, p.lon], { icon: markerIcon(valueForColor, color, provinceName(p), isSelected) }).addTo(mapInstance);
       marker.bindPopup(popupHtmlFor(p));
       marker.bindTooltip(tooltipHtmlFor(p), { direction: "top", offset: [0, -16], className: "map-hover-tooltip" });
       marker.on("click", () => focusProvince(p.province_en));
       markerByProvince.set(p.province_en, marker);
       return;
     }
-    marker.setIcon(markerIcon(valueForColor, color, p.province_th, isSelected));
+    marker.setIcon(markerIcon(valueForColor, color, provinceName(p), isSelected));
     marker.setPopupContent(popupHtmlFor(p));
     marker.setTooltipContent(tooltipHtmlFor(p));
   });
@@ -161,7 +162,7 @@ async function loadOverview() {
     lastOverviewProvinces = data;
     createOrUpdateMarkers(data);
   } catch (err) {
-    overviewError.value = "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
+    overviewError.value = "";
     overviewState.value = "error";
     console.error("โหลดภาพรวมแผนที่ล้มเหลว:", err);
   }
@@ -301,7 +302,7 @@ const SAMPLE_DAILY = {
 };
 
 const state = ref("loading"); // "loading" | "error" | "content"
-const errorMessage = ref("ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง");
+const errorMessage = ref("");
 
 const current = ref({ pm25: "-", datetime_th: "-", status: "" });
 const currentWeather = ref({ temp_c: null, humidity_pct: null, wind_speed_kmh: null });
@@ -431,7 +432,7 @@ function drawWeatherChart(pts) {
     pastLabel.setAttribute("x", padding.left + 6);
     pastLabel.setAttribute("y", padding.top + 12);
     pastLabel.setAttribute("class", "past-label");
-    pastLabel.textContent = "ข้อมูลย้อนหลัง";
+    pastLabel.textContent = t("ข้อมูลย้อนหลัง");
     svg.appendChild(pastLabel);
 
     if (nowX - padding.left > WEATHER_POINT_GAP * 2) { // เว้นระยะพอสมควรจากป้ายแรกถึงไม่ซ้อนทับกัน
@@ -440,7 +441,7 @@ function drawWeatherChart(pts) {
       pastLabelNearNow.setAttribute("y", padding.top + 12);
       pastLabelNearNow.setAttribute("text-anchor", "end");
       pastLabelNearNow.setAttribute("class", "past-label");
-      pastLabelNearNow.textContent = "ข้อมูลย้อนหลัง";
+      pastLabelNearNow.textContent = t("ข้อมูลย้อนหลัง");
       svg.appendChild(pastLabelNearNow);
     }
 
@@ -468,7 +469,7 @@ function drawWeatherChart(pts) {
     label.setAttribute("y", height - padding.bottom + 16);
     label.setAttribute("text-anchor", "middle");
     label.setAttribute("class", "axis-label");
-    label.textContent = p.is_now ? "ตอนนี้" : p.time;
+    label.textContent = p.is_now ? t("ตอนนี้") : p.time;
     svg.appendChild(label);
   });
 
@@ -570,7 +571,7 @@ const dailyAvgDisplay = computed(() => {
     : "-";
 });
 const dailyTextDisplay = computed(() =>
-  SAMPLE_EXTRA_CARDS_DATA ? SAMPLE_DAILY.text : dailySummary.value.explanation || "กำลังเตรียมข้อมูลสำหรับวันนี้"
+  SAMPLE_EXTRA_CARDS_DATA ? SAMPLE_DAILY.text : dailySummary.value.explanation || t("กำลังเตรียมข้อมูลสำหรับวันนี้")
 );
 // horizon (1..24) -> เวลานาฬิกาของจุดนั้นใน forecast[] — ใช้ display_time (ตรง convention เดียวกับเว็บ
 // OpenAQ เอง, ดู OPENAQ_DISPLAY_LABEL_SHIFT_H ใน app.py) ไม่ใช่ time ดิบที่ backend ใช้คำนวณภายใน
@@ -687,8 +688,8 @@ watch(selectedPoint, (point) => {
 const trendInfo = computed(() => {
   if (!selectedPoint.value?.is_forecast || selectedPoint.value?.is_gap_fill || current.value.pm25 === "-") return null;
   const diff = selectedPoint.value.pm25 - current.value.pm25;
-  if (Math.abs(diff) < 0.5) return { label: "ใกล้เคียงกับค่าตอนนี้", diff, kind: "flat" };
-  return { label: diff > 0 ? "ฝุ่นมีแนวโน้มสูงขึ้น" : "ฝุ่นมีแนวโน้มลดลง", diff, kind: diff > 0 ? "up" : "down" };
+  if (Math.abs(diff) < 0.5) return { label: t("ใกล้เคียงกับค่าตอนนี้"), diff, kind: "flat" };
+  return { label: diff > 0 ? t("ฝุ่นมีแนวโน้มสูงขึ้น") : t("ฝุ่นมีแนวโน้มลดลง"), diff, kind: diff > 0 ? "up" : "down" };
 });
 
 
@@ -720,7 +721,7 @@ async function loadForecast() {
     riskScoreConfig.value = data.risk_score_config || null;
     state.value = "content";
   } catch (err) {
-    errorMessage.value = err.dataUnavailable ? err.message : "ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง";
+    errorMessage.value = err.dataUnavailable ? err.message : "";
     state.value = "error";
     console.error("โหลดข้อมูลพยากรณ์ล้มเหลว:", err);
   }
@@ -749,6 +750,12 @@ watch(() => provinceState.selected, (provinceEn) => {
 
 // วาดกราฟใหม่ตอนเลือก/ยกเลิกเลือกการ์ด ให้จุดที่เลือกอยู่ขยายใหญ่ขึ้นตามจริง (ไม่ใช่แค่ครั้งแรกตอนโหลดข้อมูล)
 watch(selectedIdx, () => drawWeatherChart(hourlyTimeline.value));
+// เปลี่ยนภาษา: ป้ายบนแผนที่ (ชื่อจังหวัด/ป๊อปอัป) และป้ายในกราฟ (ตอนนี้/ข้อมูลย้อนหลัง) สร้างเป็น DOM/HTML
+// ตรงๆ ไม่ผ่าน template ของ Vue จึงไม่อัปเดตเอง ต้องวาดใหม่
+watch(() => localeState.locale, () => {
+  if (lastOverviewProvinces.length) createOrUpdateMarkers(lastOverviewProvinces);
+  if (state.value === "content") drawWeatherChart(hourlyTimeline.value);
+});
 
 onMounted(loadForecast);
 
@@ -783,11 +790,11 @@ defineExpose({ loadForecast });
       <div class="top-row">
         <button type="button" class="province-chip" aria-haspopup="dialog" @click="pickerOpen = true">
           <MapPin :size="18" :stroke-width="2" aria-hidden="true" />
-          <span class="province-chip-name">{{ provinceInfo.th || "..." }}</span>
+          <span class="province-chip-name">{{ (isEn() ? provinceName(provinceState.list.find((p) => p.province_en === provinceInfo.en)) : provinceInfo.th) || provinceInfo.th || "..." }}</span>
           <span v-if="provinceInfo.is_zero_shot" class="zs-badge">zero-shot</span>
           <ChevronDown :size="16" :stroke-width="2" aria-hidden="true" />
         </button>
-        <span class="page-title">พยากรณ์ PM2.5</span>
+        <span class="page-title">{{ t('พยากรณ์ PM2.5') }}</span>
       </div>
 
       <!-- ภาพรวมทั้งภาค (ย้ายมาจาก MapView.vue /map — โหลด/แสดงผลอิสระจากการ์ดพยากรณ์ด้านล่าง)
@@ -795,20 +802,20 @@ defineExpose({ loadForecast });
            แทน (ไม่มีที่ซ่อนเหมือนเดิมเพราะ card-head ถูกตัดออกไปแล้ว) -->
       <section class="card map-overview-card">
         <div v-if="overviewState === 'error'" class="card error-box" role="alert">
-          <p>{{ overviewError }}</p>
-          <button type="button" class="retry-btn" @click="loadOverview">ลองอีกครั้ง</button>
+          <p>{{ overviewError || t('ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง') }}</p>
+          <button type="button" class="retry-btn" @click="loadOverview">{{ t('ลองอีกครั้ง') }}</button>
         </div>
         <div class="map-card-inner">
           <div ref="mapEl" class="leaflet-container-el"></div>
-          <div v-if="overviewState === 'loading'" class="map-loading-overlay">กำลังโหลดข้อมูล...</div>
-          <button v-if="focusedProvince" type="button" class="map-back-btn map-back-btn-float" @click="clearProvinceFocus">← ซูมออก</button>
+          <div v-if="overviewState === 'loading'" class="map-loading-overlay">{{ t('กำลังโหลดข้อมูล...') }}</div>
+          <button v-if="focusedProvince" type="button" class="map-back-btn map-back-btn-float" @click="clearProvinceFocus">{{ t('← ซูมออก') }}</button>
         </div>
         <div class="legend-mini">
-          <span class="legend-chip"><span class="dot" style="background: var(--excellent)"></span>ดีมาก</span>
-          <span class="legend-chip"><span class="dot" style="background: var(--good)"></span>ดี</span>
-          <span class="legend-chip"><span class="dot" style="background: var(--moderate)"></span>ปานกลาง</span>
-          <span class="legend-chip"><span class="dot" style="background: var(--unhealthy)"></span>เริ่มมีผลกระทบ</span>
-          <span class="legend-chip"><span class="dot" style="background: var(--bad)"></span>มีผลกระทบ</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--excellent)"></span>{{ t('ดีมาก') }}</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--good)"></span>{{ t('ดี') }}</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--moderate)"></span>{{ t('ปานกลาง') }}</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--unhealthy)"></span>{{ t('เริ่มมีผลกระทบ') }}</span>
+          <span class="legend-chip"><span class="dot" style="background: var(--bad)"></span>{{ t('มีผลกระทบ') }}</span>
         </div>
       </section>
 
@@ -845,8 +852,8 @@ defineExpose({ loadForecast });
 
       <!-- Error state -->
       <div v-else-if="state === 'error'" key="error" class="card error-box">
-        <p>{{ errorMessage }}</p>
-        <button type="button" class="retry-btn" @click="loadForecast">ลองอีกครั้ง</button>
+        <p>{{ errorMessage || t('ไม่สามารถโหลดข้อมูลได้ ลองใหม่อีกครั้ง') }}</p>
+        <button type="button" class="retry-btn" @click="loadForecast">{{ t('ลองอีกครั้ง') }}</button>
       </div>
 
       <!-- Content -->
@@ -861,7 +868,7 @@ defineExpose({ loadForecast });
           <div v-if="highPollutionRisk" class="banner banner-warn" role="alert">
             <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
             <div>
-              <div class="banner-title">ช่วงนี้ฝุ่นอยู่ในระดับสูง</div>
+              <div class="banner-title">{{ t('ช่วงนี้ฝุ่นอยู่ในระดับสูง') }}</div>
               <div class="banner-text">{{ warningMessage }}</div>
             </div>
           </div>
@@ -875,17 +882,18 @@ defineExpose({ loadForecast });
           <div v-if="dataQuality.target_stale" class="banner banner-warn" role="alert">
             <TriangleAlert :size="22" :stroke-width="2" aria-hidden="true" />
             <div class="banner-text">
-              ข้อมูลล่าสุดของสถานีตรวจวัดในจังหวัดนี้เก่ากว่า {{ Math.round(dataQuality.target_age_hours) }} ชั่วโมง
-              (สถานีอาจขัดข้อง) ค่าที่แสดงอาจไม่ตรงกับสถานการณ์ปัจจุบัน
+              {{ t('ข้อมูลล่าสุดของสถานีตรวจวัดในจังหวัดนี้เก่ากว่า {n} ชั่วโมง (สถานีอาจขัดข้อง) ค่าที่แสดงอาจไม่ตรงกับสถานการณ์ปัจจุบัน', { n: Math.round(dataQuality.target_age_hours) }) }}
             </div>
           </div>
 
           <div v-if="dataQuality.input_imputed" class="banner banner-info">
           <Info :size="22" :stroke-width="2" aria-hidden="true" />
           <div class="banner-text">
-            สถานีตรวจวัดในจังหวัดนี้ขาดการรายงานประมาณ {{ dataQuality.input_imputed.k_hours }} ชั่วโมง
-            ค่าที่แสดงเป็นค่าประมาณจากจังหวัดข้างเคียง (ค่าที่วัดได้ล่าสุด {{ dataQuality.input_imputed.last_observed_pm25 }} µg/m³
-            เมื่อ {{ formatCardTime(dataQuality.input_imputed.last_observed_datetime_th) }}) ช่วงความเชื่อมั่นจึงกว้างกว่าปกติ
+            {{ t('สถานีตรวจวัดในจังหวัดนี้ขาดการรายงานประมาณ {k} ชั่วโมง ค่าที่แสดงเป็นค่าประมาณจากจังหวัดข้างเคียง (ค่าที่วัดได้ล่าสุด {pm} µg/m³ เมื่อ {time}) ช่วงความเชื่อมั่นจึงกว้างกว่าปกติ', {
+              k: dataQuality.input_imputed.k_hours,
+              pm: dataQuality.input_imputed.last_observed_pm25,
+              time: formatCardTime(dataQuality.input_imputed.last_observed_datetime_th),
+            }) }}
           </div>
         </div>
 
@@ -893,10 +901,10 @@ defineExpose({ loadForecast });
             <Info :size="22" :stroke-width="2" aria-hidden="true" />
             <div class="banner-text">
               <template v-if="dataQuality.series_source === 'stale_cache'">
-                ระบบเชื่อมต่อแหล่งข้อมูลฝุ่นไม่ได้ชั่วคราว จึงใช้ข้อมูลที่บันทึกไว้ล่าสุด (เมื่อประมาณ {{ Math.max(1, Math.round(dataQuality.series_age_hours)) }} ชั่วโมงก่อน)
+                {{ t('ระบบเชื่อมต่อแหล่งข้อมูลฝุ่นไม่ได้ชั่วคราว จึงใช้ข้อมูลที่บันทึกไว้ล่าสุด (เมื่อประมาณ {n} ชั่วโมงก่อน)', { n: Math.max(1, Math.round(dataQuality.series_age_hours)) }) }}
               </template>
               <template v-if="dataQuality.weather_source === 'climatology'">
-                ระบบดึงสภาพอากาศล่าสุดไม่ได้ จึงใช้ค่าเฉลี่ยตามฤดูกาลของจังหวัดนี้แทน ความแม่นยำอาจลดลงเล็กน้อย
+                {{ t('ระบบดึงสภาพอากาศล่าสุดไม่ได้ จึงใช้ค่าเฉลี่ยตามฤดูกาลของจังหวัดนี้แทน ความแม่นยำอาจลดลงเล็กน้อย') }}
               </template>
             </div>
           </div>
@@ -904,16 +912,16 @@ defineExpose({ loadForecast });
         <div v-if="fallbackHorizons.length > 0" class="banner banner-info">
             <Info :size="22" :stroke-width="2" aria-hidden="true" />
             <div class="banner-text">
-              ข้อมูลบางช่วงไม่ครบ ระบบจึงใช้ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)
-              <template v-if="fallbackTimesText"> ที่เวลา {{ fallbackTimesText }} น.</template>
+              {{ t('ข้อมูลบางช่วงไม่ครบ ระบบจึงใช้ค่าพยากรณ์ชั่วคราว (ความเชื่อมั่นต่ำ)') }}
+              <template v-if="fallbackTimesText"> {{ t('ที่เวลา {times}', { times: clock(fallbackTimesText) }) }}</template>
             </div>
           </div>
 
           <!-- Hero: ค่า PM2.5 ปัจจุบัน -->
-          <section class="hero" aria-label="PM2.5 ตอนนี้">
+          <section class="hero" :aria-label="t('PM2.5 ตอนนี้')">
             <div class="hero-head">
-              <span class="hero-label">PM2.5 ตอนนี้<span v-if="dataQuality.input_imputed" class="estimate-tag">ค่าประมาณ</span></span>
-              <span v-if="SHOW_UPDATED_LABEL && updatedLabel" class="hero-updated">อัปเดต {{ updatedLabel }}</span>
+              <span class="hero-label">{{ t('PM2.5 ตอนนี้') }}<span v-if="dataQuality.input_imputed" class="estimate-tag">{{ t('ค่าประมาณ') }}</span></span>
+              <span v-if="SHOW_UPDATED_LABEL && updatedLabel" class="hero-updated">{{ t('อัปเดต {time}', { time: updatedLabel }) }}</span>
             </div>
             <div class="pm-value-row">
               <span class="pm-value">{{ current.pm25 }}</span>
@@ -921,7 +929,7 @@ defineExpose({ loadForecast });
             </div>
             <div class="level-chip" :class="statusClass(current.status)">
               <component :is="moodIconFor(current.status)" :size="28" :stroke-width="2" class="level-icon" />
-              <span class="level-text">{{ current.status }}</span>
+              <span class="level-text">{{ t(current.status) }}</span>
             </div>
             <div class="scale" aria-hidden="true">
               <div class="scale-track">
@@ -934,26 +942,26 @@ defineExpose({ loadForecast });
                 ></span>
                 <span class="scale-marker" :style="{ left: markerPct + '%' }"></span>
               </div>
-              <div class="scale-ends"><span>ดีมาก</span><span>มีผลกระทบ</span></div>
+              <div class="scale-ends"><span>{{ t('ดีมาก') }}</span><span>{{ t('มีผลกระทบ') }}</span></div>
             </div>
             <p class="hero-advice">{{ currentAdvice }}</p>
-            <p class="hero-note">ค่ารายชั่วโมงล่าสุด ไม่ใช่ค่าเฉลี่ย 24 ชม. แบบ AQI ทางการ</p>
+            <p class="hero-note">{{ t('ค่ารายชั่วโมงล่าสุด ไม่ใช่ค่าเฉลี่ย 24 ชม. แบบ AQI ทางการ') }}</p>
 
             <div v-if="currentWeather.temp_c != null" class="stat-tiles">
               <div class="stat-tile">
                 <ThermometerSun :size="20" :stroke-width="2" aria-hidden="true" />
                 <div class="stat-tile-value">{{ currentWeather.temp_c }}°C</div>
-                <div class="stat-tile-label">อุณหภูมิ</div>
+                <div class="stat-tile-label">{{ t('อุณหภูมิ') }}</div>
               </div>
               <div class="stat-tile">
                 <Droplets :size="20" :stroke-width="2" aria-hidden="true" />
                 <div class="stat-tile-value">{{ currentWeather.humidity_pct }}%</div>
-                <div class="stat-tile-label">ความชื้น</div>
+                <div class="stat-tile-label">{{ t('ความชื้น') }}</div>
               </div>
               <div class="stat-tile">
                 <Wind :size="20" :stroke-width="2" aria-hidden="true" />
-                <div class="stat-tile-value">{{ currentWeather.wind_speed_kmh }} กม./ชม.</div>
-                <div class="stat-tile-label">ลม</div>
+                <div class="stat-tile-value">{{ currentWeather.wind_speed_kmh }} {{ t('กม./ชม.') }}</div>
+                <div class="stat-tile-label">{{ t('ลม') }}</div>
               </div>
             </div>
           </section>
@@ -961,11 +969,11 @@ defineExpose({ loadForecast });
           <!-- ช่วงเวลาที่ฝุ่นต่ำที่สุด -->
           <section v-if="SHOW_EXTRA_CARDS" class="card">
             <div class="card-head">
-              <h2>ช่วงเวลาที่ฝุ่นต่ำที่สุด</h2>
-              <span class="card-head-sub">24 ชม. ข้างหน้า</span>
+              <h2>{{ t('ช่วงเวลาที่ฝุ่นต่ำที่สุด') }}</h2>
+              <span class="card-head-sub">{{ t('24 ชม. ข้างหน้า') }}</span>
             </div>
             <div v-if="topBestTime" class="best-single">
-              <span class="best-single-time">{{ topBestTime.display_time }} น.</span>
+              <span class="best-single-time">{{ clock(topBestTime.display_time) }}</span>
               <span class="best-pm">
                 <span class="dot" :style="{ background: barColor(topBestTime.pm25) }"></span>{{ topBestTime.pm25 }}
                 <span class="best-unit">µg/m³</span>
@@ -977,13 +985,15 @@ defineExpose({ loadForecast });
           <section v-if="SHOW_EXTRA_CARDS" class="card">
             <div class="summary-eyebrow">
               <Sparkles :size="18" :stroke-width="2" aria-hidden="true" />
-              <span>สรุปวันนี้ · อัปเดต 06:00 น.</span>
+              <span>{{ t('สรุปวันนี้ · อัปเดต {time}', { time: clock('06:00') }) }}</span>
             </div>
             <div class="summary-value">
-              {{ dailyAvgDisplay }}<span class="summary-unit"> µg/m³ ค่าเฉลี่ยพยากรณ์ 24 ชม.</span>
+              {{ dailyAvgDisplay }}<span class="summary-unit"> {{ t('µg/m³ ค่าเฉลี่ยพยากรณ์ 24 ชม.') }}</span>
             </div>
             <p class="summary-text">{{ dailyTextDisplay }}</p>
-            <p class="disclaimer-text">คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์</p>
+            <!-- สรุปรายวันสร้างโดย Gemini เป็นภาษาไทยเท่านั้น (ขอบเขต i18n รอบนี้แปลเฉพาะ UI) -->
+            <p v-if="isEn()" class="disclaimer-text">Daily summary is available in Thai only.</p>
+            <p class="disclaimer-text">{{ t('คำแนะนำนี้เป็นข้อมูลประกอบการวางแผนกิจกรรม ไม่ใช่คำวินิจฉัยหรือคำแนะนำทางการแพทย์ ผู้มีโรคประจำตัวควรปฏิบัติตามคำแนะนำของบุคลากรทางการแพทย์') }}</p>
           </section>
         </div>
 
@@ -992,12 +1002,12 @@ defineExpose({ loadForecast });
           <section class="card chart-card">
             <div class="card-head chart-head">
               <div>
-                <h2>พยากรณ์รายชั่วโมง</h2>
+                <h2>{{ t('พยากรณ์รายชั่วโมง') }}</h2>
               </div>
             </div>
             <div class="weather-scroll" ref="weatherScrollEl">
               <div class="weather-inner" :style="{ width: (hourlyTimeline.length * WEATHER_POINT_GAP + 32) + 'px' }">
-                <div class="hour-cards" role="group" aria-label="สภาพอากาศรายชั่วโมง อดีตและพยากรณ์">
+                <div class="hour-cards" role="group" :aria-label="t('สภาพอากาศรายชั่วโมง อดีตและพยากรณ์')">
                   <button
                     v-for="(point, i) in hourlyTimeline"
                     :key="point.time + '-' + i"
@@ -1010,10 +1020,10 @@ defineExpose({ loadForecast });
                       'hour-card-gap': point.is_gap_fill,
                     }"
                     :aria-pressed="selectedIdx === i"
-                    :aria-label="`${point.is_now ? 'ตอนนี้' : point.time} น. ${point.is_gap_fill ? '(ประมาณการ ข้อมูลจริงยังไม่มา) ' : (!point.is_forecast && !point.is_now ? '(ข้อมูลย้อนหลัง) ' : '')}PM2.5 ${point.pm25 ?? '-'}`"
+                    :aria-label="`${point.is_now ? t('ตอนนี้') : clock(point.time)} ${point.is_gap_fill ? t('(ประมาณการ ข้อมูลจริงยังไม่มา)') + ' ' : (!point.is_forecast && !point.is_now ? t('(ข้อมูลย้อนหลัง)') + ' ' : '')}PM2.5 ${point.pm25 ?? '-'}`"
                     @click="selectedIdx = selectedIdx === i ? null : i"
                   >
-                    <span class="hour-card-time">{{ point.is_now ? "ตอนนี้" : point.time }}</span>
+                    <span class="hour-card-time">{{ point.is_now ? t("ตอนนี้") : point.time }}</span>
                     <component :is="weatherIconFor(point.weather_code)" :size="20" :stroke-width="1.8" class="hour-card-icon" />
                     <span class="hour-card-pm25">{{ point.pm25 ?? "-" }}</span>
                   </button>
@@ -1024,27 +1034,26 @@ defineExpose({ loadForecast });
             <div class="chart-foot">
               <div v-if="SHOW_CHART_LEGEND" class="weather-legend">
                 <span><span class="dot" style="background: var(--w-pm25)"></span>PM2.5</span>
-                <span><span class="thr-swatch"></span>เกณฑ์ 37.5 µg/m³</span>
+                <span><span class="thr-swatch"></span>{{ t('เกณฑ์ 37.5 µg/m³') }}</span>
               </div>
-              <span class="scroll-hint">ข้อมูลย้อนหลัง ← ตอนนี้ → พยากรณ์</span>
+              <span class="scroll-hint">{{ t('ข้อมูลย้อนหลัง ← ตอนนี้ → พยากรณ์') }}</span>
             </div>
             <p v-if="SHOW_CHART_LEGEND" class="chart-caption">
-              พื้นที่แรเงา = ช่วงเวลาที่ผ่านไปแล้ว (ค่าจริง ไม่ใช่พยากรณ์) · เส้นประตั้งตรงกลาง = เวลาปัจจุบัน
-              ("ตอนนี้") · จุดบนเส้นที่ใหญ่กว่าจุดอื่น = ชั่วโมงที่กำลังดูอยู่
+              {{ t('พื้นที่แรเงา = ช่วงเวลาที่ผ่านไปแล้ว (ค่าจริง ไม่ใช่พยากรณ์) · เส้นประตั้งตรงกลาง = เวลาปัจจุบัน ("ตอนนี้") · จุดบนเส้นที่ใหญ่กว่าจุดอื่น = ชั่วโมงที่กำลังดูอยู่') }}
             </p>
             <div class="bar-detail" aria-live="polite">
               <template v-if="selectedPoint">
                 <div class="bar-detail-time">
-                  {{ selectedPoint.is_now ? `ตอนนี้ (${String(selectedPoint.hour_thai).padStart(2, "0")}:00 น.)` : selectedPoint.time + " น." }}
-                  <span v-if="!selectedPoint.is_forecast && !selectedPoint.is_now" class="hist-tag">ข้อมูลย้อนหลัง</span>
-                  <span v-else-if="selectedPoint.is_gap_fill" class="hist-tag">ประมาณการ (ข้อมูลจริงยังไม่มา)</span>
+                  {{ selectedPoint.is_now ? `${t("ตอนนี้")} (${clock(String(selectedPoint.hour_thai).padStart(2, "0") + ":00")})` : clock(selectedPoint.time) }}
+                  <span v-if="!selectedPoint.is_forecast && !selectedPoint.is_now" class="hist-tag">{{ t('ข้อมูลย้อนหลัง') }}</span>
+                  <span v-else-if="selectedPoint.is_gap_fill" class="hist-tag">{{ t('ประมาณการ (ข้อมูลจริงยังไม่มา)') }}</span>
                 </div>
                 <div class="bar-detail-main">
                   <span class="bar-detail-value">{{ selectedPoint.pm25 ?? "-" }}</span>
                   <span class="best-unit">µg/m³</span>
                 </div>
                 <div v-if="selectedPoint.is_forecast && !selectedPoint.is_gap_fill && selectedPoint.pm25_lo != null" class="bar-detail-meta">
-                  คาดว่าค่าฝุ่น PM2.5 จะอยู่ระหว่าง {{ selectedPoint.pm25_lo }}–{{ selectedPoint.pm25_hi }} µg/m³
+                  {{ t('คาดว่าค่าฝุ่น PM2.5 จะอยู่ระหว่าง {lo}–{hi} µg/m³', { lo: selectedPoint.pm25_lo, hi: selectedPoint.pm25_hi }) }}
                 </div>
                 <div v-if="trendInfo" class="trend-row" :class="`trend-${trendInfo.kind}`">
                   <component
@@ -1054,7 +1063,7 @@ defineExpose({ loadForecast });
                   />
                   <span>
                     {{ trendInfo.label }}
-                    <template v-if="trendInfo.kind !== 'flat'">({{ trendInfo.diff > 0 ? "+" : "" }}{{ trendInfo.diff.toFixed(1) }} µg/m³ จากตอนนี้)</template>
+                    <template v-if="trendInfo.kind !== 'flat'">{{ t('({diff} µg/m³ จากตอนนี้)', { diff: (trendInfo.diff > 0 ? "+" : "") + trendInfo.diff.toFixed(1) }) }}</template>
                   </span>
                 </div>
                 <div v-if="selectedPoint.is_forecast && !selectedPoint.is_gap_fill" class="shap-block">
@@ -1065,15 +1074,15 @@ defineExpose({ loadForecast });
                     @click="shapPanelOpen = !shapPanelOpen"
                   >
                     <ChevronDown :size="14" :stroke-width="2.5" :class="{ 'shap-reveal-icon-open': shapPanelOpen }" />
-                    {{ shapPanelOpen ? "ซ่อนปัจจัยที่มีผล" : "ดูปัจจัยที่มีผลต่อค่าพยากรณ์นี้" }}
+                    {{ shapPanelOpen ? t("ซ่อนปัจจัยที่มีผล") : t("ดูปัจจัยที่มีผลต่อค่าพยากรณ์นี้") }}
                   </button>
                   <template v-if="shapPanelOpen">
-                    <div v-if="shapLoading" class="shap-loading">กำลังวิเคราะห์ปัจจัย...</div>
+                    <div v-if="shapLoading" class="shap-loading">{{ t('กำลังวิเคราะห์ปัจจัย...') }}</div>
                     <div v-else-if="shapResult?.model_used === 'naive_fallback'" class="shap-loading">
-                      ชั่วโมงนี้ใช้ค่าคงที่ล่าสุด (Persistence) ไม่มีปัจจัยให้วิเคราะห์
+                      {{ t('ชั่วโมงนี้ใช้ค่าคงที่ล่าสุด (Persistence) ไม่มีปัจจัยให้วิเคราะห์') }}
                     </div>
                     <template v-else-if="shapResult?.factors?.length">
-                      <div class="shap-label">ปัจจัยที่มีอิทธิพลต่อค่าพยากรณ์นี้มากที่สุด</div>
+                      <div class="shap-label">{{ t('ปัจจัยที่มีอิทธิพลต่อค่าพยากรณ์นี้มากที่สุด') }}</div>
                       <ul class="shap-list">
                         <li v-for="f in shapFactorsShown" :key="f.feature" class="shap-item">
                           <component
@@ -1093,21 +1102,21 @@ defineExpose({ loadForecast });
                         class="shap-toggle"
                         @click="shapExpanded = !shapExpanded"
                       >
-                        {{ shapExpanded ? "แสดงน้อยลง" : `ดูเพิ่มเติม (${shapResult.factors.length - SHAP_LIST_COLLAPSED_N})` }}
+                        {{ shapExpanded ? t("แสดงน้อยลง") : t("ดูเพิ่มเติม ({n})", { n: shapResult.factors.length - SHAP_LIST_COLLAPSED_N }) }}
                       </button>
                     </template>
                   </template>
                 </div>
               </template>
-              <div v-else class="bar-detail-empty">แตะชั่วโมงที่ต้องการ เพื่อดูรายละเอียด</div>
+              <div v-else class="bar-detail-empty">{{ t('แตะชั่วโมงที่ต้องการ เพื่อดูรายละเอียด') }}</div>
             </div>
           </section>
 
           <!-- ความเสี่ยงตามกิจกรรมของคุณ -->
           <section v-if="SHOW_EXTRA_CARDS" class="card">
-            <h2>ความเสี่ยงจากฝุ่นตามกิจกรรม</h2>
-            <p class="card-caption">เลือกความหนักของกิจกรรมกลางแจ้งที่วางแผนจะทำ</p>
-            <div class="segmented" role="group" aria-label="ความหนักของกิจกรรม">
+            <h2>{{ t('ความเสี่ยงจากฝุ่นตามกิจกรรม') }}</h2>
+            <p class="card-caption">{{ t('เลือกความหนักของกิจกรรมกลางแจ้งที่วางแผนจะทำ') }}</p>
+            <div class="segmented" role="group" :aria-label="t('ความหนักของกิจกรรม')">
               <button
                 v-for="level in ACTIVITY_LEVELS"
                 :key="level"
@@ -1118,9 +1127,9 @@ defineExpose({ loadForecast });
                 @click="setActivity(level)"
               >
                 <component :is="activityIconFor(level)" :size="20" :stroke-width="2" aria-hidden="true" />
-                <span class="segmented-label">{{ level }}</span>
+                <span class="segmented-label">{{ t(level) }}</span>
                 <span class="segmented-examples">
-                  <span v-for="ex in ACTIVITY_EXAMPLES[level]" :key="ex">● {{ ex }}</span>
+                  <span v-for="ex in ACTIVITY_EXAMPLES[level]" :key="ex">● {{ t(ex) }}</span>
                 </span>
               </button>
             </div>
@@ -1129,8 +1138,8 @@ defineExpose({ loadForecast });
                 <component :is="moodIconFor(currentRiskScore.level)" :size="24" :stroke-width="2" class="level-icon-lg" />
               </span>
               <div>
-                <div class="level-name-lg">{{ currentRiskScore.level || "-" }}</div>
-                <div class="level-score-sm">{{ currentRiskScore.score ?? "-" }} จาก 100 คะแนน</div>
+                <div class="level-name-lg">{{ t(currentRiskScore.level) || "-" }}</div>
+                <div class="level-score-sm">{{ t('{score} จาก 100 คะแนน', { score: currentRiskScore.score ?? "-" }) }}</div>
               </div>
             </div>
             <div class="gauge-track" aria-hidden="true">
@@ -1143,14 +1152,14 @@ defineExpose({ loadForecast });
               ></span>
               <span class="gauge-marker" :style="{ left: (currentRiskScore.score ?? 0) + '%' }"></span>
             </div>
-            <div class="gauge-ends"><span>ปลอดภัย</span><span>เสี่ยงสูง</span></div>
+            <div class="gauge-ends"><span>{{ t('ปลอดภัย') }}</span><span>{{ t('เสี่ยงสูง') }}</span></div>
             <p class="risk-advice">{{ currentRiskAdvice }}</p>
             <template v-if="bestActivityTimes.length">
-              <div class="risk-sublabel">ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด</div>
+              <div class="risk-sublabel">{{ t('ช่วงเวลาที่เหมาะกับกิจกรรมนี้มากที่สุด') }}</div>
               <ol class="best-list">
                 <li v-for="point in bestActivityTimes" :key="point.display_time" class="best-row">
                   <span class="best-dot" :class="statusClass(point.riskLevel)"></span>
-                  <span class="best-time">{{ point.display_time }} น.</span>
+                  <span class="best-time">{{ clock(point.display_time) }}</span>
                 </li>
               </ol>
             </template>

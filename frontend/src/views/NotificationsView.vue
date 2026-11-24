@@ -5,6 +5,7 @@ import { authState } from '../auth'
 import { provinceState } from '../provinces'
 import { notificationHistory, fetchNotificationHistory, summarizeHistoryItem, formatCardTime } from '../notifications'
 import PushPrompt from '../components/PushPrompt.vue'
+import { t, provinceName as provinceLabel } from '../i18n'
 
 
 const watchedProvince = computed(() => authState.user?.home_province || provinceState.selected)
@@ -12,7 +13,7 @@ const watchedProvince = computed(() => authState.user?.home_province || province
 onMounted(() => fetchNotificationHistory(50, watchedProvince.value))
 
 const provinceName = computed(
-  () => provinceState.list.find((p) => p.province_en === watchedProvince.value)?.province_th || '',
+  () => provinceLabel(provinceState.list.find((p) => p.province_en === watchedProvince.value)),
 )
 
 // คำนวณ summary/timeLabel ล่วงหน้าต่อ item
@@ -28,9 +29,9 @@ const items = computed(() =>
 <template>
   <div class="notifications-page">
     <div class="wrap">
-      <h1>ประวัติการแจ้งเตือน</h1>
+      <h1>{{ t('ประวัติการแจ้งเตือน') }}</h1>
       <p class="subtitle">
-        ช่วงเวลาที่ PM2.5 อยู่ในระดับที่ควรระวัง<template v-if="provinceName"> · จังหวัด{{ provinceName }}</template>
+        {{ t('ช่วงเวลาที่ PM2.5 อยู่ในระดับที่ควรระวัง') }}<template v-if="provinceName"> · {{ t('จังหวัด{name}', { name: provinceName }) }}</template>
       </p>
 
       <PushPrompt :province="watchedProvince" />
@@ -43,11 +44,11 @@ const items = computed(() =>
         </div>
       </div>
       <div v-else-if="notificationHistory.status === 'error'" class="state-box" role="alert">
-        ไม่สามารถโหลดข้อมูลได้ ลองรีเฟรชหน้าอีกครั้ง
+        {{ t('ไม่สามารถโหลดข้อมูลได้ ลองรีเฟรชหน้าอีกครั้ง') }}
       </div>
       <div v-else-if="items.length === 0" class="state-box">
         <BellOff :size="32" :stroke-width="1.8" aria-hidden="true" />
-        <p>ยังไม่มีประวัติการแจ้งเตือน</p>
+        <p>{{ t('ยังไม่มีประวัติการแจ้งเตือน') }}</p>
       </div>
       <ul v-else class="history-list">
         <li v-for="item in items" :key="item.recorded_at_th" class="history-card">

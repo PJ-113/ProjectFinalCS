@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { Search, X, Check } from '@lucide/vue'
 import { provinceState } from '../provinces'
+import { t, provinceName, provinceSearchText } from '../i18n'
 
 // bottom sheet บนมือถือ / dialog กลางจอบนเดสก์ท็อป สำหรับเลือกจังหวัด (20 จังหวัด) พร้อมช่องค้นหา
 // ไม่ตัดสินใจเองว่าเลือกแล้วทำอะไร: emit 'select' (ค่า province_en หรือ '' = ไม่ระบุ) ให้ผู้เรียกจัดการ
@@ -19,7 +20,7 @@ const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
   if (!q) return provinceState.list
   return provinceState.list.filter(
-    (p) => p.province_th.includes(q) || p.province_en.toLowerCase().includes(q),
+    (p) => provinceSearchText(p).includes(q),
   )
 })
 
@@ -50,22 +51,22 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 <template>
   <Teleport to="body">
     <div v-if="open" class="sheet-backdrop" @click.self="emit('close')">
-      <div class="sheet" role="dialog" aria-modal="true" aria-label="เลือกจังหวัด">
+      <div class="sheet" role="dialog" aria-modal="true" :aria-label="t('เลือกจังหวัด')">
         <div class="sheet-grip" aria-hidden="true"></div>
         <div class="sheet-head">
-          <h2>เลือกจังหวัด</h2>
-          <button type="button" class="icon-btn" aria-label="ปิด" @click="emit('close')">
+          <h2>{{ t('เลือกจังหวัด') }}</h2>
+          <button type="button" class="icon-btn" :aria-label="t('ปิด')" @click="emit('close')">
             <X :size="22" :stroke-width="2" />
           </button>
         </div>
         <label class="search">
           <Search :size="18" :stroke-width="2" aria-hidden="true" />
-          <input v-model="query" type="search" placeholder="ค้นหาจังหวัด" aria-label="ค้นหาจังหวัด" />
+          <input v-model="query" type="search" :placeholder="t('ค้นหาจังหวัด')" :aria-label="t('ค้นหาจังหวัด')" />
         </label>
         <ul class="province-list">
           <li v-if="allowNone && !query.trim()">
             <button type="button" class="province-row" :class="{ active: selected === '' }" @click="pick('')">
-              <span class="province-name">ไม่ระบุ</span>
+              <span class="province-name">{{ t('ไม่ระบุ') }}</span>
               <Check v-if="selected === ''" :size="20" :stroke-width="2.4" class="check" />
             </button>
           </li>
@@ -76,12 +77,12 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
               :class="{ active: p.province_en === selected }"
               @click="pick(p.province_en)"
             >
-              <span class="province-name">{{ p.province_th }}</span>
+              <span class="province-name">{{ provinceName(p) }}</span>
               <span v-if="p.is_zero_shot" class="zs-badge">zero-shot</span>
               <Check v-if="p.province_en === selected" :size="20" :stroke-width="2.4" class="check" />
             </button>
           </li>
-          <li v-if="filtered.length === 0" class="empty">ไม่พบจังหวัดที่ค้นหา</li>
+          <li v-if="filtered.length === 0" class="empty">{{ t('ไม่พบจังหวัดที่ค้นหา') }}</li>
         </ul>
       </div>
     </div>
