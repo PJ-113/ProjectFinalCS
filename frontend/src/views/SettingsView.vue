@@ -187,7 +187,7 @@ async function handleLogout() {
         <div class="row row-static">
           <component :is="pushToggleable ? Bell : BellOff" :size="20" :stroke-width="2" class="row-icon" aria-hidden="true" />
           <span class="row-text">
-            <span class="row-title" id="push-label">{{ t('แจ้งเตือนบนเครื่อง') }}</span>
+            <span class="row-title" id="push-label">{{ t('รับการแจ้งเตือน') }}</span>
             <span class="row-sub">{{ pushSub }}</span>
           </span>
           <button

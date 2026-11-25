@@ -241,7 +241,7 @@ export default {
   'ภาษา': 'Language',
   'สรุปรายวันและข้อความแจ้งเตือนจากระบบยังเป็นภาษาไทย': 'The daily summary and push notification text are still in Thai',
   'แจ้งเตือนคุณภาพอากาศแม้ไม่ได้เปิดแอปอยู่': 'Air quality alerts even when the app is closed',
-  'แจ้งเตือนบนเครื่อง': 'Device notifications',
+  'รับการแจ้งเตือน': 'Receive notifications',
   'เปิดอยู่ · เฝ้าจังหวัด{name}': 'On · watching {name}',
   'เปิดอยู่': 'On',
   'จังหวัดที่แจ้งเตือน': 'Alert province',

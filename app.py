@@ -27,8 +27,8 @@ from pywebpush import WebPushException, webpush
 from sklearn.metrics import r2_score
 
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
-from shap_analysis_clean import get_shap_explanation
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "evaluation"))
+from shap_analysis import get_shap_explanation
 
 # ===== Config =====
 
@@ -119,7 +119,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = False 
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
 
-# province registry (20 จังหวัด: 17 เทรน + 3 zero-shot — ดู scripts/province_registry.py)
+# province registry (20 จังหวัด: 17 เทรน + 3 zero-shot — ดู scripts/data/build_province_registry.py)
 with open(PROVINCE_REGISTRY_PATH, encoding="utf-8") as f:
     _registry = json.load(f)
 PROVINCE_REGISTRY = _registry["provinces"]
@@ -591,7 +591,7 @@ def _openaq_get(kind, sensor_id, params, attempts, timeout=15):
 
 
 # ===== ตรวจสอบคุณภาพข้อมูลนำเข้าแบบ real-time (กรองค่า PM2.5 ผิดปกติจากเซนเซอร์) =====
-# False = เหมือนพฤติกรรมเดิมเป๊ะ (dropna เฉพาะ null เหมือนเดิม ไม่เช็คค่าสมเหตุสมผล) — ดู scripts/test_outlier_filter.py
+# False = เหมือนพฤติกรรมเดิมเป๊ะ (dropna เฉพาะ null เหมือนเดิม ไม่เช็คค่าสมเหตุสมผล) — ดู tests/manual/test_outlier_filter.py
 USE_OUTLIER_FILTER = True
 
 PM25_HARD_MIN = 0.0
@@ -675,7 +675,7 @@ def fetch_recent_pm25_openaq(sensor_id, hours_back=72, offset_hours=0):
         shifted_max = df["datetime_utc"].max() + offset
         if shifted_max > end + pd.Timedelta(hours=OFFSET_FUTURE_TOLERANCE_H):
             print(f"[openaq] sensor {sensor_id}: หลังบวก offset {offset_hours}h ข้อมูลล้ำอนาคต -> OpenAQ น่าจะแก้ป้ายเวลาแล้ว ทิ้ง offset "
-                  f"(รัน scripts/annotate_registry_timestamp_offset.py ใหม่)")
+                  f"(รัน scripts/data/annotate_registry_timestamp_offset.py ใหม่)")
         else:
             df["datetime_utc"] = df["datetime_utc"] + offset
     return df
@@ -914,7 +914,7 @@ _AIR4THAI_LOCK = threading.Lock()
 
 def fetch_air4thai_live_all():
     """ดึงสถานี Air4Thai (PCD) ทั้งหมดทั่วประเทศในคำขอเดียว (getNewAQI_JSON.php, คนละ endpoint กับ
-    getHistoryData.php ที่ scripts/archive_air4thai.py ใช้) แล้วจับคู่แต่ละจังหวัดใน PROVINCE_REGISTRY กับ
+    getHistoryData.php ที่ scripts/legacy/archive_air4thai.py ใช้) แล้วจับคู่แต่ละจังหวัดใน PROVINCE_REGISTRY กับ
     สถานีที่ใกล้ที่สุด — ตรวจแล้วทั้ง 20 จังหวัดอีสานมีสถานี Air4Thai ที่พิกัดตรงกันเป๊ะ (0.0 กม. ห่าง แปลว่า
     ทะเบียนจังหวัดนี้น่าจะสร้างจากพิกัดสถานี Air4Thai ชุดเดียวกันมาตั้งแต่ต้น) คืน dict ว่างถ้าดึงไม่สำเร็จ
     (ไม่ raise — ให้ caller fallback ไป OpenAQ ที่มีอยู่แล้วเสมอ)"""
@@ -1672,7 +1672,7 @@ def _mentions_generic_caution_below(message_text, actual_idx):
 
 # เช็คเฉพาะตอนคำนวณแนวโน้มได้ชัดเจน ("up"/"down" จาก classify_daily_trend) — ตอน "flat" ปล่อยผ่านเสมอ เพราะคำทั่วไป
 # เช่น "ลดลงเล็กน้อย" ใช้บรรยายความผันผวนเล็กๆ ได้โดยไม่ได้ขัดแย้งกับ "ทรงตัว" จริงๆ (เข้มงวดเกินจะ false-reject ข้อความ
-# ที่ถูกต้องอยู่แล้ว เหมือนที่เจอใน scripts/test_nlg_safety_check.py เคส (e))
+# ที่ถูกต้องอยู่แล้ว เหมือนที่เจอใน tests/manual/test_nlg_safety_check.py เคส (e))
 #
 # ต้องเช็คแบบมีคำว่า "แนวโน้ม" อยู่ใกล้ๆ ด้วย (ไม่ใช่แค่หาคำว่า "ลดลง"/"สูงขึ้น" เดี่ยวๆ ทั้งข้อความ) — ทดสอบจริงกับ
 # Gemini พบว่าส่วน (2) ของ prompt (สาเหตุจาก SHAP factor) มักมีคำพวกนี้ปนอยู่แล้วเพื่อบรรยาย "ปัจจัยย่อย" (เช่น
@@ -1703,6 +1703,21 @@ def _fallback_message(level):
     return _HEALTH_MESSAGE_TEMPLATES[level]
 
 
+# ตัวอักษรที่ข้อความ NLG ควรมีได้ (whitelist): อักษรไทย ตัวเลข ช่องว่าง/ขึ้นบรรทัด และเครื่องหมายพื้นฐาน — อย่างอื่น
+# (อังกฤษ รัสเซีย จีน emoji ฯลฯ) = token หลุดของโมเดล เคยเจอจริง 2 ครั้ง: "ช่วย Aสมดุลกันไว้" (2026-11-25 ขอนแก่น)
+# และ "ให้อยружиลดลง" (2026-11-02 อุบลฯ) — 571 ข้อความ Gemini ที่เหลือใช้แค่ไทย/ตัวเลข/ช่องว่าง/" . ขึ้นบรรทัด (CHANGELOG 280)
+_NLG_DISALLOWED_CHAR_RE = re.compile(r"[^฀-๿0-9\s.,\"'()\-%:“”‘’–]")
+# คำที่ไม่ใช่อักษรไทยแต่อนุญาตเป็นคำๆ (ตัดออกก่อนตรวจ) — เพิ่มที่นี่ถ้า prompt จะให้พูดถึงคำเหล่านี้
+_NLG_ALLOWED_FOREIGN_TOKENS = ("PM2.5", "N95")
+
+
+def _has_disallowed_chars(message_text):
+    text = message_text
+    for token in _NLG_ALLOWED_FOREIGN_TOKENS:
+        text = text.replace(token, "")
+    return _NLG_DISALLOWED_CHAR_RE.search(text) is not None
+
+
 def validate_health_message(message_text, predicted_pm25, risk_group="ทั่วไป", trend=("flat", None)):
 
     if predicted_pm25 is None or (isinstance(predicted_pm25, float) and np.isnan(predicted_pm25)):
@@ -1714,6 +1729,10 @@ def validate_health_message(message_text, predicted_pm25, risk_group="ทั่�
 
     actual_level = _classify_pm25_level(predicted_pm25)
     actual_idx = _level_index(actual_level)
+
+    # ตัวอักษรนอก whitelist (อังกฤษ/รัสเซีย/จีน/emoji…) = token หลุดของโมเดล — ดู _NLG_DISALLOWED_CHAR_RE
+    if _has_disallowed_chars(message_text):
+        return False, actual_level, _fallback_message(actual_level)
 
     mentioned_levels = _mentioned_levels(message_text)
     if not mentioned_levels:
@@ -1784,7 +1803,7 @@ _FEATURE_NAME_TH = {
 # คำอธิบายเชิงบรรยาย (ซ่อนชื่อ feature ดิบ เช่น "pm25_lag_3", พูดถึงปรากฏการณ์แทน) ต่อคู่ (feature, ทิศทาง
 # SHAP) ใช้กับ /api/forecast/shap ให้ผู้ใช้ทั่วไปอ่านแล้วเข้าใจทันทีแบบเดียวกับที่ daily NLG ทำกับข้อความสรุป
 # รายวัน — เขียนเฉพาะคู่ที่มีเหตุผลเชิงอุตุนิยมวิทยาที่ยืนยันได้ชัดเจน (อิงทิศทางเดียวกับ
-# METEOROLOGICAL_HYPOTHESES ใน scripts/shap_analysis_clean.py ซึ่งผ่านการเช็ค plausibility กับข้อมูลจริงแล้ว)
+# METEOROLOGICAL_HYPOTHESES ใน scripts/evaluation/shap_analysis.py ซึ่งผ่านการเช็ค plausibility กับข้อมูลจริงแล้ว)
 # ส่วนที่ไม่มีสมมติฐานยืนยันชัดเจน (temp, wind_dir, lat/lon, roll_std) ปล่อย fallback ไปใช้ _FEATURE_NAME_TH
 # ตรงๆ แทนที่จะเดาเหตุผลที่ไม่ได้ตรวจสอบมาเขียนเป็นคำอธิบายฟันธง
 _FACTOR_NARRATIVE_TH = {
@@ -1841,7 +1860,7 @@ _USER_GROUP_TONE = {
 VALID_RISK_GROUPS = set(_USER_GROUP_TONE.keys())
 
 # คำแนะนำเจาะจงต่อ (risk_group, ระดับ PM2.5 จริง) ใช้เสริม _USER_GROUP_TONE ด้านบนใน prompt (ไม่ได้แทนที่ — ห้าม
-# ลบ/แก้ _USER_GROUP_TONE เพราะ scripts/test_risk_group_e2e.py เช็ค string ของมันตรงๆ) ส่งเป็น "แนวทางให้เลือกใช้"
+# ลบ/แก้ _USER_GROUP_TONE เพราะ tests/manual/test_risk_group_e2e.py เช็ค string ของมันตรงๆ) ส่งเป็น "แนวทางให้เลือกใช้"
 # ไม่ใช่ข้อความบังคับยกคำ — ยังต้องผ่าน _mentions_generic_caution_below เหมือนข้อความอื่น (ไม่ใช่ safety bypass)
 # หมายเหตุ: ร่างโดยอิงโทนเดิม + ตัวอย่างจากเอกสาร ไม่ใช่คำแนะนำทางการแพทย์ ควรให้ผู้ใช้ทบทวนเนื้อหาก่อน ship จริง
 _RISK_GROUP_ACTION_HINTS = {
@@ -2078,6 +2097,7 @@ def save_daily_nlg_row(date_thai, risk_group, province, daily_avg_pm25, explanat
 
 
 REP_HORIZON_FOR_SHAP = 12
+NLG_REGENERATE_ON_INVALID = 1  # ขอ Gemini ใหม่กี่ครั้งเมื่อข้อความไม่ผ่าน validate_health_message (0 = พฤติกรรมเดิม)
 
 
 def generate_daily_nlg_explanation(forecast, feature_row, model_used, risk_group="ทั่วไป"):
@@ -2093,22 +2113,24 @@ def generate_daily_nlg_explanation(forecast, feature_row, model_used, risk_group
         shap_pairs = None
 
     prompt = _build_daily_nlg_prompt(daily_avg_pm25, status, shap_pairs, risk_group, trend)
-    message_text = _call_gemini(prompt)
 
-    used_fallback = False
-    if message_text:
+    # ข้อความไม่ผ่าน safety check ส่วนใหญ่เป็นอาการสุ่มของโมเดล (token หลุด / พูดระดับเพี้ยน) ขอใหม่ได้ 1 ครั้ง
+    # ก่อนตกไป template ที่ไม่มีคำอธิบายจาก SHAP (CHANGELOG 280) — Gemini ล้ม (None) ไม่ขอซ้ำ เพราะ
+    # _call_gemini() retry + fallback model ไปแล้ว
+    for attempt in range(1 + NLG_REGENERATE_ON_INVALID):
+        message_text = _call_gemini(prompt)
+        if not message_text:
+            return daily_avg_pm25, _fallback_message(status), True
         is_valid, _, final_message = validate_health_message(message_text, daily_avg_pm25, risk_group, trend)
-        if not is_valid:
-            # log ข้อความดิบที่ Gemini ตอบมาไว้ด้วย (ไม่ใช่แค่บอกว่า fail) เพื่อให้ปรับ keyword list ใน
-            # PM25_LEVELS/_TREND_CONTRADICTION_KEYWORDS ได้จากของจริง แทนการเดา
-            print(f"[nlg-daily] safety check failed: Gemini message did not match actual level "
-                  f"'{status}' (trend={trend}), using fallback template. ข้อความที่ถูกปฏิเสธ: {message_text!r}")
-            used_fallback = True
-    else:
-        final_message = _fallback_message(status)
-        used_fallback = True
+        if is_valid:
+            return daily_avg_pm25, final_message, False
+        # log ข้อความดิบที่ Gemini ตอบมาไว้ด้วย (ไม่ใช่แค่บอกว่า fail) เพื่อให้ปรับ keyword list ใน
+        # PM25_LEVELS/_TREND_CONTRADICTION_KEYWORDS ได้จากของจริง แทนการเดา
+        action = "ขอข้อความใหม่" if attempt < NLG_REGENERATE_ON_INVALID else "ใช้ fallback template"
+        print(f"[nlg-daily] safety check failed (ครั้งที่ {attempt + 1}, level '{status}', trend={trend}) — {action}. "
+              f"ข้อความที่ถูกปฏิเสธ: {message_text!r}")
 
-    return daily_avg_pm25, final_message, used_fallback
+    return daily_avg_pm25, final_message, True
 
 
 def maybe_generate_daily_nlg(forecast, feature_row, risk_group, province, model_used):
@@ -2663,14 +2685,14 @@ def compare_html_redirect():
 
 @app.route("/dev-cert.pem")
 def dev_cert_download():
-    """ดาวน์โหลด public cert (dev_cert.pem จาก scripts/generate_dev_cert.py) เพื่อติดตั้งเป็น trusted บนมือถือ
+    """ดาวน์โหลด public cert (dev_cert.pem จาก scripts/tools/generate_dev_cert.py) เพื่อติดตั้งเป็น trusted บนมือถือ
     ตอนทดสอบ HTTPS — เสิร์ฟแค่ cert สาธารณะ (ไม่ใช่ private key) ไม่มีความลับ แต่กันไว้เฉพาะ DEBUG เพราะเป็น
     ไฟล์สำหรับ dev เท่านั้น ไม่ควรมีใน production จริง"""
     if not DEBUG:
         return jsonify({"error": "not available"}), 404
     cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_cert.pem")
     if not os.path.exists(cert_path):
-        return jsonify({"error": "ยังไม่ได้สร้าง dev_cert.pem — รัน scripts/generate_dev_cert.py ก่อน"}), 404
+        return jsonify({"error": "ยังไม่ได้สร้าง dev_cert.pem — รัน scripts/tools/generate_dev_cert.py ก่อน"}), 404
     return send_from_directory(
         os.path.dirname(cert_path), "dev_cert.pem",
         mimetype="application/x-x509-ca-cert", as_attachment=False,
@@ -3801,7 +3823,7 @@ if __name__ == "__main__":
     # HTTPS=1 เปิด self-signed cert สำหรับทดสอบ — Notification/PushManager/serviceWorker ต้องการ "secure
     # context" เสมอ (HTTPS หรือ localhost เท่านั้น) ทดสอบผ่าน LAN IP ด้วย http:// ธรรมดาจะไม่มีทาง trigger
     # permission prompt จริงได้เลยไม่ว่าจะแก้โค้ดยังไงก็ตาม
-    # ใช้ไฟล์ถาวรจาก scripts/generate_dev_cert.py ถ้ามี (ไม่ต้องกดผ่านคำเตือน cert ซ้ำทุกครั้งที่ restart
+    # ใช้ไฟล์ถาวรจาก scripts/tools/generate_dev_cert.py ถ้ามี (ไม่ต้องกดผ่านคำเตือน cert ซ้ำทุกครั้งที่ restart
     # เหมือน adhoc ที่ Werkzeug สุ่ม cert ใหม่ทุกรอบ) ไม่มีไฟล์ค่อย fallback ไปใช้ adhoc
     _dev_cert = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_cert.pem")
     _dev_key = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_key.pem")
