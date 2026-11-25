@@ -73,30 +73,33 @@ requirements.txt       # Python dependencies
 frontend/              # Vue 3 SPA + PWA (build ด้วย Vite)
 models/                # โมเดล .pkl (LightGBM/XGBoost pooled) + ตาราง conformal calibration
 data/                  # ชุดข้อมูลเทรน (.csv) + ทะเบียนจังหวัด (province_station_registry.json)
-scripts/               # สคริปต์เทรน/วิเคราะห์/ทดสอบ (แต่ละไฟล์รันเดี่ยวได้ ดูสคริปต์สำคัญด้านล่าง)
-figures/                # กราฟ/ภาพผลการทดลอง (ส่วนใหญ่ไม่ได้ขึ้น git — regenerate ได้จาก scripts/)
+scripts/               # สคริปต์รันเดี่ยว แยกตามหน้าที่ (ดู scripts/README.md)
+  data/  training/  evaluation/  experiments/  diagnostics/  tools/  legacy/
+tests/unit/            # pytest (CI รัน) — ไม่ต้องมี DB/โมเดลจริง
+tests/manual/          # สคริปต์ทดสอบรันตรง แตะ DB/เครือข่ายจริง
+figures/               # กราฟ/ภาพผลการทดลอง (ส่วนใหญ่ไม่ได้ขึ้น git — regenerate ได้จาก scripts/)
 ```
 
 ## สคริปต์สำคัญ (`scripts/`)
 
-`scripts/` มีสคริปต์ one-off (ทดลอง/ตรวจสอบ) อีกจำนวนมากที่ไม่ได้ลงไว้ที่นี่ — รายการด้านล่างคือไฟล์ที่จำเป็นต่อการรัน
+`scripts/` แยกโฟลเดอร์ตามหน้าที่ ดูคำอธิบายแต่ละหมวดและตารางชื่อเก่า→ชื่อใหม่ได้ที่ [scripts/README.md](scripts/README.md) — รายการด้านล่างคือไฟล์ที่จำเป็นต่อการรัน
 
 **Pipeline เตรียมข้อมูล + เทรนโมเดล** (รันตามลำดับถ้าต้องสร้างโมเดลใหม่ ดูหัวข้อ "ถ้าไฟล์หาย" ด้านล่าง):
-- `province_registry.py` — สร้าง registry 20 จังหวัด (query OpenAQ v3 โดยตรง)
-- `build_raw_dataset_multiprovince.py` → `augment_raw_dataset_with_spatial_lag_k1.py` → `compute_fire_hotspot_feature.py` → `compute_neighbor_trend_feature.py` — 4 ขั้นตอนเตรียมข้อมูล (เรียกรวมด้วย `rebuild_dataset_clean.py`)
-- `verify_clean_dataset_alignment.py` — ตรวจสอบ timestamp alignment หลัง rebuild
-- `annotate_registry_timestamp_offset.py` — วัด/เขียน offset เวลาของแต่ละสถานีลง registry
-- `train_multiprovince_models.py` — **สคริปต์เทรนหลัก** (LightGBM+XGBoost pooled v3, source of truth ของ `FEATURE_COLS`/`DATA_PATH`/split ที่สคริปต์อื่นโหลดผ่าน `importlib`)
+- `data/build_province_registry.py` — สร้าง registry 20 จังหวัด (query OpenAQ v3 โดยตรง)
+- `data/build_dataset.py` → `data/add_neighbor_feature.py` → `data/add_fire_hotspot_feature.py` → `data/add_neighbor_trend_feature.py` — 4 ขั้นตอนเตรียมข้อมูล (เรียกรวมด้วย `data/rebuild_dataset_pipeline.py`)
+- `diagnostics/dataset_alignment.py` — ตรวจสอบ timestamp alignment หลัง rebuild
+- `data/annotate_registry_timestamp_offset.py` — วัด/เขียน offset เวลาของแต่ละสถานีลง registry
+- `training/train_models.py` — **สคริปต์เทรนหลัก** (LightGBM+XGBoost pooled v3, source of truth ของ `FEATURE_COLS`/`DATA_PATH`/split ที่สคริปต์อื่นโหลดผ่าน `importlib`)
 
 **ประเมินผล/ใช้งานจริงใน `app.py`**:
-- `shap_analysis_clean.py` — **ถูก `app.py` import ตรง** สำหรับคำอธิบาย SHAP
-- `backtest_recent_multiprovince.py`, `eval_zeroshot_multiprovince.py`, `eval_zeroshot_real_provinces_clean.py` — ประเมินผล/zero-shot
-- `validate_features_timeblocked_cv.py` — วิธีมาตรฐานของโปรเจกต์สำหรับตัดสินใจเพิ่ม/ตัดฟีเจอร์
-- `experiment_imputation_accuracy.py`, `export_imputation_h_lite.py` — สูตร/config การเติมค่าสถานีเงียบ (H-lite)
-- `summarize_target_latency.py` — คำนวณค่าคงที่ `IMPUTATION_MIN_K` จาก latency log จริง
-- `promote_admin.py` — ops utility สร้าง admin user
+- `evaluation/shap_analysis.py` — **ถูก `app.py` import ตรง** สำหรับคำอธิบาย SHAP
+- `evaluation/backtest_recent.py`, `evaluation/zeroshot_transfer.py`, `evaluation/zeroshot_real_provinces.py` — ประเมินผล/zero-shot
+- `experiments/feature_set_timeblocked_cv.py` — วิธีมาตรฐานของโปรเจกต์สำหรับตัดสินใจเพิ่ม/ตัดฟีเจอร์
+- `experiments/imputation_accuracy.py`, `training/export_imputation_h_lite.py` — สูตร/config การเติมค่าสถานีเงียบ (H-lite)
+- `diagnostics/summarize_target_latency.py` — คำนวณค่าคงที่ `IMPUTATION_MIN_K` จาก latency log จริง
+- `tools/promote_admin.py` — ops utility สร้าง admin user
 
-**เทส** (รันมือ ไม่มี pytest): ไฟล์ `test_*.py` ทั้งหมด 14 ไฟล์
+**เทส**: `pytest tests/unit` (CI รัน, ไม่ต้องมี DB/โมเดลจริง) และ `python tests/manual/test_xxx.py` (สคริปต์รันตรง แตะ DB/เครือข่ายจริง)
 
 ## ไฟล์โมเดลที่ไม่ได้อยู่ใน git
 
@@ -127,8 +130,8 @@ python -c "import hashlib,sys; h=hashlib.sha256(open(sys.argv[1],'rb').read()).h
 ### ถ้าไฟล์หาย
 
 เทรนใหม่ได้จากสคริปต์ แต่ผลอาจไม่เหมือนเดิมทุกตัวเลข เพราะ OpenAQ อาจแก้ข้อมูลย้อนหลัง
-1. `python scripts/rebuild_dataset_clean.py` (ดึงข้อมูลและสร้างชุดข้อมูลสะอาด พร้อม offset ป้ายเวลาจาก registry)
-2. `python scripts/train_multiprovince_models.py` (20 feature, hyperparameter ที่จูนแล้วอยู่ในสคริปต์)
+1. `python scripts/data/rebuild_dataset_pipeline.py` (ดึงข้อมูลและสร้างชุดข้อมูลสะอาด พร้อม offset ป้ายเวลาจาก registry)
+2. `python scripts/training/train_models.py` (20 feature, hyperparameter ที่จูนแล้วอยู่ในสคริปต์)
 3. ปรับ path/ชื่อโมเดลใน `app.py` ให้ตรงกับไฟล์ใหม่ (`LGB_MODEL_PATH`, `XGB_MODEL_PATH`, `CONFORMAL_*`, `MODEL_LGB`, `MODEL_XGB`)
 
 ชุดข้อมูลเทรน (`data/multiprovince_pm25_features_raw_spatial_k1_firehotspot_nbtrend_20260919_174805.csv`)
